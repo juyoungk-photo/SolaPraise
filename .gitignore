@@ -1,0 +1,23 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+
+# Secrets — never commit these
+GoogleService-Info.plist
+Secrets.xcconfig
+*.p12
+*.mobileprovision
+client_secret*.json
+*.pkl
+
+# macOS
+.DS_Store
+
+# SPM
+.build/
+.swiftpm/
+Package.resolved
