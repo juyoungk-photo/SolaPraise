@@ -41,6 +41,7 @@ struct HomeView: View {
     @State private var playlistError: String?
     @State private var showError = false
     @State private var showPsalmSheet = false
+    @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
     @StateObject private var feed = FeedStore()
 
@@ -208,7 +209,10 @@ struct HomeView: View {
                 subtitle: subtitle(for: card),
                 thumbnailURL: thumbnail(for: card),
                 isRead: card.kind == .reading ? daily.isCurrentRead : false,
-                onStep: (card.kind == .reading || card.kind == .psalmAudio)
+                // Only the 시편 card steps. 시편 듣기 reads the same
+                // `daily.chapter`, so it follows along without a second pair
+                // of buttons competing for the same value.
+                onStep: card.kind == .reading
                     ? { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
                     : nil
             )
@@ -247,7 +251,13 @@ struct HomeView: View {
         case .reading:
             return daily.title(for: daily.translation)
         case .psalmAudio:
-            if let found = psalmAudioVideo { return found.title }
+            if let found = psalmAudioVideo {
+                var parts = [found.title]
+                if let secs = found.durationSeconds {
+                    parts.append(ISO8601Duration.format(secs))
+                }
+                return parts.joined(separator: " · ")
+            }
             return isFindingPsalm ? "찾는 중…" : "시편 \(daily.chapter)편 · 탭하면 찾기"
         case .channel:
             return latestVideo(for: card)?.title
@@ -291,7 +301,10 @@ struct HomeView: View {
         // 시편 72편.
         let pattern = "시편\\s*\\(n)\\s*[편장]"
         return allVideos.first { video in
-            guard video.channelId == DefaultChannels.psalmAudioChannelId else { return false }
+            // The same channel the 시편 듣기 sheet is set to. Hard-coding the
+            // default here meant a reading found after changing the channel
+            // there never reached this card.
+            guard video.channelId == psalmChannelId else { return false }
             return video.title.range(of: pattern, options: .regularExpression) != nil
         }
     }

@@ -46,6 +46,16 @@ struct HomeCardView: View {
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
+
+                    if let onStep {
+                        Spacer(minLength: 8)
+                        // Buttons, not a Stepper: the whole card is a tap
+                        // target, and a Stepper inside it swallows the tap.
+                        HStack(spacing: 6) {
+                            stepButton("minus", onStep: onStep, delta: -1)
+                            stepButton("plus", onStep: onStep, delta: 1)
+                        }
+                    }
                 }
 
                 if let subtitle {
@@ -54,16 +64,6 @@ struct HomeCardView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                }
-
-                if let onStep {
-                    // Buttons, not a Stepper: the whole card is a tap target,
-                    // and a Stepper inside it swallows the card's own tap.
-                    HStack(spacing: 8) {
-                        stepButton("minus", onStep: onStep, delta: -1)
-                        stepButton("plus", onStep: onStep, delta: 1)
-                    }
-                    .padding(.top, 2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,7 +80,7 @@ struct HomeCardView: View {
         Button { onStep(delta) } label: {
             Image(systemName: symbol)
                 .font(.caption.weight(.semibold))
-                .frame(width: 30, height: 24)
+                .frame(width: 28, height: 22)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

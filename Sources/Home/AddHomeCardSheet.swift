@@ -57,22 +57,26 @@ struct AddHomeCardSheet: View {
     private var customSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("YouTube 링크 붙여넣기", text: $linkInput, axis: .vertical)
+                TextField("YouTube 영상·재생목록 링크 붙여넣기", text: $linkInput, axis: .vertical)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.footnote)
+                if !linkInput.isEmpty, pastedVideoId == nil, pastedPlaylistId == nil {
+                    Text("링크를 알아볼 수 없습니다")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
                 HStack {
-                    if let id = pastedVideoId {
-                        Text("영상 \(id)").font(.caption2).foregroundStyle(.secondary)
-                    } else if !linkInput.isEmpty {
-                        Text("링크를 알아볼 수 없습니다")
-                            .font(.caption2).foregroundStyle(.orange)
-                    }
                     Spacer()
-                    Button("영상 카드 추가") { addVideoCard() }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .disabled(pastedVideoId == nil)
+                    if pastedPlaylistId != nil {
+                        Button("재생목록 카드") { addPlaylistCard() }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                    }
+                    if pastedVideoId != nil {
+                        Button("영상 카드") { addVideoCard() }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                    }
                 }
             }
 
@@ -90,7 +94,7 @@ struct AddHomeCardSheet: View {
         } header: {
             Text("직접 만들기")
         } footer: {
-            Text("영상 카드는 탭하면 바로 재생됩니다. 주제 카드는 검색창을 그 검색어로 열어 주며, 저장된 결과부터 보여 주므로 units를 쓰지 않습니다.")
+            Text("영상 카드는 탭하면 바로 재생됩니다. 재생목록은 내 것이 아니어도, 공개 범위가 '일부 공개'여도 링크만 있으면 추가됩니다. 주제 카드는 검색창을 그 검색어로 열어 주며 저장된 결과부터 보여 주므로 units를 쓰지 않습니다.")
         }
     }
 
@@ -98,6 +102,12 @@ struct AddHomeCardSheet: View {
         let trimmed = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return YouTubeID.parse(trimmed)
+    }
+
+    private var pastedPlaylistId: String? {
+        let trimmed = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return YouTubeID.parsePlaylist(trimmed)
     }
 
     private var trimmedTopic: String {
@@ -116,6 +126,23 @@ struct AddHomeCardSheet: View {
             guard let video = try? await client.videos(ids: [id]).first,
                   let title = video.snippet?.title else { return }
             cards.first { $0.dedupeKey == "video-\(id)" }?.title = title
+            try? modelContext.save()
+        }
+    }
+
+    /// Works for a playlist you do not own, which is the point: a church
+    /// channel whose uploads are all unlisted has nothing in its public
+    /// uploads feed, but an unlisted *playlist* of those uploads is readable
+    /// by anyone holding the link.
+    private func addPlaylistCard() {
+        guard let id = pastedPlaylistId else { return }
+        add(kind: .playlist, targetId: id, title: "재생목록")
+        linkInput = ""
+        Task {
+            guard auth.isSignedIn else { return }
+            let client = AppServices.client(auth: auth, quota: quota)
+            guard let playlist = try? await client.playlist(id: id) else { return }
+            cards.first { $0.dedupeKey == "playlist-\(id)" }?.title = playlist.title
             try? modelContext.save()
         }
     }

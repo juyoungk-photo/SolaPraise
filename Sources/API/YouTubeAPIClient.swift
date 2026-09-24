@@ -194,6 +194,24 @@ final class YouTubeAPIClient {
         )
     }
 
+    /// One playlist by id, including playlists you do not own.
+    ///
+    /// `mine=true` only ever returns your own, so a playlist shared by id —
+    /// an unlisted one from a church channel, say — has to be asked for
+    /// directly. Unlisted means "anyone with the link", and the API honours
+    /// that: no ownership and no extra scope required.
+    func playlist(id: String) async throws -> YTPlaylist? {
+        let page: YTListResponse<YTPlaylist> = try await get(
+            "playlists",
+            query: [
+                .init(name: "part", value: "snippet,contentDetails,status"),
+                .init(name: "id", value: id)
+            ],
+            cost: .read
+        )
+        return page.items?.first
+    }
+
     /// Items of one playlist, in playlist order.
     func playlistItems(playlistId: String) async throws -> [YTPlaylistItem] {
         let items: [YTPlaylistItem] = try await getAllPages(
