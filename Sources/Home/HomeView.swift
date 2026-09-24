@@ -57,6 +57,9 @@ struct HomeView: View {
         var pending: [HomeCard] = []
 
         for card in cards {
+            // 시편 is pinned above the scroll, so it must not also be laid
+            // out inside it.
+            if card.kind == .reading { continue }
             if card.kind.isWide {
                 if !pending.isEmpty { result.append(pending); pending = [] }
                 result.append([card])
@@ -167,6 +170,7 @@ struct HomeView: View {
 
                 FeedEndMarker(refreshedAt: nil, text: "오늘도 평안하세요")
             }
+            .safeAreaInset(edge: .top) { pinnedReading }
             .safeAreaInset(edge: .bottom) { searchBar }
             .navigationTitle("홈")
             .toolbar {
@@ -247,6 +251,24 @@ struct HomeView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .background(Color(.systemBackground).opacity(0.94))
+    }
+
+    /// Today's psalm stays put while everything else scrolls under it.
+    ///
+    /// It is the one card that is the same errand every day, and scrolling
+    /// past it to reach a channel meant scrolling back to read. Hidden while
+    /// editing, where the card belongs in the reorder list instead.
+    @ViewBuilder
+    private var pinnedReading: some View {
+        if !isEditing, let card = cards.first(where: { $0.kind == .reading }) {
+            cardView(card)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+                // An explicit colour, not .bar: on device that material
+                // rendered as a black band with the content invisible behind
+                // it, the same way it did in the channel jump bar.
+                .background(Color(.systemBackground))
+        }
     }
 
     // MARK: - Card rendering
