@@ -34,6 +34,7 @@ struct PsalmAudioSheet: View {
     @State private var note: String?
     @State private var isWorking = false
     @State private var playRequest: FeedPlayRequest?
+    @State private var autoTask: Task<Void, Never>?
 
     private var match: CachedVideo? {
         allVideos.first {
@@ -62,7 +63,26 @@ struct PsalmAudioSheet: View {
                 if chapter == 1 { chapter = daily.chapter }
                 describeDownloaded()
             }
-            .onChange(of: chapter) { _, _ in note = nil; describeDownloaded() }
+            .onChange(of: chapter) { _, _ in
+                note = nil
+                describeDownloaded()
+                // The playlist route is cheap and brings back every chapter at
+                // once, so it runs on its own. The 100-unit search below does
+                // not — that stays a deliberate tap.
+                autoTask?.cancel()
+                autoTask = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, match == nil, auth.isSignedIn, !isWorking
+                    else { return }
+                    isWorking = true
+                    defer { isWorking = false }
+                    let client = AppServices.client(auth: auth, quota: quota)
+                    _ = await feed.ingestPsalmPlaylist(
+                        context: modelContext, client: client, channelId: channelId
+                    )
+                    describeDownloaded()
+                }
+            }
             .onChange(of: channelId) { _, _ in note = nil; describeDownloaded() }
         }
     }

@@ -43,6 +43,8 @@ struct HomeView: View {
     @State private var showPsalmSheet = false
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
+    @State private var attemptedPsalmChannels: Set<String> = []
+    @State private var autoFindTask: Task<Void, Never>?
     @StateObject private var feed = FeedStore()
 
     /// Cards laid out as explicit rows.
@@ -192,6 +194,17 @@ struct HomeView: View {
             .sheet(isPresented: $showAddCard) { AddHomeCardSheet() }
             .sheet(isPresented: $showSearch) { HomeSearchSheet(initialQuery: searchQuery) }
             .sheet(isPresented: $showPsalmSheet) { PsalmAudioSheet() }
+            // Debounced, because -/+ is held down: stepping ten chapters
+            // should be one lookup after you stop, not ten while you go.
+            .onChange(of: daily.chapter) { _, _ in
+                autoFindTask?.cancel()
+                autoFindTask = Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+                    await autoFindPsalmVideo()
+                }
+            }
+            .task { await autoFindPsalmVideo() }
             .alert("시편 듣기", isPresented: $showError, presenting: playlistError) { _ in
                 Button("확인", role: .cancel) { }
             } message: { message in
@@ -330,7 +343,13 @@ struct HomeView: View {
                 }
                 return parts.joined(separator: " · ")
             }
-            return isFindingPsalm ? "찾는 중…" : "시편 \(daily.chapter)편 · 탭하면 찾기"
+            if isFindingPsalm { return "찾는 중…" }
+            // After the playlist has been read, a still-missing chapter means
+            // the channel has not published it — say so, rather than implying
+            // another tap will produce it for free.
+            return attemptedPsalmChannels.contains(psalmChannelId)
+                ? "시편 \(daily.chapter)편 · 채널에 없음, 탭하면 검색"
+                : "시편 \(daily.chapter)편 · 탭하면 찾기"
         case .channel:
             return latestVideo(for: card)?.title
         case .playlist:
@@ -464,6 +483,39 @@ struct HomeView: View {
     private func report(_ message: String) {
         playlistError = message
         showError = true
+    }
+
+    /// Pulls the channel's whole psalm playlist in, once, when a chapter the
+    /// cache does not hold comes into view.
+    ///
+    /// This is the half of the lookup that is safe to run without asking. It
+    /// is one playlistItems.list — about 3 units — and it brings back every
+    /// psalm the channel has published at once, so after it runs, stepping
+    /// through chapters costs nothing and shows the video immediately.
+    ///
+    /// The other half, a targeted search, is 100 units against a budget of
+    /// 100 searches a day. Firing that on a step would mean holding + through
+    /// ten chapters spent a tenth of the day's searching, so it stays behind
+    /// the explicit 영상 찾기 button. That is the whole reason a step did not
+    /// just produce a video: not caution about the playlist, caution about
+    /// the search.
+    private func autoFindPsalmVideo() async {
+        guard psalmAudioVideo == nil, auth.isSignedIn, !isFindingPsalm else { return }
+        // The ingest refuses to repeat once the channel is cached, but a
+        // channel with few readings would retry on every step otherwise.
+        guard !attemptedPsalmChannels.contains(psalmChannelId) else { return }
+
+        isFindingPsalm = true
+        defer { isFindingPsalm = false }
+
+        let client = AppServices.client(auth: auth, quota: quota)
+        let ingested = await feed.ingestPsalmPlaylist(
+            context: modelContext, client: client, channelId: psalmChannelId
+        )
+        // Only mark it done when there was actually a playlist to read; a
+        // zero means the playlist has not been cached yet, and a later
+        // refresh may well make it work.
+        if ingested > 0 { attemptedPsalmChannels.insert(psalmChannelId) }
     }
 
     /// Searches 공동체성경읽기 for today's psalm and caches it.
