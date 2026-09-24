@@ -392,12 +392,7 @@ struct HomeView: View {
                 return
             }
             playRequest = FeedPlayRequest(
-                queue: [PlayableVideo(
-                    id: video.videoId,
-                    title: video.title,
-                    channelTitle: video.channelTitle,
-                    durationSeconds: video.durationSeconds
-                )],
+                queue: [PlayableVideo(cached: video)],
                 startIndex: 0
             )
 
@@ -409,11 +404,7 @@ struct HomeView: View {
                 return
             }
             playRequest = FeedPlayRequest(
-                queue: [PlayableVideo(
-                    id: video.videoId, title: video.title,
-                    channelTitle: video.channelTitle,
-                    durationSeconds: video.durationSeconds
-                )],
+                queue: [PlayableVideo(cached: video)],
                 startIndex: 0
             )
 
@@ -458,7 +449,7 @@ struct HomeView: View {
             let items = try await client.playlistItems(playlistId: playlistId)
             let queue = items.compactMap { item -> PlayableVideo? in
                 guard !item.isUnavailable, let id = item.videoId else { return nil }
-                return PlayableVideo(id: id, title: item.title, channelTitle: item.channelTitle)
+                return PlayableVideo(item: item)
             }
             guard !queue.isEmpty else {
                 playlistError = "\(title): 재생할 수 있는 곡이 없습니다."

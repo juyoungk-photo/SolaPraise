@@ -34,6 +34,30 @@ struct PlayableVideo: Identifiable, Hashable {
         self.viewCount = viewCount
     }
 
+    /// Built from the cache with everything it holds.
+    ///
+    /// Constructing these by hand at a dozen call sites meant most of them
+    /// passed only id, title and channel, so the player showed no publish date
+    /// for videos whose date the app already had sitting in the cache.
+    init(cached video: CachedVideo) {
+        self.init(id: video.videoId,
+                  title: video.title,
+                  channelTitle: video.channelTitle,
+                  durationSeconds: video.durationSeconds,
+                  publishedAt: video.publishedAt,
+                  viewCount: video.viewCount)
+    }
+
+    /// Built from a playlist item, whose `videoPublishedAt` is the upload
+    /// date — not the date it was added to the playlist.
+    init?(item: YTPlaylistItem) {
+        guard let id = item.videoId else { return nil }
+        self.init(id: id,
+                  title: item.title,
+                  channelTitle: item.channelTitle,
+                  publishedAt: item.contentDetails?.videoPublishedAt)
+    }
+
     /// i.ytimg.com serves art for every video at a fixed path, so the queue and
     /// the add-sheet can show a thumbnail without every call site having to
     /// carry one through.
@@ -83,9 +107,14 @@ struct WatchScreen: View {
         NavigationStack {
             VStack(spacing: 0) {
                 playerBlock
+                // What is playing stays under the player, where it belongs.
+                // It used to scroll away with everything else, so reading the
+                // psalm meant losing sight of which upload you were hearing —
+                // exactly the thing you compare versions by.
+                nowPlayingBlock
                 ScrollView {
                     VStack(spacing: 0) {
-                        metadataBlock
+                        extrasBlock
                         if isPlaylist { queueBlock }
                     }
                 }
@@ -339,35 +368,103 @@ struct WatchScreen: View {
 
     // MARK: - Metadata + actions
 
-    private var metadataBlock: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private var nowPlayingBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if let current {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(current.title)
                         .font(.headline)
-                        .lineLimit(3)
+                        .lineLimit(2)
 
                     VStack(alignment: .leading, spacing: 3) {
                         if let channel = current.channelTitle {
                             Text(channel).font(.subheadline)
                         }
-                        HStack(spacing: 6) {
-                            if let published = current.publishedAt {
-                                Text(published, format: .dateTime.year().month().day())
-                            }
-                            if let secs = current.durationSeconds {
-                                Text("·")
-                                Text(ISO8601Duration.format(secs)).monospacedDigit()
-                            }
-                            if let views = current.viewCount {
-                                Text("·")
-                                Text("조회 \(Self.compactCount(views))").monospacedDigit()
-                            }
-                        }
-                        .font(.caption)
+                        metaLine(current)
                     }
                     .foregroundStyle(.secondary)
                 }
+            }
+
+            actionRow
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(Color(.systemBackground))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// The facts that separate one upload of a worship song from another.
+    ///
+    /// The date is absolute AND relative: "2019년 5월 3일" says which release
+    /// this is, "6년 전" says at a glance how old it is, and a title very
+    /// often carries neither.
+    @ViewBuilder
+    private func metaLine(_ video: PlayableVideo) -> some View {
+        HStack(spacing: 6) {
+            if let published = video.publishedAt {
+                Text(published, format: .dateTime.year().month().day())
+                Text(published, format: .relative(presentation: .named))
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("게시일 정보 없음").foregroundStyle(.tertiary)
+            }
+            if let secs = video.durationSeconds {
+                Text("·")
+                Text(ISO8601Duration.format(secs)).monospacedDigit()
+            }
+            if let views = video.viewCount {
+                Text("·")
+                Text("조회 \(Self.compactCount(views))").monospacedDigit()
+            }
+        }
+        .font(.caption)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                addTarget = current
+            } label: {
+                Label("Playlist", systemImage: "plus.circle")
+            }
+            .buttonStyle(.bordered)
+            .disabled(current == nil)
+
+            if let current, let url = YouTubeID.watchURL(current.id) {
+                ShareLink(item: url) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button {
+                if detection.isRecording {
+                    finishDetection(showSheet: true)
+                } else {
+                    startDetection()
+                }
+            } label: {
+                Label(
+                    detection.isRecording ? "정지" : "코드",
+                    systemImage: detection.isRecording ? "stop.circle" : "music.note"
+                )
+            }
+            .buttonStyle(.bordered)
+            .tint(detection.isRecording ? .red : .accentColor)
+            .disabled(current == nil)
+        }
+        .font(.subheadline)
+        .controlSize(.small)
+    }
+
+    /// Everything that is worth reading but not worth pinning.
+    private var extrasBlock: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if detection.isRecording || detection.permissionDenied {
+                chordPanel
             }
 
             // A psalm reading video shows one static frame for twenty
@@ -383,45 +480,6 @@ struct WatchScreen: View {
             if !sheetLinks.isEmpty {
                 sheetMusicRow
             }
-
-            if detection.isRecording || detection.permissionDenied {
-                chordPanel
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    addTarget = current
-                } label: {
-                    Label("Playlist", systemImage: "plus.circle")
-                }
-                .buttonStyle(.bordered)
-                .disabled(current == nil)
-
-                if let current, let url = YouTubeID.watchURL(current.id) {
-                    ShareLink(item: url) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Button {
-                    if detection.isRecording {
-                        finishDetection(showSheet: true)
-                    } else {
-                        startDetection()
-                    }
-                } label: {
-                    Label(
-                        detection.isRecording ? "정지" : "코드",
-                        systemImage: detection.isRecording ? "stop.circle" : "music.note"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .tint(detection.isRecording ? .red : .accentColor)
-                .disabled(current == nil)
-            }
-            .font(.subheadline)
-            .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)

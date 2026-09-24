@@ -76,11 +76,22 @@ struct VideoCard: View {
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let published = video.publishedAt {
-                Text(published, format: .relative(presentation: .named))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            // The actual date, not only "3개월 전". Which release a worship
+            // upload is matters, and the title very often does not say.
+            HStack(spacing: 4) {
+                if let published = video.publishedAt {
+                    Text(published, format: .dateTime.year().month().day())
+                    Text(published, format: .relative(presentation: .named))
+                        .foregroundStyle(.tertiary)
+                }
+                if let views = video.viewCount {
+                    Text("·")
+                    Text(WatchScreen.compactCount(views)).monospacedDigit()
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
         .contentShape(Rectangle())
     }
@@ -118,7 +129,9 @@ struct PinnedVideoCard: View {
                 }
                 if let published = video.publishedAt {
                     Text("·")
+                    Text(published, format: .dateTime.year().month().day())
                     Text(published, format: .relative(presentation: .named))
+                        .foregroundStyle(.tertiary)
                 }
             }
             .font(.caption)

@@ -112,7 +112,8 @@ struct PlaylistDetailView: View {
                 id: id,
                 title: item.title,
                 channelTitle: item.channelTitle,
-                durationSeconds: durations[id]
+                durationSeconds: durations[id],
+                publishedAt: item.contentDetails?.videoPublishedAt
             )
         }
     }

@@ -199,9 +199,7 @@ struct HomeSearchSheet: View {
 
     private func play(_ video: CachedVideo) {
         playRequest = FeedPlayRequest(
-            queue: [PlayableVideo(id: video.videoId, title: video.title,
-                                  channelTitle: video.channelTitle,
-                                  durationSeconds: video.durationSeconds)],
+            queue: [PlayableVideo(cached: video)],
             startIndex: 0
         )
     }
@@ -210,7 +208,8 @@ struct HomeSearchSheet: View {
         guard let id = result.videoId else { return }
         playRequest = FeedPlayRequest(
             queue: [PlayableVideo(id: id, title: result.title,
-                                  channelTitle: result.snippet?.channelTitle)],
+                                  channelTitle: result.snippet?.channelTitle,
+                                  publishedAt: result.snippet?.publishedAt)],
             startIndex: 0
         )
     }

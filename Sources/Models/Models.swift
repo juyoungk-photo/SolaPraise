@@ -121,6 +121,11 @@ final class CachedVideo {
     /// nil = not yet checked. false = the rights holder blocks embedding, so
     /// the in-app player will fail and we must hand off to YouTube.
     var isEmbeddable: Bool?
+    /// Filled by the same batched videos.list that fetches durations, so it
+    /// costs nothing extra — comparing two uploads of one worship song needs
+    /// it as much as the length does.
+    var viewCount: Int?
+
     /// Raw description. Worship channels publish set lists with timestamps and
     /// keys here, which WorshipSetParser turns into a jumpable song list.
     var descriptionText: String?

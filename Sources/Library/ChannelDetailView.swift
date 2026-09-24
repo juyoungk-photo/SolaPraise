@@ -128,9 +128,7 @@ struct ChannelDetailView: View {
 
     private func play(_ video: CachedVideo) {
         let queue = videos.prefix(30).map {
-            PlayableVideo(id: $0.videoId, title: $0.title,
-                          channelTitle: $0.channelTitle,
-                          durationSeconds: $0.durationSeconds)
+            PlayableVideo(cached: $0)
         }
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
         playRequest = FeedPlayRequest(queue: Array(queue), startIndex: start)
@@ -150,7 +148,7 @@ struct ChannelDetailView: View {
             let items = try await client.playlistItems(playlistId: playlist.playlistId)
             let queue = items.compactMap { item -> PlayableVideo? in
                 guard !item.isUnavailable, let id = item.videoId else { return nil }
-                return PlayableVideo(id: id, title: item.title, channelTitle: item.channelTitle)
+                return PlayableVideo(item: item)
             }
             guard !queue.isEmpty else {
                 errorMessage = "재생할 수 있는 영상이 없습니다."

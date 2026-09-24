@@ -358,9 +358,7 @@ struct WorshipFeedView: View {
     // MARK: - Actions
 
     private func playable(_ video: CachedVideo) -> PlayableVideo {
-        PlayableVideo(id: video.videoId, title: video.title,
-                      channelTitle: video.channelTitle,
-                      durationSeconds: video.durationSeconds)
+        PlayableVideo(cached: video)
     }
 
     private func play(_ video: CachedVideo, in section: [CachedVideo]) {

@@ -105,22 +105,12 @@ struct PsalmAudioSheet: View {
         Section {
             Button {
                 playRequest = FeedPlayRequest(
-                    queue: [PlayableVideo(
-                        id: video.videoId, title: video.title,
-                        channelTitle: video.channelTitle,
-                        durationSeconds: video.durationSeconds,
-                        publishedAt: video.publishedAt
-                    )],
+                    queue: [PlayableVideo(cached: video)],
                     startIndex: 0
                 )
             } label: {
                 HStack(spacing: 10) {
-                    VideoMetaRow(video: PlayableVideo(
-                        id: video.videoId, title: video.title,
-                        channelTitle: video.channelTitle,
-                        durationSeconds: video.durationSeconds,
-                        publishedAt: video.publishedAt
-                    ))
+                    VideoMetaRow(video: PlayableVideo(cached: video))
                     Image(systemName: "play.circle.fill")
                         .font(.title2)
                         .foregroundStyle(Color.accentColor)

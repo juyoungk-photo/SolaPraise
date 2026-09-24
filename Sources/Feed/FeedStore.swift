@@ -320,9 +320,13 @@ final class FeedStore: ObservableObject {
 
         var durationById: [String: Int] = [:]
         var embeddableById: [String: Bool] = [:]
+        var viewsById: [String: Int] = [:]
+        var publishedById: [String: Date] = [:]
         for v in videos {
             if let secs = v.durationSeconds { durationById[v.id] = secs }
             embeddableById[v.id] = v.isEmbeddable
+            if let views = v.viewCount { viewsById[v.id] = views }
+            if let published = v.snippet?.publishedAt { publishedById[v.id] = published }
         }
         guard !durationById.isEmpty || !embeddableById.isEmpty else { return }
 
@@ -333,6 +337,10 @@ final class FeedStore: ObservableObject {
         for video in pending {
             if let secs = durationById[video.videoId] { video.durationSeconds = secs }
             if let ok = embeddableById[video.videoId] { video.isEmbeddable = ok }
+            if let views = viewsById[video.videoId] { video.viewCount = views }
+            // Some feed sources carry no publish date at all, and the title
+            // often does not say either — this is the one call that knows.
+            if video.publishedAt == nil { video.publishedAt = publishedById[video.videoId] }
             if video.descriptionText == nil { video.descriptionText = descriptionById[video.videoId] }
         }
         try? context.save()
