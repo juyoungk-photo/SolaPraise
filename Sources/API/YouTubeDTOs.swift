@@ -106,6 +106,7 @@ struct YTPlaylistItem: Decodable, Identifiable, Hashable {
         let position: Int?
         let playlistId: String?
         let videoOwnerChannelTitle: String?
+        let videoOwnerChannelId: String?
         let thumbnails: YTThumbnails?
         let resourceId: ResourceId?
 
@@ -119,6 +120,7 @@ struct YTPlaylistItem: Decodable, Identifiable, Hashable {
     var videoId: String? { contentDetails?.videoId ?? snippet?.resourceId?.videoId }
     var title: String { snippet?.title ?? "Untitled" }
     var channelTitle: String? { snippet?.videoOwnerChannelTitle }
+    var channelId: String? { snippet?.videoOwnerChannelId }
     var descriptionText: String? { snippet?.description }
     var position: Int { snippet?.position ?? 0 }
     var thumbnailURL: URL? { snippet?.thumbnails?.best }

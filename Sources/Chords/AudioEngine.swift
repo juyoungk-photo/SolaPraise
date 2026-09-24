@@ -15,6 +15,15 @@ final class AudioEngine: ObservableObject {
 
     // MARK: - Published state for the UI
     @Published private(set) var isRunning: Bool = false
+
+    /// The engine's real state, updated synchronously on whichever queue
+    /// start/stop was called from.
+    ///
+    /// `isRunning` is published, so it is only set on the main queue one hop
+    /// later. Guarding stop() on it meant a cancel arriving right after a
+    /// start saw false and returned without stopping anything, leaving the
+    /// microphone live with nothing reading it.
+    private var engineStarted = false
     @Published private(set) var permissionGranted: Bool = false
     @Published private(set) var currentLevelDB: Float = -80  // for a mic meter
 
@@ -146,7 +155,7 @@ final class AudioEngine: ObservableObject {
     // MARK: - Start / Stop
 
     func start() throws {
-        guard !isRunning else { return }
+        guard !engineStarted else { return }
         try configureSession()
         observeRouteChanges()
 
@@ -166,12 +175,14 @@ final class AudioEngine: ObservableObject {
 
         engine.prepare()
         try engine.start()
+        engineStarted = true
 
         DispatchQueue.main.async { self.isRunning = true }
     }
 
     func stop() {
-        guard isRunning else { return }
+        guard engineStarted else { return }
+        engineStarted = false
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
@@ -191,9 +202,10 @@ final class AudioEngine: ObservableObject {
             object: AVAudioSession.sharedInstance(),
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.isRunning else { return }
+            guard let self, self.engineStarted else { return }
             self.engine.inputNode.removeTap(onBus: 0)
             self.engine.stop()
+            self.engineStarted = false
             DispatchQueue.main.async {
                 self.isRunning = false
                 try? self.start()

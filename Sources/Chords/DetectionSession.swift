@@ -50,6 +50,10 @@ final class DetectionSession: ObservableObject {
     @Published var history: [DetectedChord] = []        // newest last
     @Published var detectedKey: String?
     @Published var isRecording = false
+    /// Between the tap and the first buffer. Activating the audio session and
+    /// starting the engine both block for long enough to be felt, so the UI
+    /// says so and stays cancellable instead of appearing to hang.
+    @Published var isStarting = false
     @Published var permissionDenied = false
     @Published var inputSource: AudioEngine.InputSource = .unknown
     @Published var inputSampleRate: Double = 0
@@ -65,6 +69,9 @@ final class DetectionSession: ObservableObject {
     /// Returning nil means "not playing", and those frames are dropped rather
     /// than filed as chords heard during silence.
     var positionProvider: (() -> Double?)?
+
+    /// Set when the user taps again before the engine has finished starting.
+    private var cancelRequested = false
 
     private var startTime: Date?
     private var keyUpdateTimer: Timer?
@@ -104,28 +111,77 @@ final class DetectionSession: ObservableObject {
     // MARK: - Controls
 
     func start() {
+        guard !isStarting, !isRecording else { return }
+        isStarting = true
+        cancelRequested = false
+
         audio.requestPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
                 guard granted else {
                     self.permissionDenied = true
+                    self.isStarting = false
                     return
                 }
+                guard !self.cancelRequested else {
+                    self.isStarting = false
+                    return
+                }
+
+                // Off the main thread. setActive and AVAudioEngine.start both
+                // block, and doing them inline froze the whole screen — the
+                // player, the scroll and the button that would have stopped it.
+                let started = await self.startEngineOffMain()
+
+                self.isStarting = false
+                guard started, !self.cancelRequested else {
+                    if started { await self.stopEngineOffMain() }
+                    return
+                }
+                self.begin()
+            }
+        }
+    }
+
+    /// Abandons a start that has not finished yet. The engine may still be
+    /// coming up on the background queue, so this records the intent and the
+    /// start path tears down whatever it managed to bring up.
+    func cancelStart() {
+        guard isStarting else { return }
+        cancelRequested = true
+    }
+
+    func stop() {
+        cancelRequested = true
+        isRecording = false
+        isStarting = false
+        keyUpdateTimer?.invalidate()
+        keyUpdateTimer = nil
+        Task { await stopEngineOffMain() }
+    }
+
+    private func startEngineOffMain() async -> Bool {
+        let engine = audio
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    try self.audio.start()
-                    self.begin()
+                    try engine.start()
+                    continuation.resume(returning: true)
                 } catch {
-                    self.isRecording = false
+                    continuation.resume(returning: false)
                 }
             }
         }
     }
 
-    func stop() {
-        audio.stop()
-        isRecording = false
-        keyUpdateTimer?.invalidate()
-        keyUpdateTimer = nil
+    private func stopEngineOffMain() async {
+        let engine = audio
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                engine.stop()
+                continuation.resume()
+            }
+        }
     }
 
     // MARK: - Internal

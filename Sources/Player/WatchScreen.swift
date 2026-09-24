@@ -23,15 +23,20 @@ struct PlayableVideo: Identifiable, Hashable {
     /// alone does not distinguish a studio cut from a live set.
     let publishedAt: Date?
     let viewCount: Int?
+    /// Which channel this came from, so the player can tell a 찬양 upload from
+    /// a 말씀 one without guessing from the title.
+    let channelId: String?
 
     init(id: String, title: String, channelTitle: String? = nil,
-         durationSeconds: Int? = nil, publishedAt: Date? = nil, viewCount: Int? = nil) {
+         durationSeconds: Int? = nil, publishedAt: Date? = nil, viewCount: Int? = nil,
+         channelId: String? = nil) {
         self.id = id
         self.title = title
         self.channelTitle = channelTitle
         self.durationSeconds = durationSeconds
         self.publishedAt = publishedAt
         self.viewCount = viewCount
+        self.channelId = channelId
     }
 
     /// Built from the cache with everything it holds.
@@ -45,7 +50,8 @@ struct PlayableVideo: Identifiable, Hashable {
                   channelTitle: video.channelTitle,
                   durationSeconds: video.durationSeconds,
                   publishedAt: video.publishedAt,
-                  viewCount: video.viewCount)
+                  viewCount: video.viewCount,
+                  channelId: video.channelId)
     }
 
     /// Built from a playlist item, whose `videoPublishedAt` is the upload
@@ -55,7 +61,8 @@ struct PlayableVideo: Identifiable, Hashable {
         self.init(id: id,
                   title: item.title,
                   channelTitle: item.channelTitle,
-                  publishedAt: item.contentDetails?.videoPublishedAt)
+                  publishedAt: item.contentDetails?.videoPublishedAt,
+                  channelId: item.channelId)
     }
 
     /// i.ytimg.com serves art for every video at a fixed path, so the queue and
@@ -82,6 +89,7 @@ struct WatchScreen: View {
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var leadSheet: SavedSong?
+    @Query private var channels: [Channel]
     @StateObject private var player = PlayerCoordinator()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -396,6 +404,18 @@ struct WatchScreen: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
+    /// 코드 detection is offered for 찬양 only.
+    ///
+    /// Unknown channels — a result from a search across all of YouTube — get
+    /// the button, since that is where songs come from. A channel you have
+    /// filed under 말씀 or 교제 does not.
+    private var showsChordButton: Bool {
+        guard let channelId = current?.channelId else { return true }
+        guard let channel = channels.first(where: { $0.youtubeChannelId == channelId })
+        else { return true }
+        return channel.purpose == .worship
+    }
+
     /// The facts that separate one upload of a worship song from another.
     ///
     /// The date is absolute AND relative: "2019년 5월 3일" says which release
@@ -440,21 +460,34 @@ struct WatchScreen: View {
                 .buttonStyle(.bordered)
             }
 
-            Button {
-                if detection.isRecording {
-                    finishDetection(showSheet: true)
-                } else {
-                    startDetection()
+            // 코드 is for 찬양. A QT or a psalm reading has nothing to
+            // detect, and the button only invited a pointless wait there.
+            if showsChordButton {
+                Button {
+                    if detection.isStarting {
+                        detection.cancelStart()
+                    } else if detection.isRecording {
+                        finishDetection(showSheet: true)
+                    } else {
+                        startDetection()
+                    }
+                } label: {
+                    if detection.isStarting {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.mini)
+                            Text("취소")
+                        }
+                    } else {
+                        Label(
+                            detection.isRecording ? "정지" : "코드",
+                            systemImage: detection.isRecording ? "stop.circle" : "music.note"
+                        )
+                    }
                 }
-            } label: {
-                Label(
-                    detection.isRecording ? "정지" : "코드",
-                    systemImage: detection.isRecording ? "stop.circle" : "music.note"
-                )
+                .buttonStyle(.bordered)
+                .tint(detection.isRecording || detection.isStarting ? .red : .accentColor)
+                .disabled(current == nil)
             }
-            .buttonStyle(.bordered)
-            .tint(detection.isRecording ? .red : .accentColor)
-            .disabled(current == nil)
         }
         .font(.subheadline)
         .controlSize(.small)
@@ -463,7 +496,7 @@ struct WatchScreen: View {
     /// Everything that is worth reading but not worth pinning.
     private var extrasBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if detection.isRecording || detection.permissionDenied {
+            if detection.isRecording || detection.isStarting || detection.permissionDenied {
                 chordPanel
             }
 
@@ -667,7 +700,8 @@ struct WatchScreen: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(detection.currentChord?.symbol() ?? "듣는 중…")
+                    Text(detection.currentChord?.symbol()
+                         ?? (detection.isStarting ? "준비 중…" : "듣는 중…"))
                         .font(.system(size: 34, weight: .semibold, design: .rounded))
                         .contentTransition(.numericText())
 
