@@ -38,6 +38,7 @@ struct WorshipFeedView: View {
     private var allVideos: [CachedVideo]
 
     @State private var searchText = ""
+    @StateObject private var history = SearchHistory.shared("worship")
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var searchError: String?
@@ -67,6 +68,12 @@ struct WorshipFeedView: View {
                     placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "찬양·곡 검색"
                 )
+                .searchSuggestions {
+                    ForEach(history.entries, id: \.self) { query in
+                        Label(query, systemImage: "clock.arrow.circlepath")
+                            .searchCompletion(query)
+                    }
+                }
                 .onSubmit(of: .search) { Task { await runRemoteSearch() } }
                 .onChange(of: searchText) { _, newValue in
                     if newValue.isEmpty { remoteResults = []; searchError = nil }
@@ -295,8 +302,14 @@ struct WorshipFeedView: View {
                     )
                 } onAdd: { result in
                     guard let id = result.videoId else { return }
-                    addTarget = PlayableVideo(id: id, title: result.title,
-                                              channelTitle: result.snippet?.channelTitle)
+                    let info = resultDetail[id]
+                    addTarget = PlayableVideo(
+                        id: id, title: result.title,
+                        channelTitle: result.snippet?.channelTitle,
+                        durationSeconds: info?.0,
+                        publishedAt: result.snippet?.publishedAt,
+                        viewCount: info?.1
+                    )
                 }
             }
         }
@@ -365,6 +378,8 @@ struct WorshipFeedView: View {
         isSearching = true
         searchError = nil
         defer { isSearching = false }
+
+        history.record(query)
 
         let client = AppServices.client(auth: auth, quota: quota)
         do {

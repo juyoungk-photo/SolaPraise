@@ -33,6 +33,13 @@ struct PlayableVideo: Identifiable, Hashable {
         self.publishedAt = publishedAt
         self.viewCount = viewCount
     }
+
+    /// i.ytimg.com serves art for every video at a fixed path, so the queue and
+    /// the add-sheet can show a thumbnail without every call site having to
+    /// carry one through.
+    var thumbnailURL: URL? {
+        URL(string: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg")
+    }
 }
 
 // MARK: - Screen
@@ -76,8 +83,12 @@ struct WatchScreen: View {
         NavigationStack {
             VStack(spacing: 0) {
                 playerBlock
-                metadataBlock
-                Spacer(minLength: 0)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        metadataBlock
+                        if isPlaylist { queueBlock }
+                    }
+                }
             }
             .background(Color(.systemBackground))
             .navigationBarTitleDisplayMode(.inline)
@@ -255,6 +266,69 @@ struct WatchScreen: View {
             }
             .padding()
         }
+    }
+
+    // MARK: - Queue
+
+    /// The rest of the playlist, in order, so you can see what is coming and
+    /// jump straight to it. Scrolls with the metadata rather than pinning to
+    /// the bottom — the player stays put, everything below it moves together.
+    private var queueBlock: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                Divider().padding(.top, 16)
+
+                Text("재생목록 \(queue.count)곡")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
+                ForEach(Array(queue.enumerated()), id: \.element.id) { position, item in
+                    Button {
+                        jump(to: position)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Group {
+                                if position == index {
+                                    Image(systemName: "speaker.wave.2.fill")
+                                        .foregroundStyle(.tint)
+                                } else {
+                                    Text("\(position + 1)")
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.caption)
+                            .frame(width: 22)
+
+                            VideoMetaRow(video: item, thumbnailWidth: 72)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 5)
+                        .background(
+                            position == index
+                                ? Color.accentColor.opacity(0.12)
+                                : Color.clear
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .id(position)
+                }
+            }
+            .padding(.bottom, 24)
+            .onChange(of: index) { _, new in
+                withAnimation { proxy.scrollTo(new, anchor: .center) }
+            }
+        }
+    }
+
+    /// Jumping counts as finishing the current video for watch stats, the same
+    /// as pressing Next — otherwise a skipped song is silently unrecorded.
+    private func jump(to position: Int) {
+        guard queue.indices.contains(position), position != index else { return }
+        logWatch(completed: false)
+        index = position
+        player.load(videoId: queue[position].id)
     }
 
     // MARK: - Metadata + actions

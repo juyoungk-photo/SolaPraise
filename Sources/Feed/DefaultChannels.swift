@@ -57,8 +57,10 @@ enum DefaultChannels {
                          purpose: .worship, isPinned: false),
 
         // ── 교제 ──────────────────────────────────────────────
+        // Id read off @c3sfbay-tv's own page. Its RSS feed 404s, which is the
+        // usual flakiness rather than a wrong id — the API path serves it.
         SuggestedChannel(channelId: "UCkgmi4DRdECaM2N_ErJANPw",
-                         title: "코너스톤TV", handle: "@c3sfbay-tv",
+                         title: "📺 Cornerstone TV", handle: "@c3sfbay-tv",
                          purpose: .fellowship, isPinned: false)
     ]
 

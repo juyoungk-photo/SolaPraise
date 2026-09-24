@@ -21,17 +21,28 @@ struct HomeSearchSheet: View {
     @Query(sort: [SortDescriptor(\CachedVideo.publishedAt, order: .reverse)])
     private var allVideos: [CachedVideo]
 
+    /// Set when a 주제 card opens this sheet. The term is filled in and the
+    /// cached matches show at once, but the 100-unit search stays a tap away.
+    var initialQuery: String = ""
+
     @State private var text = ""
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
     @State private var playRequest: FeedPlayRequest?
     @FocusState private var fieldFocused: Bool
+    @StateObject private var history = SearchHistory.shared("home")
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 searchField
+                if text.isEmpty {
+                    SearchHistoryChips(history: history) { query in
+                        text = query
+                        Task { await runRemoteSearch() }
+                    }
+                }
                 Divider()
                 results
             }
@@ -48,8 +59,11 @@ struct HomeSearchSheet: View {
             // A brief hop gives the sheet time to present before the keyboard
             // is requested; focusing synchronously is unreliable here.
             .task {
+                if text.isEmpty { text = initialQuery }
                 try? await Task.sleep(for: .milliseconds(350))
-                fieldFocused = true
+                // A pre-filled term is already the query, so do not raise the
+                // keyboard over the results the user came to see.
+                fieldFocused = initialQuery.isEmpty
             }
         }
     }
@@ -208,6 +222,7 @@ struct HomeSearchSheet: View {
             errorMessage = "YouTube 전체 검색은 Google 로그인이 필요합니다."
             return
         }
+        history.record(query)
         isSearching = true
         errorMessage = nil
         defer { isSearching = false }

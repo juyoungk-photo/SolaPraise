@@ -182,7 +182,11 @@ final class YouTubeAPIClient {
         try await getAllPages(
             "playlists",
             query: [
-                .init(name: "part", value: "snippet,contentDetails,status,statistics"),
+                // No `statistics` here. The playlist resource has no such part
+                // and YouTube rejects the whole request with "Couldn't load
+                // 'statistics'" rather than ignoring it — so asking for a view
+                // count that playlists never had breaks the list entirely.
+                .init(name: "part", value: "snippet,contentDetails,status"),
                 .init(name: "mine", value: "true"),
                 .init(name: "maxResults", value: "50")
             ],
@@ -276,7 +280,7 @@ final class YouTubeAPIClient {
 
         while collected.count < limit {
             var query: [URLQueryItem] = [
-                .init(name: "part", value: "snippet,contentDetails,status,statistics"),
+                .init(name: "part", value: "snippet,contentDetails,status"),
                 .init(name: "channelId", value: channelId),
                 .init(name: "maxResults", value: "50")
             ]

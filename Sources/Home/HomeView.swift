@@ -31,6 +31,8 @@ struct HomeView: View {
 
     @State private var showSettings = false
     @State private var showAddCard = false
+    /// Pre-filled term when a 주제 card opens the search sheet.
+    @State private var searchQuery = ""
     @State private var showReading = false
     @State private var isEditing = false
     @State private var playRequest: FeedPlayRequest?
@@ -124,14 +126,16 @@ struct HomeView: View {
                     Button(isEditing ? "완료" : "편집") { isEditing.toggle() }
                         .font(.subheadline)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showAddCard = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("카드 추가")
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showAddCard) { AddHomeCardSheet() }
-            .sheet(isPresented: $showSearch) { HomeSearchSheet() }
+            .sheet(isPresented: $showSearch) { HomeSearchSheet(initialQuery: searchQuery) }
             .sheet(isPresented: $showPsalmSheet) { PsalmAudioSheet() }
             .alert("시편 듣기", isPresented: $showError, presenting: playlistError) { _ in
                 Button("확인", role: .cancel) { }
@@ -203,7 +207,10 @@ struct HomeView: View {
                 card: card,
                 subtitle: subtitle(for: card),
                 thumbnailURL: thumbnail(for: card),
-                isRead: card.kind == .reading ? daily.isCurrentRead : false
+                isRead: card.kind == .reading ? daily.isCurrentRead : false,
+                onStep: (card.kind == .reading || card.kind == .psalmAudio)
+                    ? { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
+                    : nil
             )
             // A tap gesture rather than a Button. Wrapping the card in
             // `Button { } label: { }` inside this nesting — ZStack in an
@@ -246,6 +253,10 @@ struct HomeView: View {
             return latestVideo(for: card)?.title
         case .playlist:
             return "탭하면 재생"
+        case .video:
+            return "탭하면 재생"
+        case .topic:
+            return card.targetId ?? card.title
         case .search:
             return "\(quota.searchesRemaining)회 남음"
         }
@@ -255,6 +266,10 @@ struct HomeView: View {
         switch card.kind {
         case .channel:    return latestVideo(for: card)?.thumbnailURL
         case .psalmAudio: return psalmAudioVideo?.thumbnailURL
+        case .video:
+            return card.targetId.flatMap {
+                URL(string: "https://i.ytimg.com/vi/\($0)/mqdefault.jpg")
+            }
         default:          return nil
         }
     }
@@ -330,8 +345,23 @@ struct HomeView: View {
             guard let playlistId = card.targetId else { selection = .library; return }
             Task { await playPlaylist(playlistId, title: card.title) }
 
+        case .video:
+            guard let videoId = card.targetId else { return }
+            playRequest = FeedPlayRequest(
+                queue: [PlayableVideo(id: videoId, title: card.title)],
+                startIndex: 0
+            )
+
+        case .topic:
+            // Opens search pre-filled but does NOT spend a search: the cached
+            // matches appear immediately and the 100-unit call stays a
+            // deliberate second tap.
+            searchQuery = card.targetId ?? card.title
+            showSearch = true
+
         case .search:
             // Stay on Home — the sheet opens with the keyboard already up.
+            searchQuery = ""
             showSearch = true
         }
     }

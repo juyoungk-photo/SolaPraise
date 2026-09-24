@@ -21,11 +21,15 @@ struct AddHomeCardSheet: View {
 
     @StateObject private var playlists = LoadState<[YTPlaylist]>()
 
+    @State private var linkInput = ""
+    @State private var topicInput = ""
+
     private var existingKeys: Set<String> { Set(cards.map(\.dedupeKey)) }
 
     var body: some View {
         NavigationStack {
             List {
+                customSection
                 shortcutSection
                 channelSection
                 playlistSection
@@ -43,6 +47,84 @@ struct AddHomeCardSheet: View {
                 await playlists.run { try await client.myPlaylists() }
             }
         }
+    }
+
+    // MARK: - Custom
+
+    /// The two cards that do not have to already exist somewhere else: any
+    /// YouTube link, and any search term you keep coming back to.
+    @ViewBuilder
+    private var customSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("YouTube 링크 붙여넣기", text: $linkInput, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote)
+                HStack {
+                    if let id = pastedVideoId {
+                        Text("영상 \(id)").font(.caption2).foregroundStyle(.secondary)
+                    } else if !linkInput.isEmpty {
+                        Text("링크를 알아볼 수 없습니다")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    Button("영상 카드 추가") { addVideoCard() }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .disabled(pastedVideoId == nil)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("검색어, 예: 나는 예배자입니다", text: $topicInput)
+                    .font(.footnote)
+                HStack {
+                    Spacer()
+                    Button("주제 카드 추가") { addTopicCard() }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .disabled(trimmedTopic.count < 2)
+                }
+            }
+        } header: {
+            Text("직접 만들기")
+        } footer: {
+            Text("영상 카드는 탭하면 바로 재생됩니다. 주제 카드는 검색창을 그 검색어로 열어 주며, 저장된 결과부터 보여 주므로 units를 쓰지 않습니다.")
+        }
+    }
+
+    private var pastedVideoId: String? {
+        let trimmed = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return YouTubeID.parse(trimmed)
+    }
+
+    private var trimmedTopic: String {
+        topicInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func addVideoCard() {
+        guard let id = pastedVideoId else { return }
+        add(kind: .video, targetId: id, title: "영상")
+        linkInput = ""
+        Task {
+            // Title comes from the API when signed in; the placeholder above
+            // means the card is usable the instant it is added either way.
+            guard auth.isSignedIn else { return }
+            let client = AppServices.client(auth: auth, quota: quota)
+            guard let video = try? await client.videos(ids: [id]).first,
+                  let title = video.snippet?.title else { return }
+            cards.first { $0.dedupeKey == "video-\(id)" }?.title = title
+            try? modelContext.save()
+        }
+    }
+
+    private func addTopicCard() {
+        let topic = trimmedTopic
+        guard topic.count >= 2 else { return }
+        add(kind: .topic, targetId: topic, title: topic)
+        topicInput = ""
     }
 
     // MARK: - Sections

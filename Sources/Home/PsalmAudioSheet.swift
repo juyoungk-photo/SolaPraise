@@ -27,12 +27,11 @@ struct PsalmAudioSheet: View {
     @Query(sort: [SortDescriptor(\Channel.sortOrder), SortDescriptor(\Channel.addedAt)])
     private var channels: [Channel]
 
-    /// Remembered so the choice survives reopening the sheet.
     @AppStorage("psalm.channelId") private var channelId = DefaultChannels.psalmAudioChannelId
 
     @State private var chapter = 1
-    @State private var status = ""
-    @State private var foundVia: String?
+    @State private var downloaded = ""
+    @State private var note: String?
     @State private var isWorking = false
     @State private var playRequest: FeedPlayRequest?
 
@@ -48,30 +47,7 @@ struct PsalmAudioSheet: View {
         NavigationStack {
             List {
                 selectionSection
-
-                if let match {
-                    Section {
-                        Button {
-                            playRequest = FeedPlayRequest(
-                                queue: [PlayableVideo(
-                                    id: match.videoId, title: match.title,
-                                    channelTitle: match.channelTitle,
-                                    durationSeconds: match.durationSeconds
-                                )],
-                                startIndex: 0
-                            )
-                        } label: {
-                            Label(match.title, systemImage: "play.circle.fill")
-                                .lineLimit(2)
-                        }
-                    } header: {
-                        Text("찾은 영상")
-                    } footer: {
-                        if let foundVia { Text(foundVia) }
-                    }
-                } else {
-                    lookupSection
-                }
+                if let match { foundSection(match) } else { lookupSection }
             }
             .navigationTitle("시편 듣기")
             .navigationBarTitleDisplayMode(.inline)
@@ -85,10 +61,10 @@ struct PsalmAudioSheet: View {
             }
             .task {
                 if chapter == 1 { chapter = daily.chapter }
-                describeCache()
+                describeDownloaded()
             }
-            .onChange(of: chapter) { _, _ in foundVia = nil; describeCache() }
-            .onChange(of: channelId) { _, _ in foundVia = nil; describeCache() }
+            .onChange(of: chapter) { _, _ in note = nil; describeDownloaded() }
+            .onChange(of: channelId) { _, _ in note = nil; describeDownloaded() }
         }
     }
 
@@ -114,11 +90,49 @@ struct PsalmAudioSheet: View {
                 }
             }
 
-            LabeledContent("캐시", value: status)
+            LabeledContent("내려받은 시편", value: downloaded)
         } header: {
             Text("찾을 대상")
         } footer: {
-            Text("오늘은 시편 \(daily.chapter)편입니다. 다른 편이나 다른 채널에서도 찾을 수 있습니다.")
+            // "150편 중 1편" read as a limitation of the channel. It is not —
+            // it is how much this device has fetched so far.
+            Text("오늘은 시편 \(daily.chapter)편입니다. '내려받은 시편'은 이 기기에 저장된 편 수이며, 채널이 실제로 가진 양과는 다릅니다. 「영상 찾기」를 누르면 이 채널의 시편 재생목록을 한 번에 가져옵니다.")
+        }
+    }
+
+    // MARK: - Result
+
+    private func foundSection(_ video: CachedVideo) -> some View {
+        Section {
+            Button {
+                playRequest = FeedPlayRequest(
+                    queue: [PlayableVideo(
+                        id: video.videoId, title: video.title,
+                        channelTitle: video.channelTitle,
+                        durationSeconds: video.durationSeconds,
+                        publishedAt: video.publishedAt
+                    )],
+                    startIndex: 0
+                )
+            } label: {
+                HStack(spacing: 10) {
+                    VideoMetaRow(video: PlayableVideo(
+                        id: video.videoId, title: video.title,
+                        channelTitle: video.channelTitle,
+                        durationSeconds: video.durationSeconds,
+                        publishedAt: video.publishedAt
+                    ))
+                    Image(systemName: "play.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Color.accentColor)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } header: {
+            Text("찾은 영상")
+        } footer: {
+            if let note { Text(note) }
         }
     }
 
@@ -134,6 +148,10 @@ struct PsalmAudioSheet: View {
                 }
             }
             .disabled(isWorking || !auth.isSignedIn)
+
+            if let note {
+                Text(note).font(.footnote).foregroundStyle(.secondary)
+            }
         } footer: {
             Text(auth.isSignedIn
                  ? "① 이 채널의 시편 재생목록을 먼저 확인합니다 (약 3 units). ② 없으면 이 채널만 대상으로 검색합니다 (100 units). 유튜브 전체 검색이 아닙니다. 남은 검색 \(quota.searchesRemaining)회."
@@ -143,45 +161,51 @@ struct PsalmAudioSheet: View {
 
     // MARK: - Lookup
 
-    private func describeCache() {
-        let cached = allVideos.filter { $0.channelId == channelId }
-        let psalms = cached.filter { $0.title.contains("시편") }
-        status = "영상 \(cached.count)개 · 시편 \(psalms.count)개"
+    /// Counts distinct chapters held locally, not videos: a channel may post
+    /// the same psalm more than once.
+    private func describeDownloaded() {
+        let psalms = allVideos.filter {
+            $0.channelId == channelId && $0.title.contains("시편")
+        }
+        var chapters = Set<Int>()
+        for video in psalms {
+            guard let range = video.title.range(of: "시편\\s*\\d{1,3}", options: .regularExpression),
+                  let number = Int(video.title[range].filter(\.isNumber)) else { continue }
+            chapters.insert(number)
+        }
+        downloaded = chapters.isEmpty ? "없음" : "\(chapters.count)편"
     }
 
     private func lookUp() async {
         isWorking = true
-        foundVia = nil
+        note = nil
         defer { isWorking = false }
 
         let client = AppServices.client(auth: auth, quota: quota)
         let before = quota.unitsUsed
 
-        // ① Free-ish route: the channel's own psalm playlist.
-        status = "재생목록 확인 중…"
+        note = "재생목록 확인 중…"
         let ingested = await feed.ingestPsalmPlaylist(
             context: modelContext, client: client, channelId: channelId
         )
-        describeCache()
+        describeDownloaded()
         if match != nil {
-            foundVia = "재생목록에서 찾음 · \(ingested)개 수집 · \(quota.unitsUsed - before) units 사용"
+            note = "재생목록에서 찾음 · \(ingested)편 내려받음 · \(quota.unitsUsed - before) units"
             return
         }
 
-        // ② Channel-scoped search.
         guard quota.canSearch else {
-            status = "검색 예산 소진"
+            note = "오늘 검색 예산을 모두 사용했습니다"
             return
         }
-        status = "채널 검색 중… (100 units)"
+
+        note = "채널 검색 중… (100 units)"
         let found = await feed.findPsalmVideo(
             chapter: chapter, context: modelContext, client: client, channelId: channelId
         )
-        describeCache()
-        if found != nil {
-            foundVia = "채널 검색에서 찾음 · \(quota.unitsUsed - before) units 사용"
-        } else {
-            status = "이 채널에 시편 \(chapter)편이 없습니다"
-        }
+        describeDownloaded()
+        note = found != nil
+            ? "채널 검색에서 찾음 · \(quota.unitsUsed - before) units"
+            : "이 채널에 시편 \(chapter)편이 없습니다"
     }
 }

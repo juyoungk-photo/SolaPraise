@@ -55,9 +55,9 @@ struct AddToPlaylistSheet: View {
     private var list: some View {
         List {
             Section {
-                Text(video.title)
-                    .font(.subheadline)
-                    .lineLimit(2)
+                // The same row the search result showed. Dropping to a bare
+                // title here made the sheet look like it had lost the video.
+                VideoMetaRow(video: video)
                 if let message = errorMessage {
                     Text(message).font(.caption).foregroundStyle(.red)
                 }

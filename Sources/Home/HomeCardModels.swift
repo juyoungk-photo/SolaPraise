@@ -17,6 +17,9 @@ enum HomeCardKind: String, Codable, CaseIterable, Identifiable {
     case playlist     // one YouTube playlist, tap to play
     case search       // jump to search
     case psalmAudio   // 공동체성경읽기's reading of today's psalm, for the car
+    // ── User-made cards ──────────────────────────────────────
+    case video        // one pasted YouTube link, tap to play
+    case topic        // a saved search term, tap to run it
 
     var id: String { rawValue }
 
@@ -27,6 +30,8 @@ enum HomeCardKind: String, Codable, CaseIterable, Identifiable {
         case .playlist: return "music.note.list"
         case .search:     return "magnifyingglass"
         case .psalmAudio: return "headphones"
+        case .video:      return "play.circle"
+        case .topic:      return "text.magnifyingglass"
         }
     }
 
@@ -34,7 +39,7 @@ enum HomeCardKind: String, Codable, CaseIterable, Identifiable {
     var isWide: Bool {
         switch self {
         case .reading, .search: return true
-        case .channel, .playlist, .psalmAudio: return false
+        case .channel, .playlist, .psalmAudio, .video, .topic: return false
         }
     }
 }
@@ -42,7 +47,8 @@ enum HomeCardKind: String, Codable, CaseIterable, Identifiable {
 @Model
 final class HomeCard {
     var kindRaw: String
-    /// Channel id (UC…) or playlist id. Nil for reading and search.
+    /// Channel id (UC…), playlist id, video id, or a search term.
+    /// Nil for reading and search.
     var targetId: String?
     /// Display name captured at add time, so a playlist card can render
     /// before (or without) a network round trip.

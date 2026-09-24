@@ -157,3 +157,54 @@ struct FeedEndMarker: View {
         .padding(.bottom, 40)
     }
 }
+
+// MARK: - Shared metadata row
+
+/// Thumbnail + title + channel + date · length · views.
+///
+/// Every screen that names a video shows the same three facts, because
+/// comparing uploads of one worship song is routine and the title alone never
+/// distinguishes a studio cut from a live set. Defined once so the add-sheet,
+/// the psalm lookup and the player queue cannot drift apart.
+struct VideoMetaRow: View {
+    let video: PlayableVideo
+    var thumbnailWidth: CGFloat = 88
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Thumbnail(url: video.thumbnailURL,
+                      width: thumbnailWidth,
+                      height: thumbnailWidth * 9 / 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(video.title)
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(Color.primary)
+
+                if let channel = video.channelTitle {
+                    Text(channel).font(.caption2).foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 5) {
+                    if let published = video.publishedAt {
+                        Text(published, format: .dateTime.year().month().day())
+                    }
+                    if let secs = video.durationSeconds {
+                        Text("·")
+                        Text(ISO8601Duration.format(secs)).monospacedDigit()
+                    }
+                    if let views = video.viewCount {
+                        Text("·")
+                        Text("조회 \(WatchScreen.compactCount(views))").monospacedDigit()
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+}
