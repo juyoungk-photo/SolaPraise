@@ -79,6 +79,7 @@ enum ReadingSettings {
         static let notificationsOn = "reading.notificationsOn"
         static let notifyHour = "reading.notifyHour"
         static let notifyMinute = "reading.notifyMinute"
+        static let appearance = "app.appearance"
     }
 
     /// The user's own Crossway key. Stored on device only, never committed.
@@ -127,11 +128,46 @@ enum ReadingSettings {
         set { defaults.set(newValue, forKey: Keys.notifyMinute) }
     }
 
+    /// 시스템 / 밝게 / 어둡게.
+    ///
+    /// Defaults to following the system, which is both the least surprising
+    /// choice and the one that already gives a dark phone a dark app.
+    static var appearance: AppAppearance {
+        get { AppAppearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .system }
+        set { defaults.set(newValue.rawValue, forKey: Keys.appearance) }
+    }
+
     static func todayKey(_ date: Date = Date()) -> String {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: date)
+    }
+}
+
+
+import SwiftUI
+
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "시스템"
+        case .light:  return "밝게"
+        case .dark:   return "어둡게"
+        }
+    }
+
+    /// nil hands control back to the system.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
     }
 }

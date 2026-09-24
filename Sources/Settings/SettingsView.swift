@@ -19,6 +19,7 @@ struct SettingsView: View {
     private var channels: [Channel]
 
     @State private var addingFor: Purpose?
+    @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var notificationsOn = ReadingSettings.notificationsEnabled
     @State private var esvKey = ReadingSettings.esvAPIKey ?? ""
     @StateObject private var feed = FeedStore()
@@ -36,6 +37,7 @@ struct SettingsView: View {
                 ForEach(Purpose.allCases) { purpose in
                     channelSection(for: purpose)
                 }
+                appearanceSection
                 readingSection
                 refreshSection
                 todaySection
@@ -105,6 +107,23 @@ struct SettingsView: View {
         }
         channel.isPinned = !wasPinned
         try? modelContext.save()
+    }
+
+    // MARK: - Appearance
+
+    private var appearanceSection: some View {
+        Section {
+            Picker("테마", selection: $appearanceRaw) {
+                ForEach(AppAppearance.allCases) { option in
+                    Text(option.title).tag(option.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("화면")
+        } footer: {
+            Text("시스템을 고르면 기기 설정을 따라갑니다.")
+        }
     }
 
     // MARK: - Reading

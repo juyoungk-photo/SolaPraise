@@ -169,6 +169,91 @@ final class FeedStore: ObservableObject {
             }
         }
         try? context.save()
+        await ingestPsalmPlaylist(context: context, client: client)
+    }
+
+    /// Pulls 공동체성경읽기's psalm playlist into the cache.
+    ///
+    /// Walking that channel's uploads does not work: it publishes a daily
+    /// 30분 신구약 video, so the 1000 most recent uploads contain zero psalm
+    /// readings — verified on device. But the channel indexes itself by book
+    /// ("19. 시편_장별 구절 영상"), so one playlist holds all 150 chapters for
+    /// about 3 units. Runs once; afterwards the cache already has them.
+    func ingestPsalmPlaylist(context: ModelContext, client: YouTubeAPIClient?) async {
+        guard let client else { return }
+
+        let psalmChannel = DefaultChannels.psalmAudioChannelId
+        let cached = (try? context.fetch(FetchDescriptor<CachedVideo>())) ?? []
+        // Already have a healthy number of psalm readings? Nothing to do.
+        let existingPsalms = cached.filter {
+            $0.channelId == psalmChannel && $0.title.contains("시편")
+        }
+        guard existingPsalms.count < 100 else { return }
+
+        let playlists = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        guard let psalmList = playlists.first(where: {
+            $0.channelId == psalmChannel && $0.title.contains("시편")
+        }) else { return }
+
+        guard let items = try? await client.playlistItems(playlistId: psalmList.playlistId) else { return }
+
+        var known = Set(cached.map(\.videoId))
+        for item in items {
+            guard let videoId = item.videoId, !known.contains(videoId) else { continue }
+            context.insert(CachedVideo(
+                videoId: videoId,
+                title: item.title,
+                channelId: psalmChannel,
+                channelTitle: item.channelTitle,
+                thumbnailURLString: item.thumbnailURL?.absoluteString,
+                publishedAt: item.contentDetails?.videoPublishedAt,
+                source: .manual
+            ))
+            known.insert(videoId)
+        }
+        try? context.save()
+        #if DEBUG
+        print("[SolaPraise] psalm playlist '\(psalmList.title)' → \(items.count) items")
+        #endif
+    }
+
+    /// Finds one specific psalm reading by searching the channel directly.
+    ///
+    /// The fallback when the playlist route has not filled the cache. Costs
+    /// 100 units, so it is only ever triggered by an explicit tap — never
+    /// automatically, or opening the app 100 times would spend the day.
+    @discardableResult
+    func findPsalmVideo(chapter: Int, context: ModelContext,
+                        client: YouTubeAPIClient?) async -> CachedVideo? {
+        guard let client else { return nil }
+
+        let channelId = DefaultChannels.psalmAudioChannelId
+        guard let results = try? await client.search(
+            query: "시편 \(chapter)편", channelId: channelId, maxResults: 10
+        ) else { return nil }
+
+        let pattern = "시편\\s*\(chapter)\\s*[편장]"
+        guard let match = results.first(where: {
+            $0.title.range(of: pattern, options: .regularExpression) != nil
+        }) ?? results.first, let videoId = match.videoId else { return nil }
+
+        let existing = (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.videoId == videoId }
+        )).first) ?? nil
+        if let existing { return existing }
+
+        let video = CachedVideo(
+            videoId: videoId,
+            title: match.title,
+            channelId: channelId,
+            channelTitle: match.snippet?.channelTitle,
+            thumbnailURLString: match.snippet?.thumbnails?.best?.absoluteString,
+            publishedAt: match.snippet?.publishedAt,
+            source: .manual
+        )
+        context.insert(video)
+        try? context.save()
+        return video
     }
 
     // MARK: - Topic searches

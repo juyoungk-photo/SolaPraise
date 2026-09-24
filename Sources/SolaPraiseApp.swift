@@ -19,6 +19,11 @@ struct SolaPraiseApp: App {
     @StateObject private var auth = GoogleAuthManager()
     @StateObject private var quota = QuotaLedger()
     @StateObject private var daily = DailyReading()
+    @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
+
+    private var appearance: AppAppearance {
+        AppAppearance(rawValue: appearanceRaw) ?? .system
+    }
 
     private let container: ModelContainer = {
         do {
@@ -55,6 +60,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(auth)
                 .environmentObject(quota)
                 .environmentObject(daily)
+                .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
                     GIDSignIn.sharedInstance.handle(url)
@@ -78,7 +84,9 @@ struct SolaPraiseApp: App {
     @ViewBuilder
     private var rootView: some View {
         #if DEBUG
-        if DebugHarness.showLeadSheet {
+        if DebugHarness.apiCheck {
+            ApiCheckView()
+        } else if DebugHarness.showLeadSheet {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }

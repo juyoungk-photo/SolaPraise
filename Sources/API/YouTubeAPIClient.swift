@@ -270,17 +270,26 @@ final class YouTubeAPIClient {
     }
 
     /// Playlists published by a channel (1 unit per 50).
-    func channelPlaylists(channelId: String, limit: Int = 50) async throws -> [YTPlaylist] {
-        let page: YTListResponse<YTPlaylist> = try await get(
-            "playlists",
-            query: [
+    func channelPlaylists(channelId: String, limit: Int = 200) async throws -> [YTPlaylist] {
+        var collected: [YTPlaylist] = []
+        var pageToken: String?
+
+        while collected.count < limit {
+            var query: [URLQueryItem] = [
                 .init(name: "part", value: "snippet,contentDetails,status"),
                 .init(name: "channelId", value: channelId),
-                .init(name: "maxResults", value: String(min(limit, 50)))
-            ],
-            cost: .read
-        )
-        return page.items ?? []
+                .init(name: "maxResults", value: "50")
+            ]
+            if let pageToken { query.append(.init(name: "pageToken", value: pageToken)) }
+
+            let page: YTListResponse<YTPlaylist> = try await get(
+                "playlists", query: query, cost: .read
+            )
+            collected.append(contentsOf: page.items ?? [])
+            guard let next = page.nextPageToken else { break }
+            pageToken = next
+        }
+        return Array(collected.prefix(limit))
     }
 
     // MARK: - Channels (1 unit)
@@ -309,21 +318,23 @@ final class YouTubeAPIClient {
     /// General YouTube search. Refuses when the self-imposed daily search
     /// budget is gone, with a clear message rather than a raw 403 — seeing
     /// this budget run down is the whole discipline mechanism.
-    func search(query: String, maxResults: Int = 24) async throws -> [YTSearchResult] {
+    func search(query: String, channelId: String? = nil,
+                maxResults: Int = 24) async throws -> [YTSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard quota.canSearch else { throw APIError.searchBudgetSpent }
 
+        var searchQuery: [URLQueryItem] = [
+            .init(name: "part", value: "snippet"),
+            .init(name: "q", value: trimmed)
+        ]
+        if let channelId { searchQuery.append(.init(name: "channelId", value: channelId)) }
+
         let page: YTListResponse<YTSearchResult> = try await get(
             "search",
-            query: [
-                .init(name: "part", value: "snippet"),
-                .init(name: "q", value: trimmed),
+            query: searchQuery + [
                 .init(name: "type", value: "video"),
                 // Only return videos the in-app player can actually play.
-                // A large share of worship and CCM uploads have embedding
-                // disabled by the rights holder; surfacing them means picking
-                // a song and then being bounced out to YouTube.
                 .init(name: "videoEmbeddable", value: "true"),
                 .init(name: "maxResults", value: String(min(maxResults, 50))),
                 .init(name: "safeSearch", value: "moderate")

@@ -65,23 +65,44 @@ enum DefaultChannels {
     /// The channel whose psalm readings pair with the 시편 screen.
     static let psalmAudioChannelId = "UCISl2wEDnzYeg-k_kElfN4Q"   // 공동체성경읽기
 
-    /// Seeds the defaults on first run only. Never re-adds a channel the user
-    /// has deleted, because it only fires when the list is completely empty.
+    /// Adds any default channel that has never been seeded on this device.
+    ///
+    /// Not "only when empty": that left every device stuck with whichever
+    /// defaults existed at first launch, so later additions — the worship
+    /// channels, 교제 — could never arrive. A per-channel record means a
+    /// channel you delete stays deleted rather than reappearing.
     @MainActor
     static func seedIfEmpty(context: ModelContext) {
-        let existing = (try? context.fetch(FetchDescriptor<Channel>())) ?? []
-        guard existing.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        let seededKey = "channels.seededIds"
+        var seeded = Set(defaults.stringArray(forKey: seededKey) ?? [])
 
-        for (index, suggestion) in all.enumerated() {
+        let existing = (try? context.fetch(FetchDescriptor<Channel>())) ?? []
+        let present = Set(existing.map(\.youtubeChannelId))
+        var order = (existing.map(\.sortOrder).max() ?? -1) + 1
+
+        var added = 0
+        for suggestion in all {
+            guard !present.contains(suggestion.channelId),
+                  !seeded.contains(suggestion.channelId) else { continue }
             context.insert(Channel(
                 youtubeChannelId: suggestion.channelId,
                 title: suggestion.title,
                 handle: suggestion.handle,
                 purpose: suggestion.purpose,
-                sortOrder: index,
-                isPinned: suggestion.isPinned
+                sortOrder: existing.isEmpty ? all.firstIndex(where: { $0.channelId == suggestion.channelId }) ?? order : order,
+                isPinned: existing.isEmpty && suggestion.isPinned
             ))
+            seeded.insert(suggestion.channelId)
+            order += 1
+            added += 1
         }
+
+        guard added > 0 else { return }
+        defaults.set(Array(seeded), forKey: seededKey)
         try? context.save()
+        #if DEBUG
+        print("[SolaPraise] seeded \(added) new default channels")
+        #endif
     }
 }

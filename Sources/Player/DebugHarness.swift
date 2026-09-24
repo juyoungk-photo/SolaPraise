@@ -49,6 +49,10 @@ enum DebugHarness {
     /// verified without a microphone: -uiTestChordSheet
     static var showChordSheet: Bool { args.contains("-uiTestChordSheet") }
 
+    /// Run a read-only API self-check and print the result:
+    /// -uiTestApiCheck
+    static var apiCheck: Bool { args.contains("-uiTestApiCheck") }
+
     /// Open the home search sheet on launch: -uiTestShowSearch
     static var showHomeSearch: Bool { args.contains("-uiTestShowSearch") }
 
@@ -174,5 +178,98 @@ struct DebugLeadSheetContainer: View {
         modelContext.insert(made)
         try? modelContext.save()
         song = made
+    }
+}
+
+/// Read-only verification that the signed-in API path actually works.
+///
+/// Exercises exactly the calls the Library depends on and reports the quota
+/// consumed, so a wrong call (a 100-unit search where a 1-unit read belongs)
+/// shows up immediately. Makes no writes — nothing in the account changes.
+struct ApiCheckView: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var auth: GoogleAuthManager
+    @EnvironmentObject private var quota: QuotaLedger
+    @State private var lines: [String] = ["실행 중…"]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.caption.monospaced())
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+        }
+        .task { await run() }
+    }
+
+    private func run() async {
+        var out: [String] = []
+        func log(_ s: String) { out.append(s); lines = out; print("[SolaPraise] CHECK \(s)") }
+
+        // restorePreviousSignIn is async; checking immediately reports a
+        // false negative.
+        var waited = 0
+        while auth.isRestoring && waited < 50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
+        log("restored after \(waited * 100)ms")
+        log("signedIn=\(auth.isSignedIn) email=\(auth.email ?? "-")")
+        guard auth.isSignedIn else { log("로그인 필요 — 중단"); return }
+
+        let before = quota.unitsUsed
+        log("quota before: \(before)")
+
+        let client = AppServices.client(auth: auth, quota: quota)
+
+        do {
+            let playlists = try await client.myPlaylists()
+            log("playlists.list → \(playlists.count)개  (+\(quota.unitsUsed - before) units)")
+            for p in playlists.prefix(6) {
+                log("   • \(p.title) — \(p.itemCount)곡 [\(p.privacy.label)]")
+            }
+
+            if let first = playlists.first {
+                let mark = quota.unitsUsed
+                let items = try await client.playlistItems(playlistId: first.id)
+                log("playlistItems.list → \(items.count)곡  (+\(quota.unitsUsed - mark) units)")
+                if let song = items.first { log("   첫 곡: \(song.title.prefix(40))") }
+            }
+        } catch {
+            log("실패: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+        }
+
+        // Why does the 시편 듣기 card say "아직 없음"? Either the channel's
+        // psalm readings were never cached, or they exist under a title the
+        // matcher does not recognise. Report enough to tell them apart.
+        let psalmId = DefaultChannels.psalmAudioChannelId
+        let all = (try? context.fetch(FetchDescriptor<CachedVideo>())) ?? []
+        let fromChannel = all.filter { $0.channelId == psalmId }
+        log("공동체성경읽기 캐시: \(fromChannel.count)개 (전체 \(all.count))")
+
+        let psalmTitled = fromChannel.filter { $0.title.contains("시편") }
+        log("제목에 '시편' 포함: \(psalmTitled.count)개")
+        for v in psalmTitled.prefix(8) { log("   · \(v.title.prefix(42))") }
+
+        // The psalm readings are older than any sane upload walk, so the
+        // channel's own playlists are the right index into them.
+        let pls = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        let channelPls = pls.filter { $0.channelId == psalmId }
+        log("공동체성경읽기 재생목록: \(channelPls.count)개")
+        for pl in channelPls.prefix(25) {
+            log("   ▸ \(pl.title.prefix(40)) (\(pl.itemCount))")
+        }
+
+        for n in [72, 73, 74] {
+            let pattern = "시편\\s*\(n)\\s*[편장]"
+            let hit = fromChannel.first { $0.title.range(of: pattern, options: .regularExpression) != nil }
+            log("   시편 \(n)편 → \(hit.map { String($0.title.prefix(34)) } ?? "없음")")
+        }
+
+        log("quota after: \(quota.unitsUsed)  (총 +\(quota.unitsUsed - before))")
+        log("검색 남음: \(quota.searchesRemaining)/\(QuotaLedger.dailySearchLimit)")
     }
 }
