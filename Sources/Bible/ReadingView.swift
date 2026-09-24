@@ -67,13 +67,17 @@ struct ReadingView: View {
             }
         }
         ToolbarItem(placement: .principal) {
+            // Version names rather than 한/영: "ESV" says which English text
+            // this is, and 한 never did.
             Picker("Translation", selection: translationBinding) {
                 ForEach(BibleTranslation.allCases) { t in
-                    Text(t.shortLabel).tag(t)
+                    Text(t.displayName)
+                        .foregroundStyle(t.isAvailable ? Color.primary : Color.secondary)
+                        .tag(t)
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 110)
+            .frame(width: 190)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { showGrid = true } label: {
@@ -89,7 +93,10 @@ struct ReadingView: View {
     private var translationBinding: Binding<BibleTranslation> {
         Binding(
             get: { daily.translation },
-            set: { daily.setTranslation($0) }
+            // A segmented picker has no per-segment disable, so an
+            // unavailable choice is refused here instead. The view already
+            // explains how to add the key.
+            set: { if $0.isAvailable { daily.setTranslation($0) } }
         )
     }
 

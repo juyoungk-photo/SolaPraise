@@ -51,6 +51,14 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
 
     var isBundled: Bool { self == .krv }
 
+    /// 개역한글 is bundled and always available. ESV is fetched from Crossway
+    /// and needs a key, so without one the option is shown but disabled —
+    /// visible, because knowing the app has an English text you have not set
+    /// up is more useful than the option quietly not existing.
+    var isAvailable: Bool {
+        isBundled || (ReadingSettings.esvAPIKey?.isEmpty == false)
+    }
+
     var bookLabel: String {
         switch self {
         case .krv: return "시편"

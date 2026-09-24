@@ -36,10 +36,9 @@ struct PsalmAudioSheet: View {
     @State private var playRequest: FeedPlayRequest?
 
     private var match: CachedVideo? {
-        let pattern = "시편\\s*\(chapter)\\s*[편장]"
-        return allVideos.first {
+        allVideos.first {
             $0.channelId == channelId
-                && $0.title.range(of: pattern, options: .regularExpression) != nil
+                && ScriptureReference.psalmChapter(in: $0.title) == chapter
         }
     }
 
@@ -167,12 +166,7 @@ struct PsalmAudioSheet: View {
         let psalms = allVideos.filter {
             $0.channelId == channelId && $0.title.contains("시편")
         }
-        var chapters = Set<Int>()
-        for video in psalms {
-            guard let range = video.title.range(of: "시편\\s*\\d{1,3}", options: .regularExpression),
-                  let number = Int(video.title[range].filter(\.isNumber)) else { continue }
-            chapters.insert(number)
-        }
+        let chapters = Set(psalms.compactMap { ScriptureReference.psalmChapter(in: $0.title) })
         downloaded = chapters.isEmpty ? "없음" : "\(chapters.count)편"
     }
 

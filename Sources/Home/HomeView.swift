@@ -69,10 +69,56 @@ struct HomeView: View {
         return result
     }
 
+    /// Reordering happens in a plain List rather than by dragging tiles
+    /// around the grid. The grid mixes full-width and half-width cards, so a
+    /// drop target is ambiguous by construction — and this same nesting has
+    /// already swallowed a Button's taps once. A List's move handles are
+    /// unambiguous and they are what iOS users reach for.
+    private var reorderList: some View {
+        List {
+            ForEach(cards) { card in
+                HStack(spacing: 10) {
+                    Image(systemName: card.kind.symbolName)
+                        .font(.footnote)
+                        .foregroundStyle(.tint)
+                        .frame(width: 22)
+                    Text(card.title).font(.subheadline)
+                    Spacer()
+                }
+            }
+            .onMove(perform: moveCards)
+            .onDelete { offsets in
+                for index in offsets { modelContext.delete(cards[index]) }
+                renumber()
+            }
+        }
+        .listStyle(.plain)
+        .environment(\.editMode, .constant(.active))
+        .frame(height: CGFloat(cards.count) * 46 + 16)
+        .scrollDisabled(true)
+    }
+
+    private func moveCards(from source: IndexSet, to destination: Int) {
+        var ordered = cards
+        ordered.move(fromOffsets: source, toOffset: destination)
+        for (position, card) in ordered.enumerated() { card.sortOrder = position }
+        try? modelContext.save()
+    }
+
+    /// Keeps sortOrder dense after a delete, so a later insert cannot land on
+    /// a duplicate index and reorder itself.
+    private func renumber() {
+        for (position, card) in cards.enumerated() { card.sortOrder = position }
+        try? modelContext.save()
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    if isEditing {
+                        reorderList
+                    } else {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(row) { card in
@@ -85,6 +131,7 @@ struct HomeView: View {
                                 Color.clear.frame(maxWidth: .infinity)
                             }
                         }
+                    }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -124,8 +171,11 @@ struct HomeView: View {
             .navigationTitle("홈")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(isEditing ? "완료" : "편집") { isEditing.toggle() }
-                        .font(.subheadline)
+                    Button(isEditing ? "완료" : "편집") {
+                        if isEditing { renumber() }
+                        isEditing.toggle()
+                    }
+                    .font(.subheadline)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showAddCard = true } label: { Image(systemName: "plus") }
@@ -291,21 +341,12 @@ struct HomeView: View {
     /// deep — the individual psalm readings sit far behind its daily
     /// 30분 신구약 uploads, so a shallow fetch never reaches them.
     private var psalmAudioVideo: CachedVideo? {
-        let n = daily.chapter
-        // 공동체성경읽기 titles psalm readings "시편 72편 (개역개정)" — 편 is the
-        // counter for psalms, even though the same channel uses 장 for other
-        // books ("마태복음 12장"). Both are accepted anyway, plus an optional
-        // space, so a title-format change does not silently break the card.
-        //
-        // The digits are bounded on the right so 시편 7편 cannot match inside
-        // 시편 72편.
-        let pattern = "시편\\s*\\(n)\\s*[편장]"
-        return allVideos.first { video in
+        allVideos.first { video in
             // The same channel the 시편 듣기 sheet is set to. Hard-coding the
             // default here meant a reading found after changing the channel
             // there never reached this card.
-            guard video.channelId == psalmChannelId else { return false }
-            return video.title.range(of: pattern, options: .regularExpression) != nil
+            video.channelId == psalmChannelId
+                && ScriptureReference.psalmChapter(in: video.title) == daily.chapter
         }
     }
 

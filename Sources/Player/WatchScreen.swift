@@ -370,6 +370,12 @@ struct WatchScreen: View {
                 }
             }
 
+            // A psalm reading video shows one static frame for twenty
+            // minutes. The text belongs under it.
+            if let psalm = current.flatMap({ ScriptureReference.psalmChapter(in: $0.title) }) {
+                ScripturePanel(chapter: psalm)
+            }
+
             if !worshipSet.isEmpty {
                 worshipSetList
             }
