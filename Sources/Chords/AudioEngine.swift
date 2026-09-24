@@ -23,6 +23,8 @@ final class AudioEngine: ObservableObject {
     /// Called on the audio thread with every buffer that arrives from the mic.
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
+    private var routeObserver: NSObjectProtocol?
+
     // Hardware buffer size in frames. 1024 @ 44.1kHz ≈ 23 ms latency.
     private let bufferSize: AVAudioFrameCount = 1024
 
@@ -114,18 +116,31 @@ final class AudioEngine: ObservableObject {
     /// prevents us from ducking the YouTube audio.
     private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
+
         // .measurement disables the input chain iOS applies by default —
         // automatic gain control, EQ and noise suppression. Those are tuned
         // for speech and actively damage music before the DSP ever sees it.
         //
+        // But it disables the OUTPUT chain too, and on the built-in speaker
+        // that processing is most of the loudness. Choosing it unconditionally
+        // made the phone quietly play a song to a microphone that could barely
+        // hear it — clean input of almost nothing. So it is used only when the
+        // input is a real line, where fidelity is the thing that matters and
+        // the speaker usually isn't in the loop at all.
+        let mode: AVAudioSession.Mode =
+            Self.currentInput().source.isHighQuality ? .measurement : .default
+
         // .allowBluetoothA2DP rather than .allowBluetooth: the latter enables
         // HFP, which drops the link to telephone bandwidth in BOTH directions.
         // Playing a worship track over a Bluetooth speaker through HFP would
         // destroy exactly the harmonic content chord detection depends on.
         try session.setCategory(.playAndRecord,
-                                mode: .measurement,
+                                mode: mode,
                                 options: [.defaultToSpeaker, .mixWithOthers, .allowBluetoothA2DP])
         try session.setActive(true, options: [])
+        // .playAndRecord otherwise routes to the receiver, which would send
+        // the song to the earpiece while the microphone listens to the room.
+        try? session.overrideOutputAudioPort(.speaker)
     }
 
     // MARK: - Start / Stop
@@ -133,6 +148,7 @@ final class AudioEngine: ObservableObject {
     func start() throws {
         guard !isRunning else { return }
         try configureSession()
+        observeRouteChanges()
 
         let input = engine.inputNode
         let nativeFormat = input.inputFormat(forBus: 0)
@@ -156,9 +172,33 @@ final class AudioEngine: ObservableObject {
 
     func stop() {
         guard isRunning else { return }
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         DispatchQueue.main.async { self.isRunning = false }
+    }
+
+    /// A tap is installed with the input's format at that moment, so plugging
+    /// in a USB interface mid-session leaves it reading a format the hardware
+    /// no longer produces. Restarting is the only reliable fix.
+    private func observeRouteChanges() {
+        guard routeObserver == nil else { return }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            self.engine.inputNode.removeTap(onBus: 0)
+            self.engine.stop()
+            DispatchQueue.main.async {
+                self.isRunning = false
+                try? self.start()
+            }
+        }
     }
 
     // MARK: - Level meter

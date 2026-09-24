@@ -124,6 +124,7 @@ struct WatchScreen: View {
         .onChange(of: player.didEnd) { _, ended in
             guard ended else { return }
             logWatch(completed: true)
+            finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { dismiss() }
         }
         .onChange(of: player.isReady) { _, ready in
@@ -138,7 +139,12 @@ struct WatchScreen: View {
             NavigationStack { LeadSheetView(song: song) }
         }
         .onAppear { loadWorshipSet() }
-        .onChange(of: index) { _, _ in loadWorshipSet() }
+        .onChange(of: index) { _, _ in
+            // Otherwise the next song's chords land in the previous song's
+            // chart, at timestamps from a different recording.
+            finishDetection(showSheet: false)
+            loadWorshipSet()
+        }
         .onDisappear {
             player.detach()
             detection.stop()
@@ -394,23 +400,9 @@ struct WatchScreen: View {
 
                 Button {
                     if detection.isRecording {
-                        detection.stop()
-                        if !detection.history.isEmpty {
-                            let session = detection.buildSession(
-                                title: current?.title ?? "Untitled",
-                                url: current.flatMap { YouTubeID.watchURL($0.id) }
-                            )
-                            let song = SavedSong(
-                                session: session,
-                                sections: SongStructure.detect(chords: session.chords),
-                                videoId: current?.id
-                            )
-                            modelContext.insert(song)
-                            try? modelContext.save()
-                            leadSheet = song
-                        }
+                        finishDetection(showSheet: true)
                     } else {
-                        detection.start()
+                        startDetection()
                     }
                 } label: {
                     Label(
@@ -632,6 +624,38 @@ struct WatchScreen: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Chord detection
+
+    /// Chords are timed against the video, and only while it is actually
+    /// playing — a paused player produces silence, and silence analysed is
+    /// just noise filed as chords.
+    private func startDetection() {
+        detection.positionProvider = { [player] in
+            guard player.state == .playing else { return nil }
+            return player.currentTime
+        }
+        detection.start()
+    }
+
+    private func finishDetection(showSheet: Bool) {
+        guard detection.isRecording else { return }
+        detection.stop()
+        guard !detection.history.isEmpty else { return }
+
+        let session = detection.buildSession(
+            title: current?.title ?? "Untitled",
+            url: current.flatMap { YouTubeID.watchURL($0.id) }
+        )
+        let song = SavedSong(
+            session: session,
+            sections: SongStructure.detect(chords: session.chords),
+            videoId: current?.id
+        )
+        modelContext.insert(song)
+        try? modelContext.save()
+        if showSheet { leadSheet = song }
     }
 
     // MARK: - Actions

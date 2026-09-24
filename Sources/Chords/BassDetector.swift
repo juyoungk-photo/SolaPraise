@@ -25,7 +25,19 @@ import AVFoundation
 final class BassDetector {
 
     // MARK: - Parameters
-    private let fftSize: Int = 8192         // Low-freq resolution matters here
+    /// 32768, not 8192.
+    ///
+    /// An 8192-point FFT gives 5.4 Hz bins at 44.1 kHz. A semitone at E1
+    /// (41 Hz) spans 2.4 Hz, so a single bin covered more than two semitones
+    /// in exactly the band this class exists to read — the detector could not
+    /// resolve pitch at all down there, and which semitone a peak landed on
+    /// depended on where the bin grid happened to fall. That is why the same
+    /// notes read as D at 44.1 kHz and A at 48 kHz.
+    ///
+    /// 32768 brings bins to 1.35 Hz, and the parabolic interpolation below
+    /// takes the estimate well inside a semitone from there. The window is
+    /// 0.68 s, which is fine: a bass note holds for a chord, not a frame.
+    private let fftSize: Int = 32768
     private let log2n: vDSP_Length
     private let fftSetup: FFTSetup
     private let sampleRate: Double
@@ -127,17 +139,37 @@ final class BassDetector {
         var bestMag: Float = 0
         var bestMidi: Int = 48    // C3 fallback
 
-        for k in minBin...maxBin {
+        // Peaks only, not every bin.
+        //
+        // Summing all bins spread one note's energy across its neighbours and
+        // therefore across pitch classes, so a strong note leaked into the
+        // semitones either side of it. A partial is a local maximum; the bins
+        // around it are the window's skirt, not other notes.
+        for k in max(minBin, 1) ... min(maxBin, fftSize / 2 - 2) {
             let m = mags[k]
-            if m <= 0 { continue }
-            let f = Double(k) * binHz
+            guard m > 0, m >= mags[k - 1], m > mags[k + 1] else { continue }
+
+            // Parabolic interpolation over the peak and its two neighbours
+            // recovers the true frequency to a fraction of a bin, which is
+            // what makes semitone resolution possible this low down.
+            let alpha = Double(mags[k - 1])
+            let beta = Double(m)
+            let gamma = Double(mags[k + 1])
+            let denominator = alpha - 2 * beta + gamma
+            let offset = denominator == 0 ? 0 : 0.5 * (alpha - gamma) / denominator
+            let f = (Double(k) + offset) * binHz
+            guard f >= minHz, f <= maxHz else { continue }
+
             // MIDI note number; 69 = A4, 440 Hz.
             let midiF = 69.0 + 12.0 * log2(f / 440.0)
             let midi = Int(midiF.rounded())
             let pc = ((midi % 12) + 12) % 12
 
-            pcEnergy[pc] += m
-            bandTotal += m
+            // Weighted toward the bottom of the band: the bass note is the
+            // lowest one, and a loud partial an octave up is not it.
+            let weight = Float(maxHz / max(f, minHz))
+            pcEnergy[pc] += m * weight
+            bandTotal += m * weight
             if m > bestMag {
                 bestMag = m
                 bestMidi = midi

@@ -56,6 +56,16 @@ final class DetectionSession: ObservableObject {
 
     // MARK: - Session state
 
+    /// Where a chord sits in the VIDEO, not in wall-clock time.
+    ///
+    /// Without this the lead sheet is only correct when detection starts at
+    /// 0:00 and the song plays straight through. Start it halfway, pause,
+    /// or seek, and every timestamp is off by the difference — which makes a
+    /// chart that cannot be followed against the recording it came from.
+    /// Returning nil means "not playing", and those frames are dropped rather
+    /// than filed as chords heard during silence.
+    var positionProvider: (() -> Double?)?
+
     private var startTime: Date?
     private var keyUpdateTimer: Timer?
     private var lastReported: Chord?
@@ -146,6 +156,7 @@ final class DetectionSession: ObservableObject {
     }
 
     private func handle(chroma pcp: [Float], bass bassResult: BassDetector.Result?) {
+        guard let position = currentPosition() else { return }
         keyEstimator.add(chroma: pcp)
 
         if let bassResult, bassResult.strength >= bassStrengthFloor {
@@ -177,14 +188,22 @@ final class DetectionSession: ObservableObject {
 
         currentChord = chord
 
-        if chord != lastReported, let start = startTime {
+        if chord != lastReported {
             lastReported = chord
             history.append(DetectedChord(
                 chord: chord,
-                timestamp: Date().timeIntervalSince(start),
+                timestamp: position,
                 confidence: Double(confidence)
             ))
         }
+    }
+
+    /// The player's position when there is one, otherwise elapsed time — so
+    /// the standalone 라이브 분석 screen, which has no video, still works.
+    private func currentPosition() -> Double? {
+        if let positionProvider { return positionProvider() }
+        guard let startTime else { return nil }
+        return Date().timeIntervalSince(startTime)
     }
 
     /// Pitch classes belonging to a chord, used to reject bass notes that are
@@ -221,7 +240,11 @@ final class DetectionSession: ObservableObject {
             youTubeURL: url,
             detectedKey: detectedKey,
             createdAt: Date(),
-            chords: history.map { SessionChord(chord: $0.chord, timestamp: $0.timestamp) }
+            // Sorted because the timestamps now come from the video: seek
+            // backwards mid-session and the raw history is out of order.
+            chords: history
+                .sorted { $0.timestamp < $1.timestamp }
+                .map { SessionChord(chord: $0.chord, timestamp: $0.timestamp) }
         )
     }
 }
