@@ -312,10 +312,10 @@ struct ChannelSection: View {
             }
             .buttonStyle(.plain)
 
-            VStack(spacing: 0) {
+            VStack(spacing: 6) {
                 ForEach(playlists.prefix(Self.previewCount)) { playlist in
                     Button { onSelectPlaylist?(playlist) } label: {
-                        ChannelPlaylistRow(playlist: playlist)
+                        PlaylistBar(playlist: playlist)
                     }
                     .buttonStyle(.plain)
                 }

@@ -124,10 +124,10 @@ struct ChannelDetailView: View {
             }
             .buttonStyle(.plain)
 
-            VStack(spacing: 0) {
+            VStack(spacing: 6) {
                 ForEach(playlists.prefix(Self.playlistPreviewCount)) { playlist in
                     Button { Task { await play(playlist) } } label: {
-                        ChannelPlaylistRow(playlist: playlist)
+                        PlaylistBar(playlist: playlist)
                     }
                     .buttonStyle(.plain)
                 }
@@ -180,10 +180,53 @@ struct ChannelDetailView: View {
     }
 }
 
+// MARK: - Playlist bar
+
+/// The preview form: one full-width line, no artwork.
+///
+/// A playlist's thumbnail is the first video's frame, which for a 말씀 channel
+/// is a title card that looks like every other title card on that channel. It
+/// took a third of the width to say nothing, and squeezed the one thing that
+/// does identify a playlist — its name — into two cramped lines. A wide bar
+/// gives the name the room instead.
+struct PlaylistBar: View {
+    let playlist: CachedPlaylist
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "list.bullet.rectangle.portrait")
+                .font(.caption)
+                .foregroundStyle(.tint)
+
+            Text(playlist.title)
+                .font(.subheadline)
+                .lineLimit(1)
+                .foregroundStyle(Color.primary)
+
+            Spacer(minLength: 8)
+
+            Text("\(playlist.itemCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Image(systemName: "play.circle.fill")
+                .font(.body)
+                .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+    }
+}
+
 // MARK: - Playlist row
 
-/// Shared by the three-row preview and the full list, so they cannot drift.
-/// Named for the channel page because 보관함 has its own row for YTPlaylist.
+/// The full-list form, where artwork earns its place: you are scanning dozens
+/// and a frame is another way to recognise one. Named for the channel page
+/// because 보관함 has its own row for YTPlaylist.
 struct ChannelPlaylistRow: View {
     let playlist: CachedPlaylist
 
