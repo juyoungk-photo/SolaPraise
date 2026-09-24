@@ -97,62 +97,14 @@ struct WordFeedView: View {
     private var feedScroll: some View {
         ScrollViewReader { proxy in
             scrollBody
-                .safeAreaInset(edge: .top) { channelBar(proxy: proxy) }
-        }
-    }
-
-    /// Sticky row of channel shortcuts. Tapping scrolls straight to that
-    /// channel's section instead of scrolling past the ones above it.
-    ///
-    /// Styling is deliberately explicit rather than `.bar` + `.quaternary`:
-    /// that combination rendered as an empty black band on device while the
-    /// same code showed chips in the simulator. The playlist chips below use
-    /// concrete colours and always render, so this matches them.
-    private func channelBar(proxy: ScrollViewProxy) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(channels) { channel in
-                    Button {
+                .safeAreaInset(edge: .top) {
+                    ChannelJumpBar(channels: channels) { channel in
                         withAnimation(.easeOut(duration: 0.25)) {
                             proxy.scrollTo(channel.youtubeChannelId, anchor: .top)
                         }
-                    } label: {
-                        HStack(spacing: 5) {
-                            if let url = channel.thumbnailURL {
-                                AsyncImage(url: url) { image in
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    Circle().fill(Color.secondary.opacity(0.3))
-                                }
-                                .frame(width: 18, height: 18)
-                                .clipShape(Circle())
-                            } else {
-                                Image(systemName: channel.isPinned ? "pin.fill" : "play.rectangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                            Text(channel.shortTitle)
-                                .lineLimit(1)
-                                .foregroundStyle(Color.primary)
-                        }
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule().fill(Color(.secondarySystemBackground))
-                        )
-                        .overlay(
-                            Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                        )
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
         }
-        .frame(height: 48)
-        .background(Color(.systemBackground))
     }
 
     private var scrollBody: some View {

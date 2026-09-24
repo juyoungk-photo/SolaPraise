@@ -179,23 +179,24 @@ final class FeedStore: ObservableObject {
     /// readings — verified on device. But the channel indexes itself by book
     /// ("19. 시편_장별 구절 영상"), so one playlist holds all 150 chapters for
     /// about 3 units. Runs once; afterwards the cache already has them.
-    func ingestPsalmPlaylist(context: ModelContext, client: YouTubeAPIClient?) async {
-        guard let client else { return }
+    func ingestPsalmPlaylist(context: ModelContext, client: YouTubeAPIClient?,
+                             channelId: String = DefaultChannels.psalmAudioChannelId) async -> Int {
+        guard let client else { return 0 }
 
-        let psalmChannel = DefaultChannels.psalmAudioChannelId
+        let psalmChannel = channelId
         let cached = (try? context.fetch(FetchDescriptor<CachedVideo>())) ?? []
         // Already have a healthy number of psalm readings? Nothing to do.
         let existingPsalms = cached.filter {
             $0.channelId == psalmChannel && $0.title.contains("시편")
         }
-        guard existingPsalms.count < 100 else { return }
+        guard existingPsalms.count < 100 else { return 0 }
 
         let playlists = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
         guard let psalmList = playlists.first(where: {
             $0.channelId == psalmChannel && $0.title.contains("시편")
-        }) else { return }
+        }) else { return 0 }
 
-        guard let items = try? await client.playlistItems(playlistId: psalmList.playlistId) else { return }
+        guard let items = try? await client.playlistItems(playlistId: psalmList.playlistId) else { return 0 }
 
         var known = Set(cached.map(\.videoId))
         for item in items {
@@ -215,6 +216,7 @@ final class FeedStore: ObservableObject {
         #if DEBUG
         print("[SolaPraise] psalm playlist '\(psalmList.title)' → \(items.count) items")
         #endif
+        return items.count
     }
 
     /// Finds one specific psalm reading by searching the channel directly.
@@ -224,10 +226,9 @@ final class FeedStore: ObservableObject {
     /// automatically, or opening the app 100 times would spend the day.
     @discardableResult
     func findPsalmVideo(chapter: Int, context: ModelContext,
-                        client: YouTubeAPIClient?) async -> CachedVideo? {
+                        client: YouTubeAPIClient?,
+                        channelId: String = DefaultChannels.psalmAudioChannelId) async -> CachedVideo? {
         guard let client else { return nil }
-
-        let channelId = DefaultChannels.psalmAudioChannelId
         guard let results = try? await client.search(
             query: "시편 \(chapter)편", channelId: channelId, maxResults: 10
         ) else { return nil }

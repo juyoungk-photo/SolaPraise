@@ -45,6 +45,7 @@ struct WorshipFeedView: View {
     @State private var showAddTopic = false
     @State private var playRequest: FeedPlayRequest?
     @State private var addTarget: PlayableVideo?
+    @State private var genre: WorshipGenre = .all
 
     private var channels: [Channel] {
         allChannels.filter { $0.purposeRaw == Purpose.worship.rawValue }
@@ -53,7 +54,8 @@ struct WorshipFeedView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Worship")
+                .navigationTitle("찬양")
+            .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }
                 .searchable(text: $searchText, prompt: "Search worship & songs")
                 .onSubmit(of: .search) { Task { await runRemoteSearch() } }
@@ -102,22 +104,25 @@ struct WorshipFeedView: View {
     // MARK: - Browse
 
     private var browseScroll: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
-                topicChips
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    genreChips
+                    topicChips
 
                 if channels.isEmpty && topics.isEmpty {
                     emptyGuidance
                 }
 
-                ForEach(channels) { channel in
-                    let videos = cappedVideos(forChannel: channel)
-                    if !videos.isEmpty {
-                        ChannelSection(channel: channel, videos: videos) { video in
-                            play(video, in: videos)
+                    ForEach(channels) { channel in
+                        let videos = cappedVideos(forChannel: channel)
+                        if !videos.isEmpty {
+                            ChannelSection(channel: channel, videos: videos) { video in
+                                play(video, in: videos)
+                            }
+                            .id(channel.youtubeChannelId)
                         }
                     }
-                }
 
                 ForEach(topics) { topic in
                     let videos = cappedVideos(forTopic: topic)
@@ -133,11 +138,44 @@ struct WorshipFeedView: View {
                         .padding(.horizontal, 16)
                 }
 
-                if !(channels.isEmpty && topics.isEmpty) {
-                    FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
+                    if !(channels.isEmpty && topics.isEmpty) {
+                        FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
+                    }
+                }
+                .padding(.top, 8)
+            }
+            .safeAreaInset(edge: .top) {
+                if !channels.isEmpty {
+                    ChannelJumpBar(channels: channels) { channel in
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo(channel.youtubeChannelId, anchor: .top)
+                        }
+                    }
                 }
             }
-            .padding(.top, 8)
+        }
+    }
+
+    /// Genre filters over the cache — free and instant, unlike a search.
+    private var genreChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(WorshipGenre.allCases) { option in
+                    Text(option.title)
+                        .font(.caption.weight(genre == option ? .semibold : .medium))
+                        .foregroundStyle(genre == option ? Color.white : Color.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule().fill(genre == option
+                                           ? Color.accentColor
+                                           : Color(.secondarySystemBackground))
+                        )
+                        .contentShape(Capsule())
+                        .onTapGesture { genre = option }
+                }
+            }
+            .padding(.horizontal, 16)
         }
     }
 
@@ -275,6 +313,7 @@ struct WorshipFeedView: View {
     private func cappedVideos(forChannel channel: Channel) -> [CachedVideo] {
         allVideos
             .filter { $0.channelId == channel.youtubeChannelId }
+            .filter { genre.matches($0.title) }
             .prefix(Self.perSectionCap)
             .map { $0 }
     }

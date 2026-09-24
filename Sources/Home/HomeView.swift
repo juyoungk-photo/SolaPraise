@@ -385,7 +385,7 @@ struct HomeView: View {
 
         let client = AppServices.client(auth: auth, quota: quota)
         // Try the free route first: the channel's own psalm playlist.
-        await feed.ingestPsalmPlaylist(context: modelContext, client: client)
+        _ = await feed.ingestPsalmPlaylist(context: modelContext, client: client)
         #if DEBUG
         let pls = (try? modelContext.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
         let mine = pls.filter { $0.channelId == DefaultChannels.psalmAudioChannelId }
@@ -416,7 +416,7 @@ struct HomeView: View {
         await feed.refresh(purpose: nil, context: modelContext, client: client)
         // Independent of the purpose-scoped refreshes, so a Worship-tab
         // refresh claiming "already refreshed today" cannot starve it.
-        await feed.ingestPsalmPlaylist(context: modelContext, client: client)
+        _ = await feed.ingestPsalmPlaylist(context: modelContext, client: client)
     }
 
     // MARK: - Defaults
