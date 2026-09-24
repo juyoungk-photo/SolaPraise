@@ -182,7 +182,7 @@ final class YouTubeAPIClient {
         try await getAllPages(
             "playlists",
             query: [
-                .init(name: "part", value: "snippet,contentDetails,status"),
+                .init(name: "part", value: "snippet,contentDetails,status,statistics"),
                 .init(name: "mine", value: "true"),
                 .init(name: "maxResults", value: "50")
             ],
@@ -220,7 +220,7 @@ final class YouTubeAPIClient {
                 query: [
                     // `status` carries `embeddable`. Extra parts do not cost
                     // extra quota — videos.list is 1 unit regardless.
-                    .init(name: "part", value: "snippet,contentDetails,status"),
+                    .init(name: "part", value: "snippet,contentDetails,status,statistics"),
                     .init(name: "id", value: chunk.joined(separator: ",")),
                     .init(name: "maxResults", value: "50")
                 ],
@@ -276,7 +276,7 @@ final class YouTubeAPIClient {
 
         while collected.count < limit {
             var query: [URLQueryItem] = [
-                .init(name: "part", value: "snippet,contentDetails,status"),
+                .init(name: "part", value: "snippet,contentDetails,status,statistics"),
                 .init(name: "channelId", value: channelId),
                 .init(name: "maxResults", value: "50")
             ]

@@ -91,7 +91,9 @@ struct HomeSearchSheet: View {
                         Button { play(video) } label: { row(
                             title: video.title,
                             channel: video.channelTitle,
-                            thumb: video.thumbnailURL
+                            thumb: video.thumbnailURL,
+                            published: video.publishedAt,
+                            duration: video.durationSeconds
                         ) }
                         .buttonStyle(.plain)
                     }
@@ -132,7 +134,9 @@ struct HomeSearchSheet: View {
                         Button { play(result) } label: { row(
                             title: result.title,
                             channel: result.snippet?.channelTitle,
-                            thumb: result.snippet?.thumbnails?.best
+                            thumb: result.snippet?.thumbnails?.best,
+                            published: result.snippet?.publishedAt,
+                            duration: nil
                         ) }
                         .buttonStyle(.plain)
                     }
@@ -142,7 +146,8 @@ struct HomeSearchSheet: View {
         .listStyle(.plain)
     }
 
-    private func row(title: String, channel: String?, thumb: URL?) -> some View {
+    private func row(title: String, channel: String?, thumb: URL?,
+                     published: Date? = nil, duration: Int? = nil) -> some View {
         HStack(spacing: 10) {
             Thumbnail(url: thumb, width: 80, height: 45)
             VStack(alignment: .leading, spacing: 2) {
@@ -150,6 +155,17 @@ struct HomeSearchSheet: View {
                 if let channel {
                     Text(channel).font(.caption2).foregroundStyle(.secondary)
                 }
+                HStack(spacing: 5) {
+                    if let published {
+                        Text(published, format: .dateTime.year().month())
+                    }
+                    if let duration {
+                        Text("·")
+                        Text(ISO8601Duration.format(duration)).monospacedDigit()
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
         }

@@ -46,6 +46,8 @@ struct WorshipFeedView: View {
     @State private var playRequest: FeedPlayRequest?
     @State private var addTarget: PlayableVideo?
     @State private var genre: WorshipGenre = .all
+    /// videoId → (duration, views), filled by one videos.list after a search.
+    @State private var resultDetail: [String: (Int?, Int?)] = [:]
 
     private var channels: [Channel] {
         allChannels.filter { $0.purposeRaw == Purpose.worship.rawValue }
@@ -57,7 +59,14 @@ struct WorshipFeedView: View {
                 .navigationTitle("찬양")
             .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }
-                .searchable(text: $searchText, prompt: "Search worship & songs")
+                // .navigationBarDrawer(.always) keeps the field pinned; the
+                // default placement lets it scroll away, so it vanished as
+                // soon as you moved down to a channel.
+                .searchable(
+                    text: $searchText,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "찬양·곡 검색"
+                )
                 .onSubmit(of: .search) { Task { await runRemoteSearch() } }
                 .onChange(of: searchText) { _, newValue in
                     if newValue.isEmpty { remoteResults = []; searchError = nil }
@@ -271,11 +280,17 @@ struct WorshipFeedView: View {
                     .padding(.horizontal, 16)
             }
             if !remoteResults.isEmpty {
-                RemoteResultSection(results: remoteResults) { result in
+                RemoteResultSection(results: remoteResults, detail: resultDetail) { result in
                     guard let id = result.videoId else { return }
+                    let info = resultDetail[id]
                     playRequest = FeedPlayRequest(
-                        queue: [PlayableVideo(id: id, title: result.title,
-                                              channelTitle: result.snippet?.channelTitle)],
+                        queue: [PlayableVideo(
+                            id: id, title: result.title,
+                            channelTitle: result.snippet?.channelTitle,
+                            durationSeconds: info?.0,
+                            publishedAt: result.snippet?.publishedAt,
+                            viewCount: info?.1
+                        )],
                         startIndex: 0
                     )
                 } onAdd: { result in
@@ -354,6 +369,14 @@ struct WorshipFeedView: View {
         let client = AppServices.client(auth: auth, quota: quota)
         do {
             remoteResults = try await client.search(query: query)
+            // One extra unit buys duration and view count for every hit —
+            // without them you cannot tell a studio cut from a live set.
+            let ids = remoteResults.compactMap(\.videoId)
+            if !ids.isEmpty, let videos = try? await client.videos(ids: ids) {
+                var map: [String: (Int?, Int?)] = [:]
+                for v in videos { map[v.id] = (v.durationSeconds, v.viewCount) }
+                resultDetail = map
+            }
         } catch {
             searchError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -451,6 +474,7 @@ private struct ResultSection: View {
 
 private struct RemoteResultSection: View {
     let results: [YTSearchResult]
+    let detail: [String: (Int?, Int?)]
     let onSelect: (YTSearchResult) -> Void
     let onAdd: (YTSearchResult) -> Void
 
@@ -470,6 +494,25 @@ private struct RemoteResultSection: View {
                                 if let channel = result.snippet?.channelTitle {
                                     Text(channel).font(.caption2).foregroundStyle(.secondary)
                                 }
+                                // Publish date, length and views — the three
+                                // things that separate one upload of a song
+                                // from another.
+                                HStack(spacing: 5) {
+                                    if let published = result.snippet?.publishedAt {
+                                        Text(published, format: .dateTime.year().month())
+                                    }
+                                    let info = result.videoId.flatMap { detail[$0] }
+                                    if let secs = info?.0 {
+                                        Text("·")
+                                        Text(ISO8601Duration.format(secs)).monospacedDigit()
+                                    }
+                                    if let views = info?.1 {
+                                        Text("·")
+                                        Text(WatchScreen.compactCount(views)).monospacedDigit()
+                                    }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
                             }
                             Spacer(minLength: 0)
                         }

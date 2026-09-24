@@ -18,12 +18,20 @@ struct PlayableVideo: Identifiable, Hashable {
     let title: String
     let channelTitle: String?
     let durationSeconds: Int?
+    /// Carried so the player can show which upload this is — comparing
+    /// versions of the same worship song is routine, and title plus channel
+    /// alone does not distinguish a studio cut from a live set.
+    let publishedAt: Date?
+    let viewCount: Int?
 
-    init(id: String, title: String, channelTitle: String? = nil, durationSeconds: Int? = nil) {
+    init(id: String, title: String, channelTitle: String? = nil,
+         durationSeconds: Int? = nil, publishedAt: Date? = nil, viewCount: Int? = nil) {
         self.id = id
         self.title = title
         self.channelTitle = channelTitle
         self.durationSeconds = durationSeconds
+        self.publishedAt = publishedAt
+        self.viewCount = viewCount
     }
 }
 
@@ -259,16 +267,25 @@ struct WatchScreen: View {
                         .font(.headline)
                         .lineLimit(3)
 
-                    HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 3) {
                         if let channel = current.channelTitle {
-                            Text(channel)
+                            Text(channel).font(.subheadline)
                         }
-                        if let secs = current.durationSeconds {
-                            Text("·")
-                            Text(ISO8601Duration.format(secs)).monospacedDigit()
+                        HStack(spacing: 6) {
+                            if let published = current.publishedAt {
+                                Text(published, format: .dateTime.year().month().day())
+                            }
+                            if let secs = current.durationSeconds {
+                                Text("·")
+                                Text(ISO8601Duration.format(secs)).monospacedDigit()
+                            }
+                            if let views = current.viewCount {
+                                Text("·")
+                                Text("조회 \(Self.compactCount(views))").monospacedDigit()
+                            }
                         }
+                        .font(.caption)
                     }
-                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -337,6 +354,16 @@ struct WatchScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 14)
+    }
+
+    /// 12,300 → "1.2만", 4,500,000 → "450만"
+    static func compactCount(_ n: Int) -> String {
+        switch n {
+        case 100_000_000...: return String(format: "%.1f억", Double(n) / 100_000_000)
+        case 10_000...:      return String(format: "%.0f만", Double(n) / 10_000)
+        case 1_000...:       return String(format: "%.1f천", Double(n) / 1_000)
+        default:             return "\(n)"
+        }
     }
 
     // MARK: - Published worship set

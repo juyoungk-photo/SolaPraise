@@ -140,6 +140,9 @@ struct YTVideo: Decodable, Identifiable {
     let snippet: Snippet?
     let contentDetails: ContentDetails?
     let status: Status?
+    let statistics: Statistics?
+
+    struct Statistics: Decodable { let viewCount: String? }
 
     /// `embeddable` is the rights holder's switch. A great many worship and
     /// CCM uploads have it off, and when it is off the IFrame player cannot
@@ -165,6 +168,7 @@ struct YTVideo: Decodable, Identifiable {
     /// Defaults to true when absent, so a missing field never hides a video
     /// that would actually have played.
     var isEmbeddable: Bool { status?.embeddable ?? true }
+    var viewCount: Int? { statistics?.viewCount.flatMap(Int.init) }
 }
 
 // MARK: - Channel
