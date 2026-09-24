@@ -25,6 +25,12 @@ struct PlaylistDetailView: View {
     @State private var editError: String?
     @State private var playRequest: FeedPlayRequest?
 
+    /// What was just removed, and where it sat, so undo can put it back there.
+    private struct Removal { let item: YTPlaylistItem; let position: Int }
+    @State private var removed: Removal?
+    @State private var isUndoing = false
+    @State private var undoTask: Task<Void, Never>?
+
     var body: some View {
         Group {
             if isLoading && items.isEmpty {
@@ -82,12 +88,53 @@ struct PlaylistDetailView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(item.isUnavailable)
+                    // Swipe for the one thing you reach for; long press for
+                    // the rest, the way YouTube's ⋮ menu works.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            Task { await remove(item, at: index) }
+                        } label: {
+                            Label("삭제", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        if !item.isUnavailable {
+                            Button {
+                                play(from: item)
+                            } label: { Label("재생", systemImage: "play.fill") }
+                        }
+                        if index > 0 {
+                            Button {
+                                Task { await move(from: IndexSet(integer: index), to: 0) }
+                            } label: { Label("맨 위로", systemImage: "arrow.up.to.line") }
+                        }
+                        if index < items.count - 1 {
+                            Button {
+                                Task {
+                                    await move(from: IndexSet(integer: index),
+                                               to: items.count)
+                                }
+                            } label: { Label("맨 아래로", systemImage: "arrow.down.to.line") }
+                        }
+                        if let videoId = item.videoId,
+                           let url = YouTubeID.watchURL(videoId) {
+                            ShareLink(item: url) {
+                                Label("공유", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                        Divider()
+                        Button(role: .destructive) {
+                            Task { await remove(item, at: index) }
+                        } label: { Label("재생목록에서 삭제", systemImage: "trash") }
+                    }
                 }
                 .onMove { offsets, destination in
                     Task { await move(from: offsets, to: destination) }
                 }
                 .onDelete { offsets in
-                    Task { await remove(at: offsets) }
+                    guard let index = offsets.first else { return }
+                    let item = items[index]
+                    Task { await remove(item, at: index) }
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -95,12 +142,42 @@ struct PlaylistDetailView: View {
                     if let editError {
                         Text(editError).foregroundStyle(.red)
                     } else {
-                        Text("Each reorder or removal costs 50 units. \(quota.unitsRemaining.formatted()) left today.")
+                        Text("각 순서 변경과 삭제는 50 units입니다. 오늘 \(quota.unitsRemaining.formatted()) 남음.")
                     }
                 }
             }
         }
         .listStyle(.plain)
+        .safeAreaInset(edge: .bottom) { undoBar }
+    }
+
+    /// A removal writes to the real YouTube account, so it gets a way back.
+    ///
+    /// Restoring appends by default, which is not undoing anything — the
+    /// original position is sent with the insert, so the song returns where it
+    /// was, for the same single write.
+    @ViewBuilder
+    private var undoBar: some View {
+        if let removed {
+            HStack(spacing: 10) {
+                Image(systemName: "trash")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("삭제됨 · \(removed.item.title)")
+                    .font(.footnote)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button("되돌리기") { Task { await undoRemoval() } }
+                    .font(.footnote.weight(.semibold))
+                    .disabled(isUndoing)
+                if isUndoing { ProgressView().controlSize(.mini) }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground))
+            .overlay(alignment: .top) { Divider() }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 
     // MARK: - Playback
@@ -156,20 +233,44 @@ struct PlaylistDetailView: View {
         }
     }
 
-    private func remove(at offsets: IndexSet) async {
-        let doomed = offsets.map { items[$0] }
-        items.remove(atOffsets: offsets)
+    private func remove(_ item: YTPlaylistItem, at index: Int) async {
+        guard let position = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items.remove(at: position)
         editError = nil
+        undoTask?.cancel()
 
         let client = AppServices.client(auth: auth, quota: quota)
-        for item in doomed {
-            do {
-                try await client.removePlaylistItem(itemId: item.id)
-            } catch {
-                editError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                await load()
-                return
-            }
+        do {
+            try await client.removePlaylistItem(itemId: item.id)
+        } catch {
+            editError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            await load()   // server is the truth
+            return
+        }
+
+        withAnimation { removed = Removal(item: item, position: position) }
+        // Long enough to notice and act on, short enough not to become part
+        // of the furniture.
+        undoTask = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            withAnimation { removed = nil }
+        }
+    }
+
+    private func undoRemoval() async {
+        guard let removal = removed, let videoId = removal.item.videoId else { return }
+        isUndoing = true
+        defer { isUndoing = false }
+        undoTask?.cancel()
+
+        let client = AppServices.client(auth: auth, quota: quota)
+        do {
+            _ = try await client.addVideo(videoId, to: playlist.id, at: removal.position)
+            withAnimation { removed = nil }
+            await load()
+        } catch {
+            editError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

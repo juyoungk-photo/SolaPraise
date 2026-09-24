@@ -119,6 +119,20 @@ struct PlaylistLibraryView: View {
                             .foregroundStyle(.secondary)
                         }
                     }
+                    // Purely local, so no undo bar: a detection run is cheap
+                    // to repeat and nothing leaves the device.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            delete(song)
+                        } label: {
+                            Label("삭제", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            delete(song)
+                        } label: { Label("악보 삭제", systemImage: "trash") }
+                    }
                 }
             } header: {
                 Text("악보")
@@ -165,6 +179,11 @@ struct PlaylistLibraryView: View {
         .padding(.vertical, 9)
         .background(Capsule().fill(Color(.secondarySystemBackground)))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+    }
+
+    private func delete(_ song: SavedSong) {
+        modelContext.delete(song)
+        try? modelContext.save()
     }
 
     /// Analyses a user-owned audio file and stores the result as a lead sheet.

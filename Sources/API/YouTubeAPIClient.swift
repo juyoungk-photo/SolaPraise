@@ -391,17 +391,34 @@ final class YouTubeAPIClient {
         )
     }
 
-    func addVideo(_ videoId: String, to playlistId: String) async throws -> YTPlaylistItem {
+    /// Adds a video, optionally at a specific position.
+    ///
+    /// `position` is what makes undo worth offering: putting a removed song
+    /// back at the end is not undoing the removal, and restoring it in place
+    /// costs the same single write as appending it.
+    func addVideo(
+        _ videoId: String,
+        to playlistId: String,
+        at position: Int? = nil
+    ) async throws -> YTPlaylistItem {
         struct Body: Encodable {
             struct Resource: Encodable { let kind = "youtube#video"; let videoId: String }
-            struct Snippet: Encodable { let playlistId: String; let resourceId: Resource }
+            struct Snippet: Encodable {
+                let playlistId: String
+                let resourceId: Resource
+                let position: Int?
+            }
             let snippet: Snippet
         }
         return try await send(
             "playlistItems",
             method: "POST",
             query: [.init(name: "part", value: "snippet,contentDetails")],
-            body: Body(snippet: .init(playlistId: playlistId, resourceId: .init(videoId: videoId))),
+            body: Body(snippet: .init(
+                playlistId: playlistId,
+                resourceId: .init(videoId: videoId),
+                position: position
+            )),
             cost: .write
         )
     }
