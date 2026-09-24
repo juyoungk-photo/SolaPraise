@@ -44,40 +44,6 @@ struct ChannelDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                if !playlists.isEmpty {
-                    Text("재생목록")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 16)
-
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(playlists) { playlist in
-                                Button {
-                                    Task { await play(playlist) }
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(playlist.title)
-                                            .font(.caption.weight(.medium))
-                                            .lineLimit(2)
-                                            .foregroundStyle(Color.primary)
-                                        Text("^[\(playlist.itemCount) video](inflect: true)")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .frame(width: 150, alignment: .leading)
-                                    .padding(10)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .fill(Color(.secondarySystemBackground))
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                }
-
                 if videos.isEmpty {
                     ContentUnavailableView(
                         "영상이 아직 없습니다",
@@ -98,6 +64,8 @@ struct ChannelDetailView: View {
                     }
                     .padding(.horizontal, 16)
                 }
+
+                if !playlists.isEmpty { playlistSection }
 
                 if isLoadingPlaylist {
                     HStack(spacing: 8) {
@@ -124,6 +92,52 @@ struct ChannelDetailView: View {
         .task { if videos.isEmpty { await refresh() } }
     }
 
+    // MARK: - Playlists
+
+    /// Three rows and a way through to the rest.
+    ///
+    /// These were a horizontal strip, which does not survive a channel with
+    /// eighty playlists: you cannot see how many there are, you cannot skim
+    /// them, and reaching the far end is a long sideways drag. Rows read at a
+    /// glance and the full list scrolls the way lists do.
+    private var playlistSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink {
+                ChannelPlaylistsView(channel: channel, playlists: playlists) { playlist in
+                    Task { await play(playlist) }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("재생목록")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(playlists.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if playlists.count > Self.playlistPreviewCount {
+                        Text("전체 보기").font(.caption)
+                    }
+                    Image(systemName: "chevron.right").font(.caption2)
+                }
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 16)
+            }
+            .buttonStyle(.plain)
+
+            VStack(spacing: 0) {
+                ForEach(playlists.prefix(Self.playlistPreviewCount)) { playlist in
+                    Button { Task { await play(playlist) } } label: {
+                        ChannelPlaylistRow(playlist: playlist)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private static let playlistPreviewCount = 3
+
     // MARK: - Actions
 
     private func play(_ video: CachedVideo) {
@@ -147,7 +161,7 @@ struct ChannelDetailView: View {
         do {
             let items = try await client.playlistItems(playlistId: playlist.playlistId)
             let queue = items.compactMap { item -> PlayableVideo? in
-                guard !item.isUnavailable, let id = item.videoId else { return nil }
+                guard !item.isUnavailable else { return nil }
                 return PlayableVideo(item: item)
             }
             guard !queue.isEmpty else {
@@ -163,5 +177,77 @@ struct ChannelDetailView: View {
     private func refresh() async {
         let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: channel.purpose, context: modelContext, client: client)
+    }
+}
+
+// MARK: - Playlist row
+
+/// Shared by the three-row preview and the full list, so they cannot drift.
+/// Named for the channel page because 보관함 has its own row for YTPlaylist.
+struct ChannelPlaylistRow: View {
+    let playlist: CachedPlaylist
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Thumbnail(url: playlist.thumbnailURL, width: 72, height: 41)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(playlist.title)
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(Color.primary)
+                Text("^[\(playlist.itemCount) video](inflect: true)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "play.circle")
+                .foregroundStyle(.tint)
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - All playlists
+
+/// Every playlist on one channel. A list, not a sideways strip: some church
+/// channels run to dozens, and the only way to find one among them is to
+/// scroll the way lists scroll and to search.
+struct ChannelPlaylistsView: View {
+    let channel: Channel
+    let playlists: [CachedPlaylist]
+    let onSelect: (CachedPlaylist) -> Void
+
+    @State private var searchText = ""
+
+    private var shown: [CachedPlaylist] {
+        let needle = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return playlists }
+        return playlists.filter { $0.title.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(shown) { playlist in
+                    Button { onSelect(playlist) } label: { ChannelPlaylistRow(playlist: playlist) }
+                        .buttonStyle(.plain)
+                }
+            } footer: {
+                if shown.isEmpty {
+                    Text("검색과 일치하는 재생목록이 없습니다.")
+                } else {
+                    Text("^[\(shown.count) playlist](inflect: true)")
+                }
+            }
+        }
+        .listStyle(.plain)
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "재생목록 검색"
+        )
+        .navigationTitle(channel.shortTitle)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

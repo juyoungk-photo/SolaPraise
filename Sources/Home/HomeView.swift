@@ -448,7 +448,7 @@ struct HomeView: View {
         do {
             let items = try await client.playlistItems(playlistId: playlistId)
             let queue = items.compactMap { item -> PlayableVideo? in
-                guard !item.isUnavailable, let id = item.videoId else { return nil }
+                guard !item.isUnavailable else { return nil }
                 return PlayableVideo(item: item)
             }
             guard !queue.isEmpty else {

@@ -206,7 +206,7 @@ struct WordFeedView: View {
         do {
             let items = try await client.playlistItems(playlistId: playlist.playlistId)
             let queue = items.compactMap { item -> PlayableVideo? in
-                guard !item.isUnavailable, let id = item.videoId else { return nil }
+                guard !item.isUnavailable else { return nil }
                 return PlayableVideo(item: item)
             }
             guard !queue.isEmpty else {
@@ -268,24 +268,6 @@ struct ChannelSection: View {
             }
             .padding(.horizontal, 16)
 
-            // Channels like 공동체성경읽기 organise by playlist, so the videos
-            // alone are only half the channel.
-            if !playlists.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(playlists) { playlist in
-                            Button {
-                                onSelectPlaylist?(playlist)
-                            } label: {
-                                PlaylistChip(playlist: playlist)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(videos) { video in
                     Button { onSelect(video) } label: { VideoCard(video: video) }
@@ -293,37 +275,57 @@ struct ChannelSection: View {
                 }
             }
             .padding(.horizontal, 16)
+
+            // Channels like 공동체성경읽기 organise by playlist, so the videos
+            // alone are only half the channel. After the grid, not before:
+            // the newest episode is what the 말씀 tab is for, and a strip of
+            // playlists above it pushed that below the fold.
+            if !playlists.isEmpty { playlistBlock }
         }
     }
-}
 
-private struct PlaylistChip: View {
-    let playlist: CachedPlaylist
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6).fill(.quaternary)
-                Image(systemName: "list.bullet.rectangle.portrait")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    /// Three rows, then a way through to the rest.
+    ///
+    /// A horizontal strip does not survive a channel with eighty playlists —
+    /// you cannot tell how many there are, you cannot skim them, and reaching
+    /// the far end is a long sideways drag.
+    private var playlistBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink {
+                ChannelPlaylistsView(channel: channel, playlists: playlists) { playlist in
+                    onSelectPlaylist?(playlist)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("재생목록")
+                        .font(.footnote.weight(.semibold))
+                    Text("\(playlists.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if playlists.count > Self.previewCount {
+                        Text("전체 보기").font(.caption2)
+                    }
+                    Image(systemName: "chevron.right").font(.caption2)
+                }
+                .foregroundStyle(Color.primary)
             }
-            .frame(width: 34, height: 26)
+            .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(playlist.title)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                Text("^[\(playlist.itemCount) video](inflect: true)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                ForEach(playlists.prefix(Self.previewCount)) { playlist in
+                    Button { onSelectPlaylist?(playlist) } label: {
+                        ChannelPlaylistRow(playlist: playlist)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .frame(maxWidth: 200, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
     }
+
+    private static let previewCount = 3
 }
 
 // MARK: - Play request
