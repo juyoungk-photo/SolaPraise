@@ -35,6 +35,16 @@ final class AudioEngine: ObservableObject {
     /// with no error to explain why.
     @Published private(set) var channelCount: Int = 1
 
+    /// The live route, republished whenever it changes.
+    ///
+    /// DetectionSession used to read this once at the start of a run, so
+    /// plugging an interface in mid-session left the panel still claiming the
+    /// built-in microphone — the screen said one thing while the DSP read
+    /// another.
+    @Published private(set) var inputSource: InputSource = .unknown("—")
+    @Published private(set) var inputSampleRate: Double = 0
+    @Published private(set) var outputName: String = "—"
+
     /// Which channel the DSP reads. -1 means "pick the loudest".
     @Published var selectedChannel: Int = AudioEngine.storedChannel {
         didSet {
@@ -94,11 +104,33 @@ final class AudioEngine: ObservableObject {
         case wiredMic(String)
         case builtInMic
         case bluetooth(String)   // HFP: telephone bandwidth, unusable for music
-        case unknown
+        case unknown(String)
 
         var isHighQuality: Bool {
             if case .lineIn = self { return true }
             return false
+        }
+
+        /// Short, unambiguous: the thing to read at a glance when you need to
+        /// know whether it is listening to the room or to the desk.
+        var kindLabel: String {
+            switch self {
+            case .lineIn:     return "라인 입력"
+            case .wiredMic:   return "외장 마이크"
+            case .builtInMic: return "내장 마이크"
+            case .bluetooth:  return "블루투스"
+            case .unknown:    return "알 수 없음"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .lineIn:     return "cable.connector"
+            case .wiredMic:   return "mic"
+            case .builtInMic: return "mic.fill"
+            case .bluetooth:  return "wave.3.right"
+            case .unknown:    return "questionmark.circle"
+            }
         }
 
         var label: String {
@@ -107,7 +139,7 @@ final class AudioEngine: ObservableObject {
             case .wiredMic(let name):  return name
             case .builtInMic:          return "내장 마이크"
             case .bluetooth(let name): return "\(name) (블루투스)"
-            case .unknown:             return "알 수 없음"
+            case .unknown(let name):   return name
             }
         }
 
@@ -119,8 +151,29 @@ final class AudioEngine: ObservableObject {
                 return "내장 마이크로 듣는 중입니다. 폰 스피커 소리를 폰 마이크로 듣는 방식은 저음이 거의 잡히지 않아 코드가 부정확합니다. 오디오 인터페이스로 라인 입력을 연결하면 크게 좋아집니다."
             case .bluetooth:
                 return "블루투스 마이크는 전화 통화용 대역폭이라 음악 분석에 적합하지 않습니다."
-            case .unknown:  return nil
+            case .unknown:
+                return "이 입력의 종류를 알 수 없습니다. 레벨 표시로 신호가 들어오는지 확인하세요."
             }
+        }
+    }
+
+    /// Where sound is going, as opposed to where it is coming from.
+    ///
+    /// Input and output are independent over one USB cable, and conflating
+    /// them is the easiest mistake to make: the iPad can be playing through an
+    /// interface while listening to its own microphone. Naming both ends is
+    /// the only way that is visible.
+    static func currentOutputName() -> String {
+        let session = AVAudioSession.sharedInstance()
+        guard let port = session.currentRoute.outputs.first else { return "출력 없음" }
+        switch port.portType {
+        case .builtInSpeaker:  return "iPad 스피커"
+        case .builtInReceiver: return "수화부"
+        case .headphones:      return "유선 이어폰"
+        case .usbAudio:        return port.portName
+        case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+            return "\(port.portName) (블루투스)"
+        default:               return port.portName
         }
     }
 
@@ -129,7 +182,7 @@ final class AudioEngine: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         let rate = session.sampleRate
         guard let port = session.currentRoute.inputs.first else {
-            return (.unknown, rate)
+            return (.unknown("입력 없음"), rate)
         }
         let name = port.portName
         switch port.portType {
@@ -141,8 +194,14 @@ final class AudioEngine: ObservableObject {
             return (.builtInMic, rate)
         case .bluetoothHFP:
             return (.bluetooth(name), rate)
-        default:
+        case .lineIn:
             return (.lineIn(name), rate)
+        default:
+            // NOT .lineIn. The default case used to claim line quality for
+            // every unrecognised port, so anything the switch did not know
+            // about was reported as the best possible input — the one
+            // direction a wrong guess must never go.
+            return (.unknown(name), rate)
         }
     }
 
@@ -246,7 +305,12 @@ final class AudioEngine: ObservableObject {
         input.removeTap(onBus: 0)
 
         let channels = Int(nativeFormat.channelCount)
+        let route = Self.currentInput()
         DispatchQueue.main.async {
+            self.inputSource = route.source
+            self.outputName = Self.currentOutputName()
+            self.inputSampleRate = nativeFormat.sampleRate > 0
+                ? nativeFormat.sampleRate : route.sampleRate
             self.channelCount = channels
             self.channelLevelsDB = Array(repeating: -80, count: max(channels, 1))
         }

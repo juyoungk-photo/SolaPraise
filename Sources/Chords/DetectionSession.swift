@@ -55,8 +55,6 @@ final class DetectionSession: ObservableObject {
     /// says so and stays cancellable instead of appearing to hang.
     @Published var isStarting = false
     @Published var permissionDenied = false
-    @Published var inputSource: AudioEngine.InputSource = .unknown
-    @Published var inputSampleRate: Double = 0
 
     // MARK: - Session state
 
@@ -216,9 +214,6 @@ final class DetectionSession: ObservableObject {
     private func begin() {
         // Force a rebuild on the next buffer so a route change is picked up.
         configuredSampleRate = 0
-        let input = AudioEngine.currentInput()
-        inputSource = input.source
-        inputSampleRate = input.sampleRate
         detector.reset()
         hmm.reset()
         keyEstimator.reset()

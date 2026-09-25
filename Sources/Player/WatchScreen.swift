@@ -773,27 +773,7 @@ struct WatchScreen: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
             } else {
-                HStack(spacing: 6) {
-                    Image(systemName: detection.inputSource.isHighQuality
-                          ? "cable.connector" : "mic.fill")
-                        .font(.caption2)
-                    Text(detection.inputSource.label)
-                        .font(.caption2)
-                    if detection.inputSampleRate > 0 {
-                        Text("· \(Int(detection.inputSampleRate / 1000))kHz")
-                            .font(.caption2.monospacedDigit())
-                    }
-                }
-                .foregroundStyle(detection.inputSource.isHighQuality ? Color.green : Color.orange)
-
-                if let warning = detection.inputSource.warning {
-                    Text(warning)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                InputChannelPicker(audio: detection.audio)
+                InputSourceBanner(audio: detection.audio, compact: true)
 
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(detection.currentChord?.symbol()

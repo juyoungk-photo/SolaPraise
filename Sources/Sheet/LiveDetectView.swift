@@ -67,28 +67,8 @@ struct LiveDetectView: View {
     // MARK: - Pieces
 
     private var inputBanner: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: detection.inputSource.isHighQuality ? "cable.connector" : "mic.fill")
-                Text(detection.inputSource.label)
-                if detection.inputSampleRate > 0 {
-                    Text("· \(Int(detection.inputSampleRate / 1000))kHz").monospacedDigit()
-                }
-            }
-            .font(.footnote.weight(.medium))
-            .foregroundStyle(detection.inputSource.isHighQuality ? Color.green : Color.orange)
-
-            if let warning = detection.inputSource.warning {
-                Text(warning)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            InputChannelPicker(audio: detection.audio)
-        }
-        .padding(.horizontal)
+        InputSourceBanner(audio: detection.audio)
+            .padding(.horizontal)
     }
 
     private var recentChords: some View {
