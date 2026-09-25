@@ -71,23 +71,39 @@ struct PlaylistDetailView: View {
         }
         .refreshable { await load() }
         .task { if items.isEmpty { await load() } }
+        .alert("수정하지 못했습니다", isPresented: Binding(
+            get: { editError != nil },
+            set: { if !$0 { editError = nil } }
+        )) {
+            Button("확인", role: .cancel) { editError = nil }
+        } message: {
+            // A footer under a long list is below the fold, so a rejected
+            // edit looked exactly like an edit that did nothing.
+            Text(editError ?? "")
+        }
     }
 
     private var list: some View {
         List {
             Section {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Button {
+                // Plain content with a tap gesture, not a Button.
+                //
+                // A Button fills the row and swallows the drag and the swipe
+                // before List ever sees them, so reorder and delete silently
+                // did nothing. The same nesting problem already cost the home
+                // screen its card taps.
+                ForEach(items) { item in
+                    let index = items.firstIndex(of: item) ?? 0
+                    PlaylistItemRow(
+                        index: index + 1,
+                        item: item,
+                        durationSeconds: item.videoId.flatMap { durations[$0] }
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard !item.isUnavailable else { return }
                         play(from: item)
-                    } label: {
-                        PlaylistItemRow(
-                            index: index + 1,
-                            item: item,
-                            durationSeconds: item.videoId.flatMap { durations[$0] }
-                        )
                     }
-                    .buttonStyle(.plain)
-                    .disabled(item.isUnavailable)
                     // Swipe for the one thing you reach for; long press for
                     // the rest, the way YouTube's ⋮ menu works.
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -132,18 +148,15 @@ struct PlaylistDetailView: View {
                     Task { await move(from: offsets, to: destination) }
                 }
                 .onDelete { offsets in
-                    guard let index = offsets.first else { return }
+                    guard let index = offsets.first, items.indices.contains(index)
+                    else { return }
                     let item = items[index]
                     Task { await remove(item, at: index) }
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("^[\(items.count) video](inflect: true) · \(playlist.privacy.label)")
-                    if let editError {
-                        Text(editError).foregroundStyle(.red)
-                    } else {
-                        Text("각 순서 변경과 삭제는 50 units입니다. 오늘 \(quota.unitsRemaining.formatted()) 남음.")
-                    }
+                    Text("순서 변경은 「편집」을 누른 뒤 끌어서, 삭제는 왼쪽으로 밀어서 합니다. 각각 50 units이며 오늘 \(quota.unitsRemaining.formatted()) 남았습니다.")
                 }
             }
         }

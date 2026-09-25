@@ -20,21 +20,49 @@
 
 import Foundation
 import Network
+import UIKit
 
 final class LocalPlayerServer {
 
     static let shared = LocalPlayerServer()
 
     private var listener: NWListener?
-    private(set) var port: UInt16?
     private let queue = DispatchQueue(label: "solapraise.playerserver")
+    private let lock = NSLock()
 
-    private init() {}
+    /// Port and readiness move together, under the lock: the port is assigned
+    /// on the listener's queue and read from the main thread.
+    private var _port: UInt16?
+    private var _isReady = false
+
+    var port: UInt16? { lock.withLock { _isReady ? _port : nil } }
+
+    private init() {
+        // iOS reclaims network resources while the app is suspended, so an
+        // overnight background leaves a listener that is gone while the port
+        // it was assigned is still cached. Re-arm on the way back in, off the
+        // main thread, so the first tap does not pay for it.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.global(qos: .utility).async { self?.restartIfDead() }
+        }
+    }
 
     /// Starts on an OS-assigned free port. Safe to call repeatedly.
     @discardableResult
     func start() -> UInt16? {
-        if let port { return port }
+        // The old version returned the cached port whenever it had one, with
+        // no check that the listener still existed. After a suspension that
+        // handed the player a dead port: the page never loaded and the screen
+        // stayed black until the app was killed and relaunched, which is
+        // exactly what "works again after restarting" was.
+        if let live = liveListenerPort() { return live }
+
+        teardown()
+
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
@@ -46,8 +74,21 @@ final class LocalPlayerServer {
                 self?.handle(connection)
             }
             listener.stateUpdateHandler = { [weak self] state in
-                if case .ready = state {
-                    self?.port = listener.port?.rawValue
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.lock.withLock {
+                        self._port = listener.port?.rawValue
+                        self._isReady = true
+                    }
+                case .failed, .cancelled:
+                    // Without this the port outlived the listener serving it.
+                    self.lock.withLock {
+                        self._port = nil
+                        self._isReady = false
+                    }
+                default:
+                    break
                 }
             }
             listener.start(queue: queue)
@@ -64,11 +105,27 @@ final class LocalPlayerServer {
         }
     }
 
-    func stop() {
+    /// The cached port, but only while the listener that owns it is ready.
+    private func liveListenerPort() -> UInt16? {
+        guard let listener, case .ready = listener.state else { return nil }
+        return port
+    }
+
+    private func restartIfDead() {
+        guard liveListenerPort() == nil else { return }
+        _ = start()
+    }
+
+    private func teardown() {
         listener?.cancel()
         listener = nil
-        port = nil
+        lock.withLock {
+            _port = nil
+            _isReady = false
+        }
     }
+
+    func stop() { teardown() }
 
     // MARK: - Connection handling
 

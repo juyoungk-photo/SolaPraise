@@ -47,19 +47,11 @@ struct FocusPlayerView: UIViewRepresentable {
         // render "This video is unavailable" for a raw-IP origin, while the
         // identical page served as localhost plays. Verified side by side on
         // the same server with only the hostname changed.
-        if let port = LocalPlayerServer.shared.start(),
-           let url = URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(autoplay ? 1 : 0)") {
-            web.load(URLRequest(url: url))
-        } else {
-            // Last resort if the loopback listener could not start.
-            web.loadSimulatedRequest(
-                URLRequest(url: URL(string: "https://www.youtube.com/embed")!),
-                responseHTML: Self.html(videoId: videoId, autoplay: autoplay)
-            )
-        }
+        context.coordinator.fallbackHTML = { Self.html(videoId: videoId, autoplay: autoplay) }
+        context.coordinator.load(videoId: videoId, autoplay: autoplay, into: web)
 
+        web.navigationDelegate = context.coordinator
         coordinator.webView = web
-        context.coordinator.loadedVideoId = videoId
         return web
     }
 
@@ -73,6 +65,11 @@ struct FocusPlayerView: UIViewRepresentable {
 
     func makeCoordinator() -> Box { Box() }
 
+    /// The URL that serves one video from the loopback server.
+    static func playerURL(port: UInt16, videoId: String, autoplay: Bool) -> URL? {
+        URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(autoplay ? 1 : 0)")
+    }
+
     static func dismantleUIView(_ web: WKWebView, coordinator: Box) {
         // The userContentController holds the handler strongly; without this
         // the PlayerCoordinator leaks for the life of the process.
@@ -81,8 +78,56 @@ struct FocusPlayerView: UIViewRepresentable {
         web.stopLoading()
     }
 
-    /// Tracks which video the live player currently holds.
-    final class Box { var loadedVideoId: String? }
+    /// Tracks which video the live player currently holds, and catches a
+    /// failed load of the loopback page.
+    final class Box: NSObject, WKNavigationDelegate {
+        var loadedVideoId: String?
+        var autoplay = true
+        var fallbackHTML: (() -> String)?
+        private var hasRetried = false
+
+        func load(videoId: String, autoplay: Bool, into web: WKWebView) {
+            loadedVideoId = videoId
+            self.autoplay = autoplay
+            hasRetried = false
+            serve(videoId: videoId, into: web)
+        }
+
+        private func serve(videoId: String, into web: WKWebView) {
+            if let port = LocalPlayerServer.shared.start(),
+               let url = FocusPlayerView.playerURL(port: port, videoId: videoId, autoplay: autoplay) {
+                web.load(URLRequest(url: url))
+            } else {
+                loadFallback(into: web)
+            }
+        }
+
+        private func loadFallback(into web: WKWebView) {
+            guard let html = fallbackHTML?() else { return }
+            // Last resort if the loopback listener could not start. Without a
+            // Referer YouTube rejects many embeds, so this plays less than the
+            // server path does — but a degraded player beats a black screen.
+            web.loadSimulatedRequest(
+                URLRequest(url: URL(string: "https://www.youtube.com/embed")!),
+                responseHTML: html
+            )
+        }
+
+        /// A refused connection to the loopback port produces no error page —
+        /// just a black view, which is what a stale port looked like. Rebuild
+        /// the server once and try again before falling back.
+        func webView(_ web: WKWebView,
+                     didFailProvisionalNavigation navigation: WKNavigation!,
+                     withError error: Error) {
+            guard let videoId = loadedVideoId, !hasRetried else {
+                loadFallback(into: web)
+                return
+            }
+            hasRetried = true
+            LocalPlayerServer.shared.stop()
+            serve(videoId: videoId, into: web)
+        }
+    }
 
     // MARK: - Player document
 
