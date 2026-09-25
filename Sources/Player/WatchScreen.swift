@@ -8,6 +8,7 @@
 //  advances without a tap.
 //
 
+import AVFoundation
 import SwiftUI
 import SwiftData
 
@@ -96,6 +97,8 @@ struct WatchScreen: View {
         let songs: [SavedSong]
     }
     @State private var performanceSet: PerformanceSet?
+    @State private var hasExternalInput = AudioEngine.hasExternalInput
+    @State private var startedEngineForRecording = false
     @Query private var channels: [Channel]
     @Query(sort: [SortDescriptor(\SavedSong.sourceStart)])
     private var allSongs: [SavedSong]
@@ -187,7 +190,16 @@ struct WatchScreen: View {
         .fullScreenCover(item: $performanceSet) { set in
             PerformanceModeView(songs: set.songs)
         }
-        .onAppear { loadWorshipSet() }
+        .onAppear {
+            loadWorshipSet()
+            hasExternalInput = AudioEngine.hasExternalInput
+        }
+        // Plugging an interface in mid-video should make the button appear.
+        .onReceive(NotificationCenter.default.publisher(
+            for: AVAudioSession.routeChangeNotification
+        )) { _ in
+            hasExternalInput = AudioEngine.hasExternalInput
+        }
         .onChange(of: index) { _, _ in
             // Otherwise the next song's chords land in the previous song's
             // chart, at timestamps from a different recording.
@@ -197,6 +209,7 @@ struct WatchScreen: View {
         .onDisappear {
             player.detach()
             detection.stop()
+            startedEngineForRecording = false
         }
     }
 
@@ -470,6 +483,31 @@ struct WatchScreen: View {
                     Label("Share", systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.bordered)
+            }
+
+            // Recording while the video plays.
+            //
+            // Offered only with an interface connected, because it is only
+            // meaningful then: what gets written is the INPUT — you playing
+            // along — not the app's output. On the built-in microphone that
+            // would be a room recording of a tablet speaker, which is worth
+            // nothing to anybody.
+            if hasExternalInput {
+                Button {
+                    if detection.audio.isWritingFile { stopSideRecording() }
+                    else { startSideRecording() }
+                } label: {
+                    Label(
+                        detection.audio.isWritingFile
+                            ? clock(detection.audio.recordedSeconds)
+                            : "녹음",
+                        systemImage: detection.audio.isWritingFile
+                            ? "stop.circle" : "record.circle"
+                    )
+                    .monospacedDigit()
+                }
+                .buttonStyle(.bordered)
+                .tint(detection.audio.isWritingFile ? .red : .accentColor)
             }
 
             // 코드 is for 찬양. A QT or a psalm reading has nothing to
@@ -759,6 +797,39 @@ struct WatchScreen: View {
         } catch {
             alternateError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // MARK: - Recording alongside playback
+
+    /// Adds file writing to whatever is already running, or starts the engine
+    /// for recording alone. Chord detection and recording share one engine, so
+    /// turning one on must not disturb the other.
+    private func startSideRecording() {
+        let name = current?.title ?? "녹음"
+        if detection.isRecording {
+            let url = Recordings.newFileURL(title: name)
+            try? detection.audio.startWriting(
+                to: url, sampleRate: detection.audio.currentSampleRate
+            )
+        } else {
+            startedEngineForRecording = true
+            detection.startRecordingToFile(title: name, analyzing: false)
+        }
+    }
+
+    private func stopSideRecording() {
+        detection.audio.stopWriting()
+        // Only tear the engine down if recording was the reason it came up —
+        // otherwise this would silently end a chord run too.
+        if startedEngineForRecording, !detection.isRecording {
+            detection.stop()
+        }
+        startedEngineForRecording = false
+    }
+
+    private func clock(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     // MARK: - Chord detection panel

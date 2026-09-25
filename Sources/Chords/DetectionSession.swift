@@ -68,6 +68,12 @@ final class DetectionSession: ObservableObject {
     /// than filed as chords heard during silence.
     var positionProvider: (() -> Double?)?
 
+    /// False while capturing purely to disk.
+    ///
+    /// Read on the audio thread, so it is a plain Bool set before the engine
+    /// starts rather than anything that needs synchronising mid-run.
+    var analyzes = true
+
     @Published private(set) var recordingURL: URL?
     @Published var recordingError: String?
     private var pendingRecordingTitle: String?
@@ -98,6 +104,10 @@ final class DetectionSession: ObservableObject {
                 self.chroma = NNLSChromaExtractor(sampleRate: rate)
                 self.bass = BassDetector(sampleRate: rate)
             }
+            // Recording a forty-minute service does not need a chord
+            // readout, and running the FFTs anyway costs battery for a
+            // display nobody is watching.
+            guard self.analyzes else { return }
             guard let chroma = self.chroma, let bass = self.bass else { return }
 
             let pcp = chroma.process(buffer: buffer)
@@ -171,12 +181,28 @@ final class DetectionSession: ObservableObject {
     ///
     /// The recording is the same mono channel the analyser reads, so what is
     /// kept is exactly what was heard.
-    func startRecordingToFile(title: String) {
+    /// Brings the engine up without writing or analysing.
+    ///
+    /// So the route banner and the level meter are live before you commit to
+    /// recording — which is how you confirm the interface is the input, rather
+    /// than finding out forty minutes later.
+    func startMonitoring() {
+        guard !isRecording, !isStarting else { return }
+        analyzes = false
+        pendingRecordingTitle = nil
+        recordingError = nil
+        start()
+    }
+
+    func startRecordingToFile(title: String, analyzing: Bool = true) {
+        analyzes = analyzing
         pendingRecordingTitle = title
+        recordingError = nil
         start()
     }
 
     func stop() {
+        analyzes = true
         cancelRequested = true
         isRecording = false
         isStarting = false

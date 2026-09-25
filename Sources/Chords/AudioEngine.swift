@@ -177,6 +177,19 @@ final class AudioEngine: ObservableObject {
         }
     }
 
+    /// Whether something other than the built-in microphone is plugged in.
+    ///
+    /// Readable before the engine starts, so a screen can decide whether to
+    /// offer recording at all without spinning audio up to find out.
+    static var hasExternalInput: Bool {
+        guard let port = AVAudioSession.sharedInstance().currentRoute.inputs.first
+        else { return false }
+        switch port.portType {
+        case .usbAudio, .lineIn, .headsetMic: return true
+        default: return false
+        }
+    }
+
     /// Current input route and its sample rate.
     static func currentInput() -> (source: InputSource, sampleRate: Double) {
         let session = AVAudioSession.sharedInstance()
