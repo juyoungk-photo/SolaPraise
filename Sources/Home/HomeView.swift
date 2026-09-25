@@ -42,6 +42,7 @@ struct HomeView: View {
     @State private var showError = false
     @State private var showPsalmSheet = false
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var dayOffset: [String: Int] = [:]
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
     @State private var attemptedPsalmChannels: Set<String> = []
@@ -310,9 +311,9 @@ struct HomeView: View {
                 // Only the 시편 card steps. 시편 듣기 reads the same
                 // `daily.chapter`, so it follows along without a second pair
                 // of buttons competing for the same value.
-                onStep: card.kind == .reading
-                    ? { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
-                    : nil
+                // 시편 steps its chapter, which is the same thing as its
+                // day. A channel card steps through that channel's episodes.
+                onStep: stepper(for: card)
             )
             // A tap gesture rather than a Button. Wrapping the card in
             // `Button { } label: { }` inside this nesting — ZStack in an
@@ -344,6 +345,17 @@ struct HomeView: View {
         }
     }
 
+    private func stepper(for card: HomeCard) -> ((Int) -> Void)? {
+        switch card.kind {
+        case .reading:
+            return { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
+        case .channel:
+            return { delta in stepDay(card, by: delta) }
+        default:
+            return nil
+        }
+    }
+
     private func subtitle(for card: HomeCard) -> String? {
         switch card.kind {
         case .reading:
@@ -364,7 +376,11 @@ struct HomeView: View {
                 ? "시편 \(daily.chapter)편 · 채널에 없음, 탭하면 검색"
                 : "시편 \(daily.chapter)편 · 탭하면 찾기"
         case .channel:
-            return latestVideo(for: card)?.title
+            guard let video = latestVideo(for: card) else { return nil }
+            // The date is the point of a QT card, so it leads.
+            guard let published = video.publishedAt else { return video.title }
+            let day = published.formatted(.dateTime.month().day())
+            return "\(day) · \(video.title)"
         case .playlist:
             return "탭하면 재생"
         case .video:
@@ -404,9 +420,35 @@ struct HomeView: View {
         }
     }
 
+    /// The episode for the day this card is currently showing.
+    ///
+    /// A QT channel publishes one episode per day, so "the newest upload" is
+    /// only the right answer before today's has gone up — after which
+    /// yesterday's is unreachable without leaving the home screen. The card
+    /// picks by date and steps a day at a time, the way you would turn a page.
     private func latestVideo(for card: HomeCard) -> CachedVideo? {
         guard let id = card.targetId else { return nil }
-        return allVideos.first { $0.channelId == id }
+        let episodes = allVideos.filter { $0.channelId == id }
+        guard !episodes.isEmpty else { return nil }
+
+        let offset = dayOffset[id] ?? 0
+        guard offset != 0 else { return episodes.first }
+
+        // Step through what exists rather than through the calendar: a channel
+        // that skips a Saturday should go back to Friday, not to an empty day.
+        let index = min(max(-offset, 0), episodes.count - 1)
+        return episodes[index]
+    }
+
+    /// How many days back each channel card is showing. 0 is the newest.
+    private func stepDay(_ card: HomeCard, by delta: Int) {
+        guard let id = card.targetId else { return }
+        let count = allVideos.filter { $0.channelId == id }.count
+        guard count > 0 else { return }
+        let next = (dayOffset[id] ?? 0) + delta
+        // Clamped: forward stops at the newest, back stops at the oldest the
+        // cache holds.
+        dayOffset[id] = min(0, max(next, -(count - 1)))
     }
 
     // MARK: - Actions

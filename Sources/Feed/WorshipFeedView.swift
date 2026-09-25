@@ -39,6 +39,8 @@ struct WorshipFeedView: View {
 
     @State private var searchText = ""
     @StateObject private var history = SearchHistory.shared("worship")
+    /// Nil means every whitelisted channel.
+    @State private var channelFilter: String?
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var searchError: String?
@@ -120,7 +122,6 @@ struct WorshipFeedView: View {
     // MARK: - Browse
 
     private var browseScroll: some View {
-        ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     genreChips
@@ -130,24 +131,33 @@ struct WorshipFeedView: View {
                     emptyGuidance
                 }
 
-                    ForEach(channels) { channel in
-                        let videos = cappedVideos(forChannel: channel)
-                        if !videos.isEmpty {
-                            ChannelSection(channel: channel, videos: videos) { video in
-                                play(video, in: videos)
+                    // One feed, newest first.
+                    //
+                    // Grouping by channel forced a choice nobody was making:
+                    // you do not sit down to watch MARKERS, you sit down to
+                    // find a song. Per-channel sections also meant the newest
+                    // upload in the app could be four sections down, and a cap
+                    // per section hid better matches behind worse ones.
+                    // Channel is a filter now, for when it actually matters.
+                    let feedVideos = browseVideos
+                    if !feedVideos.isEmpty {
+                        LazyVGrid(columns: FeedGrid.columns, spacing: 16) {
+                            ForEach(feedVideos) { video in
+                                Button { play(video, in: feedVideos) } label: {
+                                    VideoCard(video: video)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .id(channel.youtubeChannelId)
                         }
+                        .padding(.horizontal, 16)
+                    } else if !(channels.isEmpty && topics.isEmpty) {
+                        Text(channelFilter == nil
+                             ? "아직 불러온 영상이 없습니다. 아래로 당겨 새로고침하세요."
+                             : "이 채널에 해당하는 영상이 없습니다.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 16)
                     }
-
-                ForEach(topics) { topic in
-                    let videos = cappedVideos(forTopic: topic)
-                    if !videos.isEmpty {
-                        TopicSection(topic: topic, videos: videos) { video in
-                            play(video, in: videos)
-                        }
-                    }
-                }
 
                 if let message = feed.errorMessage {
                     Text(message).font(.caption).foregroundStyle(.orange)
@@ -161,15 +171,13 @@ struct WorshipFeedView: View {
                 .padding(.top, 8)
             }
             .safeAreaInset(edge: .top) {
+                // Was a jump bar, which only made sense while the feed was
+                // cut into per-channel sections. With one feed there is
+                // nowhere to jump, so the same row filters instead.
                 if !channels.isEmpty {
-                    ChannelJumpBar(channels: channels) { channel in
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo(channel.youtubeChannelId, anchor: .top)
-                        }
-                    }
+                    ChannelFilterBar(channels: channels, selected: $channelFilter)
                 }
             }
-        }
     }
 
     /// Genre filters over the cache — free and instant, unlike a search.
@@ -337,6 +345,28 @@ struct WorshipFeedView: View {
             .prefix(20)
             .map { $0 }
     }
+
+    /// The browse feed: every worship video the cache holds, newest first,
+    /// narrowed by the genre and channel chips.
+    private var browseVideos: [CachedVideo] {
+        let channelIds = Set(channels.map(\.youtubeChannelId))
+        return allVideos
+            .filter { video in
+                if let channelFilter {
+                    return video.channelId == channelFilter
+                }
+                // Topic-search results belong here too: they were fetched for
+                // 찬양 and have no channel in the whitelist.
+                return video.channelId.map(channelIds.contains) ?? false
+                    || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
+            }
+            .filter { genre.matches($0.title) }
+            .prefix(Self.browseCap)
+            .map { $0 }
+    }
+
+    /// Enough to browse, finite by design. The feed still ends.
+    private static let browseCap = 120
 
     private func cappedVideos(forChannel channel: Channel) -> [CachedVideo] {
         allVideos

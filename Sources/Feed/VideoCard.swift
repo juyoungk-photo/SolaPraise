@@ -104,6 +104,14 @@ struct VideoCard: View {
 struct PinnedVideoCard: View {
     let video: CachedVideo
 
+    /// Capped width.
+    ///
+    /// Full-bleed is right on a phone, where the screen IS the card. On an
+    /// iPad the same rule blew today's episode up to the width of the window —
+    /// a 480pt-wide thumbnail stretched past 1000pt, upscaled and dominating a
+    /// screen it was only meant to lead.
+    private let maxWidth: CGFloat = 560
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ThumbnailBox(url: video.thumbnailURL, cornerRadius: 12) {
@@ -137,6 +145,7 @@ struct PinnedVideoCard: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: maxWidth, alignment: .leading)
         .contentShape(Rectangle())
     }
 }

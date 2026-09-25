@@ -99,3 +99,81 @@ enum WorshipGenre: String, CaseIterable, Identifiable {
         return keywords.contains { lower.contains($0.lowercased()) }
     }
 }
+
+// MARK: - Channel filter
+
+/// The same row of channels, but selecting one narrows the feed instead of
+/// scrolling to it.
+///
+/// Jumping only made sense while 찬양 was cut into per-channel sections. With
+/// one feed there is nowhere to jump — but the channel is still worth having
+/// when you want it, so it became a filter you opt into rather than a
+/// structure imposed on every visit.
+struct ChannelFilterBar: View {
+    let channels: [Channel]
+    @Binding var selected: String?
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip(title: "전체", thumbnail: nil, isSelected: selected == nil) {
+                    selected = nil
+                }
+                ForEach(channels) { channel in
+                    chip(
+                        title: channel.shortTitle,
+                        thumbnail: channel.thumbnailURL,
+                        isSelected: selected == channel.youtubeChannelId
+                    ) {
+                        selected = selected == channel.youtubeChannelId
+                            ? nil
+                            : channel.youtubeChannelId
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .frame(height: 48)
+        .background(Color(.systemBackground))
+    }
+
+    private func chip(
+        title: String,
+        thumbnail: URL?,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let thumbnail {
+                    AsyncImage(url: thumbnail) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Circle().fill(Color.secondary.opacity(0.3))
+                    }
+                    .frame(width: 18, height: 18)
+                    .clipShape(Circle())
+                }
+                Text(title).lineLimit(1)
+            }
+            .font(.caption2.weight(isSelected ? .semibold : .medium))
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                Capsule().fill(isSelected
+                               ? Color.accentColor
+                               : Color(.secondarySystemBackground))
+            )
+            .overlay(
+                Capsule().strokeBorder(
+                    isSelected ? Color.clear : Color.primary.opacity(0.12),
+                    lineWidth: 0.5
+                )
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
