@@ -14,15 +14,19 @@
 import SwiftUI
 
 enum FeedGrid {
-    /// The width a card wants. Below this it gets cramped; much above it the
-    /// thumbnail is being upscaled past its own resolution.
-    static let idealCardWidth: CGFloat = 190
+    /// The width a card wants.
+    ///
+    /// A YouTube medium thumbnail is 320pt wide, so anything past about
+    /// 230 is upscaling. 165 is the narrowest that still fits two lines of a
+    /// Korean title without truncating most of it, and it puts 5 across a
+    /// portrait iPad rather than 4 oversized ones.
+    static let idealCardWidth: CGFloat = 165
     static let spacing: CGFloat = 12
 
     /// Adaptive columns: 2 on a phone, 3–5 across iPad sizes and split views,
     /// decided by the space actually available rather than by device type —
     /// an iPad in a narrow split view deserves the phone layout.
     static var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: idealCardWidth, maximum: 280), spacing: spacing)]
+        [GridItem(.adaptive(minimum: idealCardWidth, maximum: 230), spacing: spacing)]
     }
 }

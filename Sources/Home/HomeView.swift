@@ -55,9 +55,10 @@ struct HomeView: View {
     /// which left wide cards rendering narrow with holes beside them. So the
     /// rows are built by hand: a wide card takes a row to itself, narrow ones
     /// pair up.
-    /// Two across on a phone, four on an iPad. At two, an iPad card grew to
-    /// roughly 350pt and four tiles filled the screen.
-    private var narrowCardsPerRow: Int { sizeClass == .regular ? 4 : 2 }
+    /// Two across on a phone, five on an iPad — matching the feed's card
+    /// width, so a home tile and a video tile are the same size. At two, an
+    /// iPad card grew to roughly 350pt and four tiles filled the screen.
+    private var narrowCardsPerRow: Int { sizeClass == .regular ? 5 : 2 }
 
     private var rows: [[HomeCard]] {
         var result: [[HomeCard]] = []

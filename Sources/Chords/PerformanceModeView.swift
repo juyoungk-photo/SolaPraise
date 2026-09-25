@@ -128,6 +128,14 @@ struct PerformanceModeView: View {
                 if sections.isEmpty {
                     progression(chords(of: song, from: 0, to: song.chords.count - 1))
                 } else {
+                    // Columns where there is width. A stand wants the whole
+                    // song visible; scrolling mid-song is the thing a paper
+                    // chart never makes you do.
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 320), spacing: 32)],
+                        alignment: .leading,
+                        spacing: 26
+                    ) {
                     ForEach(sections) { section in
                         VStack(alignment: .leading, spacing: 10) {
                             Text(section.label)
@@ -145,6 +153,7 @@ struct PerformanceModeView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
+                    }
                     }
                 }
             }

@@ -26,14 +26,21 @@ struct LeadSheetView: View {
     @State private var pdf: ShareableFile?
     @State private var renaming: SongSection?
     @State private var showPerformance = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        List {
-            transposeSection
-            ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
-                sectionBlock(section, at: index)
+        Group {
+            if sizeClass == .regular {
+                wideLayout
+            } else {
+                List {
+                    transposeSection
+                    ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
+                        sectionBlock(section, at: index)
+                    }
+                    ccliFooter
+                }
             }
-            ccliFooter
         }
         .navigationTitle(song.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -45,6 +52,61 @@ struct LeadSheetView: View {
         .fullScreenCover(isPresented: $showPerformance) {
             PerformanceModeView(songs: [song])
         }
+    }
+
+    // MARK: - Wide layout
+
+    /// Sections side by side rather than in one tall column.
+    ///
+    /// A song's sections are short and there are several of them, so stacking
+    /// them vertically on an iPad left a narrow ribbon of content down the
+    /// middle with most of the screen blank, and the chorus three scrolls away
+    /// from the verse it follows. Side by side, a whole song is usually on
+    /// one screen — which is how a chart is meant to be read.
+    private var wideLayout: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Form { transposeSection }
+                    .frame(maxHeight: 150)
+                    .scrollDisabled(true)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: 16)],
+                    alignment: .leading,
+                    spacing: 16
+                ) {
+                    ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
+                        sectionCard(section, at: index)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                Form { ccliFooter }
+                    .frame(maxHeight: 220)
+                    .scrollDisabled(true)
+            }
+            .padding(.vertical, 12)
+        }
+    }
+
+    private func sectionCard(_ section: SongSection, at index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(section.label)
+                    .font(.subheadline.weight(.semibold))
+                Text(timeString(section.startTime))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("이름 변경") { renaming = section }
+                    .font(.caption)
+            }
+            chordRow(for: section)
+            lyricsEditor(for: section, at: index)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - Toolbar
