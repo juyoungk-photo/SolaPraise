@@ -699,6 +699,8 @@ struct WatchScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                InputChannelPicker(audio: detection.audio)
+
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(detection.currentChord?.symbol()
                          ?? (detection.isStarting ? "준비 중…" : "듣는 중…"))

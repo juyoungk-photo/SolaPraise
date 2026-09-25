@@ -82,6 +82,8 @@ struct LiveDetectView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            InputChannelPicker(audio: detection.audio)
         }
         .padding(.horizontal)
     }

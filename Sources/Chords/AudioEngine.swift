@@ -27,6 +27,43 @@ final class AudioEngine: ObservableObject {
     @Published private(set) var permissionGranted: Bool = false
     @Published private(set) var currentLevelDB: Float = -80  // for a mic meter
 
+    /// How many input channels the current route offers.
+    ///
+    /// A phone mic is 1. A Scarlett 8i6 is 6 or more, and its Loopback and its
+    /// line inputs are *not* channel 0 — so reading the first channel and
+    /// calling it "the input" analysed an empty mic preamp and showed nothing,
+    /// with no error to explain why.
+    @Published private(set) var channelCount: Int = 1
+
+    /// Which channel the DSP reads. -1 means "pick the loudest".
+    @Published var selectedChannel: Int = AudioEngine.storedChannel {
+        didSet {
+            UserDefaults.standard.set(selectedChannel, forKey: Self.channelKey)
+            if selectedChannel >= 0 { resolvedChannel = selectedChannel }
+        }
+    }
+
+    /// The channel actually in use, once auto-selection has settled.
+    @Published private(set) var resolvedChannel: Int = 0
+
+    /// Per-channel level, so the picker can show which input has signal.
+    @Published private(set) var channelLevelsDB: [Float] = [-80]
+
+    static let autoChannel = -1
+    private static let channelKey = "chords.inputChannel"
+    private static var storedChannel: Int {
+        UserDefaults.standard.object(forKey: channelKey) as? Int ?? autoChannel
+    }
+
+    /// Energy gathered per channel while auto-selection is still deciding.
+    private var autoEnergy: [Float] = []
+    private var autoFrames = 0
+    /// About a second at 1024 frames — long enough to tell a live input from a
+    /// silent one, short enough not to miss the start of a song.
+    private let autoFramesNeeded = 45
+    private var monoScratch: AVAudioPCMBuffer?
+    private var meterTick = 0
+
     // MARK: - Audio objects
     private let engine = AVAudioEngine()
     /// Called on the audio thread with every buffer that arrives from the mic.
@@ -165,12 +202,28 @@ final class AudioEngine: ObservableObject {
         // Remove any previous tap just in case.
         input.removeTap(onBus: 0)
 
+        let channels = Int(nativeFormat.channelCount)
+        DispatchQueue.main.async {
+            self.channelCount = channels
+            self.channelLevelsDB = Array(repeating: -80, count: max(channels, 1))
+        }
+        autoEnergy = Array(repeating: 0, count: max(channels, 1))
+        autoFrames = 0
+        meterTick = 0
+        monoScratch = nil
+        if selectedChannel >= 0 {
+            let fixed = min(selectedChannel, max(channels - 1, 0))
+            DispatchQueue.main.async { self.resolvedChannel = fixed }
+        }
+
         input.installTap(onBus: 0,
                          bufferSize: bufferSize,
                          format: nativeFormat) { [weak self] buffer, _ in
             guard let self else { return }
-            self.updateLevel(from: buffer)
-            self.onBuffer?(buffer)
+            self.measureChannels(buffer)
+            guard let mono = self.mono(from: buffer) else { return }
+            self.updateLevel(from: mono)
+            self.onBuffer?(mono)
         }
 
         engine.prepare()
@@ -213,6 +266,82 @@ final class AudioEngine: ObservableObject {
         }
     }
 
+    // MARK: - Channel selection
+
+    /// Copies one channel into a mono buffer for the DSP.
+    ///
+    /// The chroma and bass stages both read `floatChannelData[0]`, so handing
+    /// them a six-channel buffer meant they read input 1 and nothing else.
+    /// The scratch buffer is reused: this runs about 47 times a second.
+    private func mono(from buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let source = buffer.floatChannelData else { return nil }
+        let count = Int(buffer.format.channelCount)
+        guard count > 0 else { return nil }
+        if count == 1 { return buffer }
+
+        let index = min(max(currentChannel, 0), count - 1)
+        let frames = Int(buffer.frameLength)
+
+        if monoScratch == nil || monoScratch!.frameCapacity < buffer.frameLength {
+            guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: buffer.format.sampleRate,
+                                             channels: 1,
+                                             interleaved: false),
+                  let scratch = AVAudioPCMBuffer(pcmFormat: format,
+                                                 frameCapacity: buffer.frameCapacity)
+            else { return nil }
+            monoScratch = scratch
+        }
+        guard let out = monoScratch, let destination = out.floatChannelData else { return nil }
+        out.frameLength = buffer.frameLength
+        memcpy(destination[0], source[index], frames * MemoryLayout<Float>.size)
+        return out
+    }
+
+    /// Read on the audio thread, so it does not wait for a main-queue hop.
+    private var currentChannel: Int {
+        if selectedChannel >= 0 { return selectedChannel }
+        guard !autoEnergy.isEmpty else { return 0 }
+        var best = 0
+        for i in 1 ..< autoEnergy.count where autoEnergy[i] > autoEnergy[best] { best = i }
+        return best
+    }
+
+    /// Per-channel RMS, both to drive the picker's meters and to decide which
+    /// input is actually carrying the music.
+    private func measureChannels(_ buffer: AVAudioPCMBuffer) {
+        guard let data = buffer.floatChannelData else { return }
+        let count = Int(buffer.format.channelCount)
+        let frames = Int(buffer.frameLength)
+        guard count > 0, frames > 0 else { return }
+
+        var levels = [Float](repeating: -80, count: count)
+        if autoEnergy.count != count { autoEnergy = Array(repeating: 0, count: count) }
+
+        for channel in 0 ..< count {
+            var sum: Float = 0
+            let samples = data[channel]
+            for i in 0 ..< frames { sum += samples[i] * samples[i] }
+            let rms = sqrtf(sum / Float(frames))
+            levels[channel] = max(-80, min(0, 20 * log10f(max(rms, 1e-7))))
+            if autoFrames < autoFramesNeeded { autoEnergy[channel] += rms }
+        }
+
+        if autoFrames < autoFramesNeeded { autoFrames += 1 }
+        let resolved = currentChannel
+
+        // Roughly ten updates a second, not forty-seven. Meters do not need
+        // per-buffer resolution, and publishing at buffer rate re-renders the
+        // whole panel faster than anyone can read it.
+        meterTick += 1
+        guard meterTick % 5 == 0 else { return }
+
+        DispatchQueue.main.async {
+            self.channelLevelsDB = levels
+            if self.resolvedChannel != resolved { self.resolvedChannel = resolved }
+        }
+    }
+
     // MARK: - Level meter
 
     private func updateLevel(from buffer: AVAudioPCMBuffer) {
@@ -222,6 +351,7 @@ final class AudioEngine: ObservableObject {
         for i in 0..<n { sum += ch[i] * ch[i] }
         let rms = sqrtf(sum / Float(max(n, 1)))
         let db = 20 * log10f(max(rms, 1e-7))
+        guard meterTick % 5 == 0 else { return }
         DispatchQueue.main.async {
             // Clamp so the UI meter doesn't spike wildly.
             self.currentLevelDB = max(-80, min(0, db))
