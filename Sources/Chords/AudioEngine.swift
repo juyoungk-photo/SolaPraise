@@ -69,6 +69,17 @@ final class AudioEngine: ObservableObject {
     /// Called on the audio thread with every buffer that arrives from the mic.
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
+    /// Written while capture runs, when a recording was asked for.
+    ///
+    /// The file holds exactly the mono channel the analyser reads, at the
+    /// hardware's own rate and in Float32 — no resampling, no compression, no
+    /// D/A anywhere in the path. An interface's A/D is the only conversion,
+    /// and that one is unavoidable for any analogue source.
+    private var writer: AVAudioFile?
+    private let writerLock = NSLock()
+    @Published private(set) var recordedSeconds: Double = 0
+    @Published private(set) var isWritingFile = false
+
     private var routeObserver: NSObjectProtocol?
     private var interruptionObserver: NSObjectProtocol?
 
@@ -255,6 +266,7 @@ final class AudioEngine: ObservableObject {
             self.measureChannels(buffer)
             guard let mono = self.mono(from: buffer) else { return }
             self.updateLevel(from: mono)
+            self.write(mono)
             self.onBuffer?(mono)
         }
 
@@ -266,6 +278,7 @@ final class AudioEngine: ObservableObject {
     }
 
     func stop() {
+        stopWriting()
         guard engineStarted else { return }
         engineStarted = false
         if let routeObserver {
@@ -329,6 +342,65 @@ final class AudioEngine: ObservableObject {
                 self.isRunning = false
                 try? self.start()
             }
+        }
+    }
+
+    /// The rate the tap is actually delivering, for anything that has to
+    /// match it — a file written alongside the analysis, above all.
+    var currentSampleRate: Double {
+        let rate = AVAudioSession.sharedInstance().sampleRate
+        return rate > 0 ? rate : 48_000
+    }
+
+    // MARK: - Recording to a file
+
+    /// Begins writing the analysed channel to `url`. Capture must already be
+    /// running, since the file's format comes from the live input.
+    func startWriting(to url: URL, sampleRate: Double) throws {
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let file = try AVAudioFile(forWriting: url, settings: settings,
+                                   commonFormat: .pcmFormatFloat32, interleaved: false)
+        writerLock.withLock { writer = file }
+        DispatchQueue.main.async {
+            self.recordedSeconds = 0
+            self.isWritingFile = true
+        }
+    }
+
+    @discardableResult
+    func stopWriting() -> Bool {
+        let had = writerLock.withLock { () -> Bool in
+            let existed = writer != nil
+            writer = nil
+            return existed
+        }
+        DispatchQueue.main.async { self.isWritingFile = false }
+        return had
+    }
+
+    private func write(_ buffer: AVAudioPCMBuffer) {
+        writerLock.lock()
+        let file = writer
+        writerLock.unlock()
+        guard let file else { return }
+
+        do { try file.write(from: buffer) }
+        catch {
+            // A failed write means the file is no longer trustworthy, so stop
+            // rather than leave a recording with a silent hole in it.
+            stopWriting()
+            return
+        }
+        let seconds = Double(file.length) / file.fileFormat.sampleRate
+        if meterTick % 5 == 0 {
+            DispatchQueue.main.async { self.recordedSeconds = seconds }
         }
     }
 

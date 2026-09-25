@@ -75,6 +75,10 @@
 	</array>
 
 	<!-- Phase 6: key detection listens through the mic while the song plays. -->
+		<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SolaPraise listens to the song playing to detect its musical key and chords.</string>
 </dict>

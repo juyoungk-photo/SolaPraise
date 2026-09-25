@@ -70,6 +70,10 @@ final class DetectionSession: ObservableObject {
     /// than filed as chords heard during silence.
     var positionProvider: (() -> Double?)?
 
+    @Published private(set) var recordingURL: URL?
+    @Published var recordingError: String?
+    private var pendingRecordingTitle: String?
+
     /// Set when the user taps again before the engine has finished starting.
     private var cancelRequested = false
 
@@ -139,6 +143,20 @@ final class DetectionSession: ObservableObject {
                     return
                 }
                 self.begin()
+
+                if let title = self.pendingRecordingTitle {
+                    self.pendingRecordingTitle = nil
+                    let url = Recordings.newFileURL(title: title)
+                    do {
+                        try self.audio.startWriting(
+                            to: url,
+                            sampleRate: self.audio.currentSampleRate
+                        )
+                        self.recordingURL = url
+                    } catch {
+                        self.recordingError = error.localizedDescription
+                    }
+                }
             }
         }
     }
@@ -149,6 +167,15 @@ final class DetectionSession: ObservableObject {
     func cancelStart() {
         guard isStarting else { return }
         cancelRequested = true
+    }
+
+    /// Starts capture and writes it to a file at the same time.
+    ///
+    /// The recording is the same mono channel the analyser reads, so what is
+    /// kept is exactly what was heard.
+    func startRecordingToFile(title: String) {
+        pendingRecordingTitle = title
+        start()
     }
 
     func stop() {

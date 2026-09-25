@@ -15,10 +15,12 @@ import SwiftData
 struct LiveDetectView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var analyzer: AudioFileAnalyzer
 
     @StateObject private var detection = DetectionSession()
     @State private var title = ""
     @State private var savedSong: SavedSong?
+    @AppStorage("live.keepsRecording") private var keepsRecording = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -50,6 +52,7 @@ struct LiveDetectView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal)
 
+            recordToggle
             controls
         }
         .padding(.vertical)
@@ -122,17 +125,61 @@ struct LiveDetectView: View {
                 .tint(.red)
             } else {
                 Button {
-                    detection.start()
+                    if keepsRecording {
+                        detection.startRecordingToFile(title: title)
+                    } else {
+                        detection.start()
+                    }
                 } label: {
-                    Label("감지 시작", systemImage: "waveform")
+                    Label(keepsRecording ? "녹음하며 감지" : "감지 시작",
+                          systemImage: keepsRecording ? "record.circle" : "waveform")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(detection.permissionDenied)
+                .tint(keepsRecording ? .red : .accentColor)
+                .disabled(detection.permissionDenied || detection.isStarting)
             }
         }
         .padding(.horizontal)
+    }
+
+    /// Keeping the capture is what makes a second pass possible.
+    ///
+    /// Live detection gets exactly one attempt at a performance. The file path
+    /// re-reads the same audio faster than real time, with overlapping windows
+    /// and no room noise, so a kept recording is both a better analysis today
+    /// and one that can be redone tomorrow.
+    private var recordToggle: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: $keepsRecording) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("녹음해서 보관").font(.subheadline)
+                    Text("입력 그대로 저장 — 변환도 압축도 없습니다")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(detection.isRecording)
+
+            if detection.audio.isWritingFile {
+                HStack(spacing: 6) {
+                    Image(systemName: "record.circle").foregroundStyle(.red)
+                    Text(clock(detection.audio.recordedSeconds))
+                        .font(.caption.monospacedDigit())
+                    Spacer()
+                }
+            }
+            if let message = detection.recordingError {
+                Text(message).font(.caption2).foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private func clock(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private func saveSheet() {
@@ -147,6 +194,12 @@ struct LiveDetectView: View {
         )
         modelContext.insert(song)
         try? modelContext.save()
+
+        // A kept capture gets re-analysed straight away: same audio, but with
+        // the overlapping windows the live path cannot afford in real time.
+        if let url = detection.recordingURL {
+            analyzer.start(url: url, title: session.title, context: modelContext)
+        }
         savedSong = song
     }
 }

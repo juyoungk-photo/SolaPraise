@@ -23,6 +23,7 @@ struct SheetMusicView: View {
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
+    @State private var recordings: [Recordings.Item] = []
 
     private struct PerformanceSet: Identifiable {
         let id = UUID()
@@ -74,6 +75,49 @@ struct SheetMusicView: View {
                     Text("새로 만들기")
                 } footer: {
                     Text("라인 입력(오디오 인터페이스)이 가장 정확합니다. 유튜브 오디오는 분석할 수 없습니다.")
+                }
+
+                if !recordings.isEmpty {
+                    Section {
+                        ForEach(recordings) { item in
+                            Button {
+                                analyzer.start(url: item.url, title: item.title,
+                                               context: modelContext)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "waveform.circle")
+                                        .foregroundStyle(.tint)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(item.title).lineLimit(1)
+                                            .foregroundStyle(Color.primary)
+                                        Text("\(item.durationLabel) · \(item.createdAt, format: .dateTime.month().day().hour().minute())")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(analyzer.isAnalyzing)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    Recordings.delete(item)
+                                    recordings = Recordings.all()
+                                } label: { Label("삭제", systemImage: "trash") }
+                            }
+                            ShareLink(item: item.url) {
+                                Label("내보내기", systemImage: "square.and.arrow.up")
+                                    .font(.caption)
+                            }
+                        }
+                    } header: {
+                        Text("녹음")
+                    } footer: {
+                        Text("라인 입력을 그대로 저장한 파일입니다. 다시 분석하면 실시간보다 촘촘한 창으로 읽으므로 결과가 더 정확합니다.")
+                    }
                 }
 
                 Section {
@@ -134,6 +178,8 @@ struct SheetMusicView: View {
             .fullScreenCover(item: $performanceSet) { set in
                 PerformanceModeView(songs: set.songs)
             }
+            .task { recordings = Recordings.all() }
+            .onChange(of: analyzer.isAnalyzing) { _, _ in recordings = Recordings.all() }
             .navigationTitle("악보")
             .navigationDestination(item: $openedSong) { song in
                 LeadSheetView(song: song)
