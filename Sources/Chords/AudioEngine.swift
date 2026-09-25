@@ -184,9 +184,19 @@ final class AudioEngine: ObservableObject {
                                 mode: mode,
                                 options: [.defaultToSpeaker, .mixWithOthers, .allowBluetoothA2DP])
         try session.setActive(true, options: [])
-        // .playAndRecord otherwise routes to the receiver, which would send
-        // the song to the earpiece while the microphone listens to the room.
-        try? session.overrideOutputAudioPort(.speaker)
+
+        // Only when the route actually landed on the earpiece.
+        //
+        // .playAndRecord defaults to the receiver, which would send the song
+        // to the earpiece while the microphone listens to the room. But
+        // .speaker forces the BUILT-IN speaker unconditionally — with a USB
+        // interface or headphones connected that would drag playback off the
+        // device the user deliberately plugged in, which is the opposite of
+        // what this call is for.
+        let outputs = session.currentRoute.outputs
+        if outputs.contains(where: { $0.portType == .builtInReceiver }) {
+            try? session.overrideOutputAudioPort(.speaker)
+        }
     }
 
     // MARK: - Start / Stop
