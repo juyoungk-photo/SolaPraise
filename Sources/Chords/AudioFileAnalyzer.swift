@@ -18,114 +18,249 @@
 import Foundation
 import AVFoundation
 
+import Foundation
+import AVFoundation
+import SwiftData
+
 @MainActor
 final class AudioFileAnalyzer: ObservableObject {
 
     @Published private(set) var isAnalyzing = false
     @Published private(set) var progress: Double = 0
+    /// What it is doing right now. Without this a long decode is
+    /// indistinguishable from a hang.
+    @Published private(set) var stage: String = ""
+    @Published private(set) var fileName: String?
     @Published private(set) var detectedKey: String?
-    @Published private(set) var chords: [SessionChord] = []
     @Published private(set) var errorMessage: String?
+    @Published private(set) var finished: SavedSong?
 
-    /// Frames per analysis window. Matches the live path's cadence closely
-    /// enough that the detector's hysteresis behaves the same way.
-    private let chunkFrames: AVAudioFrameCount = 8192
+    /// Held here rather than by a view.
+    ///
+    /// A `.task` or a view-owned Task is cancelled the moment its view goes
+    /// away, so switching tabs mid-analysis killed the job. The analyser owns
+    /// its own work and lives at app level, which is what lets you go and
+    /// listen to something while a file is being analysed.
+    private var job: Task<Void, Never>?
 
-    func analyze(url: URL, title: String) async -> Session? {
+    /// The hop the DSP is fed at.
+    ///
+    /// 1024, matching the live path and the harness. It used to read 8192 at a
+    /// time — the chroma extractor's entire FFT window — so it analysed one
+    /// window per 8192 frames with no overlap, eight times coarser in time
+    /// than live detection and measuring something the test harness never
+    /// checked. Short chords fell between windows entirely.
+    private static let hop: AVAudioFrameCount = 1024
+
+    var isBusy: Bool { isAnalyzing }
+
+    func cancel() {
+        job?.cancel()
+        job = nil
+        isAnalyzing = false
+        stage = ""
+    }
+
+    /// Starts an analysis that outlives the screen that asked for it.
+    func start(url: URL, title: String, context: ModelContext) {
+        guard !isAnalyzing else { return }
+        job?.cancel()
+
         isAnalyzing = true
         progress = 0
+        stage = "파일 여는 중…"
+        fileName = title
         errorMessage = nil
-        chords = []
         detectedKey = nil
-        defer { isAnalyzing = false }
+        finished = nil
 
-        // Security-scoped access is required for files chosen from the Files
-        // app; without it the read fails with a permissions error.
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        let file: AVAudioFile
-        do {
-            file = try AVAudioFile(forReading: url)
-        } catch {
-            errorMessage = "오디오 파일을 열 수 없습니다: \(error.localizedDescription)"
-            return nil
-        }
-
-        let format = file.processingFormat
-        let sampleRate = format.sampleRate
-        let totalFrames = file.length
-        guard totalFrames > 0 else {
-            errorMessage = "빈 오디오 파일입니다."
-            return nil
-        }
-
-        // Extractors are built for the file's own rate, so nothing is resampled.
-        let chroma = NNLSChromaExtractor(sampleRate: sampleRate)
-        let bass = BassDetector(sampleRate: sampleRate)
-        let detector = ChordDetector(includeSevenths: true)
-        let hmm = ChordHMM(chords: detector.chordSpace)
-        let keyEstimator = KeyEstimator()
-
-        var collected: [SessionChord] = []
-        var lastChord: Chord?
-        var framesRead: AVAudioFramePosition = 0
-
-        while framesRead < totalFrames {
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunkFrames) else { break }
-            do {
-                try file.read(into: buffer, frameCount: chunkFrames)
-            } catch {
-                break
-            }
-            guard buffer.frameLength > 0 else { break }
-
-            let timestamp = TimeInterval(framesRead) / sampleRate
-            framesRead += AVAudioFramePosition(buffer.frameLength)
-
-            guard let pcp = chroma.process(buffer: buffer) else { continue }
-            keyEstimator.add(chroma: pcp)
-
-            let bassResult = bass.process(buffer: buffer)
-            let similarities = detector.similarities(from: pcp)
-            guard !similarities.isEmpty, var chord = hmm.step(similarities: similarities) else { continue }
-
-            if let bassResult, bassResult.strength >= 0.70 {
-                let tones = Self.pitchClasses(of: chord)
-                if bassResult.pitchClass != chord.root && tones.contains(bassResult.pitchClass) {
-                    chord.bass = bassResult.pitchClass
+        job = Task { [weak self] in
+            guard let self else { return }
+            let outcome = await Self.run(url: url, title: title) { progress, stage in
+                Task { @MainActor [weak self] in
+                    self?.progress = progress
+                    self?.stage = stage
                 }
             }
 
-            if chord != lastChord {
-                lastChord = chord
-                collected.append(SessionChord(chord: chord, timestamp: timestamp))
+            guard !Task.isCancelled else {
+                await MainActor.run { self.isAnalyzing = false; self.stage = "" }
+                return
             }
 
-            // Yield periodically so the progress bar actually moves.
-            if collected.count % 8 == 0 {
-                progress = Double(framesRead) / Double(totalFrames)
-                await Task.yield()
+            await MainActor.run {
+                self.isAnalyzing = false
+                self.stage = ""
+                self.progress = 1
+                switch outcome {
+                case .failure(let message):
+                    self.errorMessage = message
+                case .success(let session):
+                    self.detectedKey = session.detectedKey
+                    let song = SavedSong(
+                        session: session,
+                        sections: SongStructure.detect(chords: session.chords)
+                    )
+                    context.insert(song)
+                    try? context.save()
+                    self.finished = song
+                }
             }
         }
+    }
 
-        progress = 1
-        collected = Self.collapseRuns(collected)
-        chords = collected
-        detectedKey = keyEstimator.displayString()
+    enum Outcome {
+        case success(Session)
+        case failure(String)
+    }
 
-        guard !collected.isEmpty else {
-            errorMessage = "코드를 찾지 못했습니다. 반주가 뚜렷한 구간이 있는 파일인지 확인해 주세요."
-            return nil
-        }
+    /// The DSP, off the main actor.
+    ///
+    /// This used to run inside a @MainActor method, so every FFT executed on
+    /// the main thread and the interface froze until it was done. The
+    /// `await Task.yield()` that was supposed to relieve it fired on
+    /// `collected.count % 8 == 0` — a counter that only advances when a chord
+    /// CHANGES — so a quiet or steady passage left it stuck on one value and
+    /// yielding stopped entirely. Nothing about that could be fixed from the
+    /// main thread; it had to leave.
+    nonisolated private static func run(
+        url: URL,
+        title: String,
+        report: @escaping @Sendable (Double, String) -> Void
+    ) async -> Outcome {
+        await Task.detached(priority: .userInitiated) { () -> Outcome in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        return Session(
-            title: title,
-            youTubeURL: nil,
-            detectedKey: detectedKey,
-            createdAt: Date(),
-            chords: collected
-        )
+            let file: AVAudioFile
+            do {
+                file = try AVAudioFile(forReading: url)
+            } catch {
+                return .failure("오디오 파일을 열 수 없습니다: \(error.localizedDescription)")
+            }
+
+            let format = file.processingFormat
+            let sampleRate = format.sampleRate
+            let totalFrames = file.length
+            guard totalFrames > 0, sampleRate > 0 else {
+                return .failure("빈 오디오 파일입니다.")
+            }
+
+            let chroma = NNLSChromaExtractor(sampleRate: sampleRate)
+            let bass = BassDetector(sampleRate: sampleRate)
+            let detector = ChordDetector(includeSevenths: true)
+            let hmm = ChordHMM(chords: detector.chordSpace)
+            let keyEstimator = KeyEstimator()
+
+            let duration = Double(totalFrames) / sampleRate
+            report(0, "코드 분석 중… 0:00 / \(Self.clock(duration))")
+
+            var collected: [SessionChord] = []
+            var lastChord: Chord?
+            var framesRead: AVAudioFramePosition = 0
+            var sinceReport = 0
+
+            // Read in larger blocks than the DSP hop: file reads are the slow
+            // part, the hop is what the analysis needs.
+            let blockFrames: AVAudioFrameCount = 16384
+            guard let block = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: blockFrames),
+                  let mono = AVAudioPCMBuffer(
+                      pcmFormat: AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                               sampleRate: sampleRate,
+                                               channels: 1,
+                                               interleaved: false)!,
+                      frameCapacity: Self.hop
+                  )
+            else { return .failure("오디오 버퍼를 만들 수 없습니다.") }
+
+            while framesRead < totalFrames {
+                if Task.isCancelled { return .failure("") }
+
+                do { try file.read(into: block, frameCount: blockFrames) }
+                catch { break }
+                let available = Int(block.frameLength)
+                guard available > 0, let source = block.floatChannelData else { break }
+                let channels = Int(block.format.channelCount)
+
+                var offset = 0
+                while offset < available {
+                    let count = min(Int(Self.hop), available - offset)
+                    guard let destination = mono.floatChannelData?[0] else { break }
+                    mono.frameLength = AVAudioFrameCount(count)
+
+                    // Downmix rather than taking the left channel.
+                    //
+                    // Reading channel 0 only discarded anything panned right,
+                    // which on a worship mix is regularly a guitar or a
+                    // keyboard — harmony the detector then never saw.
+                    if channels == 1 {
+                        memcpy(destination, source[0] + offset, count * MemoryLayout<Float>.size)
+                    } else {
+                        let scale = 1 / Float(channels)
+                        for i in 0 ..< count {
+                            var sum: Float = 0
+                            for c in 0 ..< channels { sum += source[c][offset + i] }
+                            destination[i] = sum * scale
+                        }
+                    }
+
+                    let position = TimeInterval(framesRead + AVAudioFramePosition(offset)) / sampleRate
+                    offset += count
+
+                    guard let pcp = chroma.process(buffer: mono) else { continue }
+                    keyEstimator.add(chroma: pcp)
+
+                    let bassResult = bass.process(buffer: mono)
+                    let similarities = detector.similarities(from: pcp)
+                    guard !similarities.isEmpty,
+                          var chord = hmm.step(similarities: similarities) else { continue }
+
+                    if let bassResult, bassResult.strength >= 0.70 {
+                        let tones = Self.pitchClasses(of: chord)
+                        if bassResult.pitchClass != chord.root,
+                           tones.contains(bassResult.pitchClass) {
+                            chord.bass = bassResult.pitchClass
+                        }
+                    }
+
+                    if chord != lastChord {
+                        lastChord = chord
+                        collected.append(SessionChord(chord: chord, timestamp: position))
+                    }
+                }
+
+                framesRead += AVAudioFramePosition(available)
+
+                // Driven by frames read, not by chord changes, so the bar
+                // moves through silence too.
+                sinceReport += available
+                if sinceReport >= Int(sampleRate * 2) {
+                    sinceReport = 0
+                    let done = Double(framesRead) / Double(totalFrames)
+                    let at = Double(framesRead) / sampleRate
+                    report(done, "코드 분석 중… \(Self.clock(at)) / \(Self.clock(duration))")
+                }
+            }
+
+            report(0.98, "정리 중…")
+            let collapsed = Self.collapseRuns(collected)
+            guard !collapsed.isEmpty else {
+                return .failure("코드를 찾지 못했습니다. 반주가 뚜렷한 구간이 있는 파일인지 확인해 주세요.")
+            }
+
+            return .success(Session(
+                title: title,
+                youTubeURL: nil,
+                detectedKey: keyEstimator.displayString(),
+                createdAt: Date(),
+                chords: collapsed
+            ))
+        }.value
+    }
+
+    nonisolated private static func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// Collapses consecutive readings that share a root into one chord.
@@ -144,7 +279,7 @@ final class AudioFileAnalyzer: ObservableObject {
     /// NOTE: quality selection is validated only against that synthetic case.
     /// On real recordings it may still pick an artefact's quality over the
     /// true one, which is why the lead sheet stays editable.
-    static func collapseRuns(_ items: [SessionChord],
+    nonisolated static func collapseRuns(_ items: [SessionChord],
                              minimumHold: TimeInterval = 0.8) -> [SessionChord] {
         guard items.count > 1 else { return items }
 
@@ -178,7 +313,7 @@ final class AudioFileAnalyzer: ObservableObject {
         return out.isEmpty ? items : out
     }
 
-    private static func pitchClasses(of chord: Chord) -> Set<Int> {
+    nonisolated private static func pitchClasses(of chord: Chord) -> Set<Int> {
         let intervals: [Int]
         switch chord.quality {
         case .major:      intervals = [0, 4, 7]

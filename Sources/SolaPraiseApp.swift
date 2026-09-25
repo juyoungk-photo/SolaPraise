@@ -42,6 +42,10 @@ struct SolaPraiseApp: App {
         }
     }()
 
+    /// App level on purpose: an analysis must survive the screen that
+    /// started it, so you can go and listen to something while it runs.
+    @StateObject private var analyzer = AudioFileAnalyzer()
+
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -60,6 +64,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(auth)
                 .environmentObject(quota)
                 .environmentObject(daily)
+                .environmentObject(analyzer)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)

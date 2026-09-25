@@ -242,10 +242,7 @@ struct ChannelSection: View {
     let onSelect: (CachedVideo) -> Void
     var onSelectPlaylist: ((CachedPlaylist) -> Void)? = nil
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private var columns: [GridItem] { FeedGrid.columns }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

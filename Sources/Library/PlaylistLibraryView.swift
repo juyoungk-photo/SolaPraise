@@ -31,7 +31,7 @@ struct PlaylistLibraryView: View {
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
     private var savedSongs: [SavedSong]
 
-    @StateObject private var analyzer = AudioFileAnalyzer()
+    @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @State private var showImporter = false
     @State private var analyzedSong: SavedSong?
 
@@ -68,7 +68,7 @@ struct PlaylistLibraryView: View {
                 allowsMultipleSelection: false
             ) { result in
                 guard case .success(let urls) = result, let url = urls.first else { return }
-                Task { await runAnalysis(on: url) }
+                runAnalysis(on: url)
             }
             .refreshable { await load() }
             .task { if state.value == nil { await load() } }
@@ -187,17 +187,11 @@ struct PlaylistLibraryView: View {
     }
 
     /// Analyses a user-owned audio file and stores the result as a lead sheet.
-    private func runAnalysis(on url: URL) async {
+    /// Hands the file to the app-level analyser and returns immediately. The
+    /// job outlives this screen, so switching tabs no longer cancels it.
+    private func runAnalysis(on url: URL) {
         let title = url.deletingPathExtension().lastPathComponent
-        guard let session = await analyzer.analyze(url: url, title: title) else { return }
-
-        let song = SavedSong(
-            session: session,
-            sections: SongStructure.detect(chords: session.chords)
-        )
-        modelContext.insert(song)
-        try? modelContext.save()
-        analyzedSong = song
+        analyzer.start(url: url, title: title, context: modelContext)
     }
 
     private func load() async {

@@ -20,7 +20,7 @@ struct SheetMusicView: View {
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
     private var songs: [SavedSong]
 
-    @StateObject private var analyzer = AudioFileAnalyzer()
+    @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
 
@@ -43,11 +43,25 @@ struct SheetMusicView: View {
                     Button {
                         showImporter = true
                     } label: {
-                        HStack {
-                            Label("오디오 파일에서 분석", systemImage: "waveform.badge.magnifyingglass")
-                            Spacer()
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Label("오디오 파일에서 분석", systemImage: "waveform.badge.magnifyingglass")
+                                Spacer()
+                                if analyzer.isAnalyzing {
+                                    Text("\(Int(analyzer.progress * 100))%")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                             if analyzer.isAnalyzing {
-                                ProgressView(value: analyzer.progress).frame(width: 60)
+                                ProgressView(value: analyzer.progress)
+                                HStack {
+                                    Text(analyzer.stage)
+                                    Spacer()
+                                    Button("취소") { analyzer.cancel() }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -130,20 +144,16 @@ struct SheetMusicView: View {
                 allowsMultipleSelection: false
             ) { result in
                 guard case .success(let urls) = result, let url = urls.first else { return }
-                Task { await analyze(url) }
+                analyze(url)
             }
         }
     }
 
-    private func analyze(_ url: URL) async {
+    /// Hands the file to the app-level analyser and returns immediately, so
+    /// the job survives leaving this screen — you can go and listen to
+    /// something while a long recording is worked through.
+    private func analyze(_ url: URL) {
         let title = url.deletingPathExtension().lastPathComponent
-        guard let session = await analyzer.analyze(url: url, title: title) else { return }
-        let song = SavedSong(
-            session: session,
-            sections: SongStructure.detect(chords: session.chords)
-        )
-        modelContext.insert(song)
-        try? modelContext.save()
-        openedSong = song
+        analyzer.start(url: url, title: title, context: modelContext)
     }
 }

@@ -41,6 +41,7 @@ struct HomeView: View {
     @State private var playlistError: String?
     @State private var showError = false
     @State private var showPsalmSheet = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
     @State private var attemptedPsalmChannels: Set<String> = []
@@ -54,6 +55,10 @@ struct HomeView: View {
     /// which left wide cards rendering narrow with holes beside them. So the
     /// rows are built by hand: a wide card takes a row to itself, narrow ones
     /// pair up.
+    /// Two across on a phone, four on an iPad. At two, an iPad card grew to
+    /// roughly 350pt and four tiles filled the screen.
+    private var narrowCardsPerRow: Int { sizeClass == .regular ? 4 : 2 }
+
     private var rows: [[HomeCard]] {
         var result: [[HomeCard]] = []
         var pending: [HomeCard] = []
@@ -67,7 +72,9 @@ struct HomeView: View {
                 result.append([card])
             } else {
                 pending.append(card)
-                if pending.count == 2 { result.append(pending); pending = [] }
+                if pending.count == narrowCardsPerRow {
+                    result.append(pending); pending = []
+                }
             }
         }
         if !pending.isEmpty { result.append(pending) }
@@ -132,8 +139,13 @@ struct HomeView: View {
                             }
                             // Keeps a lone narrow card at half width instead
                             // of stretching across the row.
-                            if row.count == 1 && !row[0].kind.isWide {
-                                Color.clear.frame(maxWidth: .infinity)
+                            // Pad a short final row so its cards keep the
+                            // width of a full one instead of stretching.
+                            if !row.contains(where: { $0.kind.isWide }),
+                               row.count < narrowCardsPerRow {
+                                ForEach(0 ..< (narrowCardsPerRow - row.count), id: \.self) { _ in
+                                    Color.clear.frame(maxWidth: .infinity)
+                                }
                             }
                         }
                     }

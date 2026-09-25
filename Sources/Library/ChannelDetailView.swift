@@ -36,10 +36,7 @@ struct ChannelDetailView: View {
         allPlaylists.filter { $0.channelId == channel.youtubeChannelId }
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private var columns: [GridItem] { FeedGrid.columns }
 
     var body: some View {
         ScrollView {
