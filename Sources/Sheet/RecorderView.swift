@@ -4,7 +4,8 @@
 //
 //  Recording the line input to a file.
 //
-//  Separate from 코드 감지 because the two jobs want different screens. Chord
+//  Recording only — the takes themselves live in 작업실. Separate from 코드
+//  감지 because the two jobs want different screens. Chord
 //  detection wants the chord huge and everything else small; a recording wants
 //  the level, the clock and the input route, and nothing else — you are
 //  glancing at it from behind an instrument, checking that it is still going.
@@ -21,11 +22,11 @@ struct RecorderView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
 
+    /// Told when a take lands, so 작업실 can refresh its list.
+    var onFinish: (() -> Void)?
+
     @StateObject private var detection = DetectionSession()
     @State private var title = ""
-    @State private var items: [Recordings.Item] = []
-    @State private var playing: URL?
-    @State private var player: AVAudioPlayer?
 
     private var audio: AudioEngine { detection.audio }
     private var isRecording: Bool { audio.isWritingFile }
@@ -92,75 +93,17 @@ struct RecorderView: View {
                 Text("입력 그대로, 32비트 부동소수점으로 저장합니다. 리샘플링도 압축도 없습니다. 분당 약 11MB.")
             }
 
-            if !items.isEmpty {
-                Section("녹음") {
-                    ForEach(items) { item in
-                        row(item)
-                    }
-                    .onDelete { offsets in
-                        for index in offsets where items.indices.contains(index) {
-                            if playing == items[index].url { stopPlayback() }
-                            Recordings.delete(items[index])
-                        }
-                        items = Recordings.all()
-                    }
-                }
-            }
         }
         .navigationTitle("녹음")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            items = Recordings.all()
             // Monitor only. Starting a recording and immediately stopping it
             // would not have worked: the engine comes up asynchronously, so
             // the stop lands before the writer exists and the writer is then
             // created anyway — recording without being asked.
             detection.startMonitoring()
         }
-        .onDisappear {
-            stopPlayback()
-            detection.stop()
-        }
-    }
-
-    // MARK: - Rows
-
-    private func row(_ item: Recordings.Item) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button { toggle(item) } label: {
-                    Image(systemName: playing == item.url ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.title).lineLimit(1)
-                    Text("\(item.durationLabel) · \(item.createdAt, format: .dateTime.month().day().hour().minute())")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-                ShareLink(item: item.url) {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
-
-            Button {
-                analyzer.start(url: item.url, title: item.title, context: modelContext)
-            } label: {
-                Label("코드 분석", systemImage: "waveform.badge.magnifyingglass")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(analyzer.isAnalyzing)
-        }
-        .padding(.vertical, 2)
+        .onDisappear { detection.stop() }
     }
 
     // MARK: - State
@@ -193,7 +136,6 @@ struct RecorderView: View {
     // MARK: - Actions
 
     private func start() {
-        stopPlayback()
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let url = Recordings.newFileURL(title: name)
         do {
@@ -206,23 +148,7 @@ struct RecorderView: View {
     private func stop() {
         audio.stopWriting()
         title = ""
-        items = Recordings.all()
+        onFinish?()
     }
 
-    private func toggle(_ item: Recordings.Item) {
-        if playing == item.url { stopPlayback(); return }
-        stopPlayback()
-        // Playback and capture share one session here, which is exactly what
-        // .playAndRecord is for — no need to tear the engine down to listen
-        // back to what was just recorded.
-        player = try? AVAudioPlayer(contentsOf: item.url)
-        player?.play()
-        playing = item.url
-    }
-
-    private func stopPlayback() {
-        player?.stop()
-        player = nil
-        playing = nil
-    }
 }

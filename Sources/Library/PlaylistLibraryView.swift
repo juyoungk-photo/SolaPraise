@@ -100,9 +100,9 @@ struct PlaylistLibraryView: View {
 
             Section {
                 NavigationLink {
-                    SheetMusicView()
+                    StudioView()
                 } label: {
-                    Label("코드 감지 · 악보 만들기", systemImage: "music.quarternote.3")
+                    Label("작업실 · 녹음과 악보", systemImage: "recordingtape")
                 }
 
                 ForEach(savedSongs.prefix(5)) { song in
@@ -135,7 +135,7 @@ struct PlaylistLibraryView: View {
                     }
                 }
             } header: {
-                Text("악보")
+                Text("작업실")
             } footer: {
                 Text("내가 가진 오디오 파일(예배 실황 녹음 등)에서 코드를 분석합니다. 유튜브 오디오는 분석할 수 없습니다.")
             }

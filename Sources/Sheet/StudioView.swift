@@ -1,20 +1,25 @@
 //
-//  SheetMusicView.swift
+//  StudioView.swift
 //  SolaPraise
 //
-//  악보 — the chord and lead-sheet workspace.
+//  작업실 — where audio becomes a chart.
 //
 //  Kept apart from the YouTube tabs on purpose: this is a working mode for a
-//  musician, not a consumption surface. It gets its own tab on iPad, where
-//  there is room to read a chart, and lives inside 보관함 on iPhone where the
-//  tab bar is already full.
+//  musician, not a consumption surface. Everything that starts from sound
+//  lives here — recording a line input, detecting live, analysing a file —
+//  along with what comes out of it: the recordings themselves and the sheets
+//  made from them.
+//
+//  It gets its own tab on iPad, where there is room to read a chart, and lives
+//  inside 보관함 on iPhone where the tab bar is already full.
 //
 
 import SwiftUI
+import AVFoundation
 import SwiftData
 import UniformTypeIdentifiers
 
-struct SheetMusicView: View {
+struct StudioView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
@@ -23,6 +28,9 @@ struct SheetMusicView: View {
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
+    @State private var recordings: [Recordings.Item] = []
+    @State private var playing: URL?
+    @State private var player: AVAudioPlayer?
 
     private struct PerformanceSet: Identifiable {
         let id = UUID()
@@ -41,7 +49,7 @@ struct SheetMusicView: View {
                     }
 
                     NavigationLink {
-                        RecorderView()
+                        RecorderView { recordings = Recordings.all() }
                     } label: {
                         Label("라인 입력 녹음", systemImage: "record.circle")
                     }
@@ -80,6 +88,25 @@ struct SheetMusicView: View {
                     Text("새로 만들기")
                 } footer: {
                     Text("라인 입력(오디오 인터페이스)이 가장 정확합니다. 유튜브 오디오는 분석할 수 없습니다.")
+                }
+
+                if !recordings.isEmpty {
+                    Section {
+                        ForEach(recordings) { item in
+                            recordingRow(item)
+                        }
+                        .onDelete { offsets in
+                            for index in offsets where recordings.indices.contains(index) {
+                                if playing == recordings[index].url { stopPlayback() }
+                                Recordings.delete(recordings[index])
+                            }
+                            recordings = Recordings.all()
+                        }
+                    } header: {
+                        Text("녹음")
+                    } footer: {
+                        Text("입력을 그대로 저장한 파일입니다. 다시 분석하면 실시간보다 촘촘한 창으로 읽으므로 결과가 더 정확합니다.")
+                    }
                 }
 
                 Section {
@@ -141,7 +168,12 @@ struct SheetMusicView: View {
                 PerformanceModeView(songs: set.songs)
             }
 
-            .navigationTitle("악보")
+            .task { recordings = Recordings.all() }
+            // A finished analysis can rename or consume a take, and the
+            // recorder hands back control here too.
+            .onChange(of: analyzer.isAnalyzing) { _, _ in recordings = Recordings.all() }
+            .onDisappear { stopPlayback() }
+            .navigationTitle("작업실")
             .navigationDestination(item: $openedSong) { song in
                 LeadSheetView(song: song)
             }
@@ -154,6 +186,61 @@ struct SheetMusicView: View {
                 analyze(url)
             }
         }
+    }
+
+    /// A take: play it back, turn it into a chart, share it out.
+    private func recordingRow(_ item: Recordings.Item) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { toggle(item) } label: {
+                    Image(systemName: playing == item.url
+                          ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title).lineLimit(1)
+                    Text("\(item.durationLabel) · \(item.createdAt, format: .dateTime.month().day().hour().minute())")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+
+                ShareLink(item: item.url) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            Button {
+                analyzer.start(url: item.url, title: item.title, context: modelContext)
+            } label: {
+                Label("코드 분석 · 악보 만들기", systemImage: "waveform.badge.magnifyingglass")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(analyzer.isAnalyzing)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func toggle(_ item: Recordings.Item) {
+        if playing == item.url { stopPlayback(); return }
+        stopPlayback()
+        player = try? AVAudioPlayer(contentsOf: item.url)
+        player?.play()
+        playing = item.url
+    }
+
+    private func stopPlayback() {
+        player?.stop()
+        player = nil
+        playing = nil
     }
 
     /// Hands the file to the app-level analyser and returns immediately, so

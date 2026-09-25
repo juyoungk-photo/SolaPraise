@@ -18,15 +18,16 @@ struct ContentView: View {
     @State private var selection: Tab = Tab.defaultForNow()
     @State private var showDailyGate = false
 
-    /// iPad gets 악보 as its own tab — there is room, and it is where a
-    /// musician would actually read a chart. iPhone keeps it inside 보관함
-    /// rather than pushing the tab bar to five items.
-    private var showsSheetTab: Bool {
+    /// iPad gets 작업실 as its own tab — there is room, it is where an
+    /// interface gets plugged in, and it is where a musician would actually
+    /// read a chart. iPhone keeps it inside 보관함 rather than pushing the tab
+    /// bar to five items.
+    private var showsStudioTab: Bool {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
     enum Tab: Hashable {
-        case home, worship, word, library, sheet
+        case home, worship, word, library, studio
 
         static func defaultForNow(_ date: Date = Date()) -> Tab {
             #if DEBUG
@@ -60,10 +61,10 @@ struct ContentView: View {
                 .tabItem { Label("보관함", systemImage: "list.bullet.rectangle") }
                 .tag(Tab.library)
 
-            if showsSheetTab {
-                SheetMusicView()
-                    .tabItem { Label("악보", systemImage: "music.quarternote.3") }
-                    .tag(Tab.sheet)
+            if showsStudioTab {
+                StudioView()
+                    .tabItem { Label("작업실", systemImage: "recordingtape") }
+                    .tag(Tab.studio)
             }
         }
         // A sidebar on iPad, not the floating tab bar iPadOS 18 puts at the
