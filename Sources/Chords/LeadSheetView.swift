@@ -25,6 +25,7 @@ struct LeadSheetView: View {
     @State private var useFlats = false
     @State private var pdf: ShareableFile?
     @State private var renaming: SongSection?
+    @State private var showPerformance = false
 
     var body: some View {
         List {
@@ -41,12 +42,21 @@ struct LeadSheetView: View {
         .sheet(item: $renaming) { section in
             RenameSectionSheet(song: song, section: section)
         }
+        .fullScreenCover(isPresented: $showPerformance) {
+            PerformanceModeView(songs: [song])
+        }
     }
 
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showPerformance = true } label: {
+                Image(systemName: "music.note.tv")
+            }
+            .accessibilityLabel("연주 모드")
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Menu("가사 찾기") {

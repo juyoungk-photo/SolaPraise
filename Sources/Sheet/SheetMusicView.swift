@@ -24,6 +24,12 @@ struct SheetMusicView: View {
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
 
+    private struct PerformanceSet: Identifiable {
+        let id = UUID()
+        let songs: [SavedSong]
+    }
+    @State private var performanceSet: PerformanceSet?
+
     var body: some View {
         NavigationStack {
             List {
@@ -56,7 +62,7 @@ struct SheetMusicView: View {
                     Text("라인 입력(오디오 인터페이스)이 가장 정확합니다. 유튜브 오디오는 분석할 수 없습니다.")
                 }
 
-                Section("내 악보") {
+                Section {
                     if songs.isEmpty {
                         Text("아직 악보가 없습니다.")
                             .font(.footnote)
@@ -69,7 +75,12 @@ struct SheetMusicView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(song.title).lineLimit(1)
                                 HStack(spacing: 6) {
-                                    if let key = song.detectedKey { Text(key) }
+                                    if let key = song.keyLabel {
+                                    Text(key)
+                                    if song.keyIsPublished {
+                                        Text("공식").foregroundStyle(.green)
+                                    }
+                                }
                                     Text("^[\(song.sections.count) section](inflect: true)")
                                     if song.hasLyrics { Text("· 가사") }
                                 }
@@ -77,12 +88,37 @@ struct SheetMusicView: View {
                                 .foregroundStyle(.secondary)
                             }
                         }
+                        .contextMenu {
+                            Button {
+                                performanceSet = PerformanceSet(songs: [song])
+                            } label: { Label("연주 모드", systemImage: "music.note.tv") }
+                        }
                     }
                     .onDelete { offsets in
                         for index in offsets { modelContext.delete(songs[index]) }
                         try? modelContext.save()
                     }
+                } header: {
+                    HStack {
+                        Text("내 악보")
+                        Spacer()
+                        if !songs.isEmpty {
+                            // The iPad-on-a-stand case: open everything as one
+                            // set and swipe between songs.
+                            Button {
+                                performanceSet = PerformanceSet(songs: songs)
+                            } label: {
+                                Label("연주 모드", systemImage: "music.note.tv")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+                    }
                 }
+            }
+            .fullScreenCover(item: $performanceSet) { set in
+                PerformanceModeView(songs: set.songs)
             }
             .navigationTitle("악보")
             .navigationDestination(item: $openedSong) { song in

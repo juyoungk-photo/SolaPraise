@@ -89,6 +89,13 @@ struct WatchScreen: View {
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var leadSheet: SavedSong?
+    /// A whole set handed to the music stand, identified so fullScreenCover
+    /// can key off it.
+    private struct PerformanceSet: Identifiable {
+        let id = UUID()
+        let songs: [SavedSong]
+    }
+    @State private var performanceSet: PerformanceSet?
     @Query private var channels: [Channel]
     @Query(sort: [SortDescriptor(\SavedSong.sourceStart)])
     private var allSongs: [SavedSong]
@@ -176,6 +183,9 @@ struct WatchScreen: View {
         .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
         .sheet(item: $leadSheet) { song in
             NavigationStack { LeadSheetView(song: song) }
+        }
+        .fullScreenCover(item: $performanceSet) { set in
+            PerformanceModeView(songs: set.songs)
         }
         .onAppear { loadWorshipSet() }
         .onChange(of: index) { _, _ in
@@ -549,9 +559,18 @@ struct WatchScreen: View {
 
     private var savedSheetsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("이 영상의 악보")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("이 영상의 악보")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { performanceSet = PerformanceSet(songs: sheetsForThisVideo) } label: {
+                    Label("연주 모드", systemImage: "music.note.tv")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
 
             ForEach(sheetsForThisVideo) { song in
                 Button { leadSheet = song } label: {
