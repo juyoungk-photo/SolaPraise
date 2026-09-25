@@ -78,6 +78,20 @@ struct LeadSheetView: View {
                 Text("Key")
                     .foregroundStyle(.secondary)
                 Text(transposedKey ?? "—").bold()
+                // The team's own key, where they published one. A microphone
+                // estimate is a guess at something they already stated.
+                if song.keyIsPublished {
+                    Text("공식")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.18), in: Capsule())
+                        .foregroundStyle(.green)
+                } else if song.detectedKey != nil {
+                    Text("감지됨")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Text(song.semitoneShift == 0
                      ? "원키"
@@ -197,15 +211,27 @@ struct LeadSheetView: View {
     private func save() { try? modelContext.save() }
 
     private var transposedKey: String? {
-        guard let raw = song.detectedKey else { return nil }
+        guard let raw = song.keyLabel else { return nil }
+        // A detected key reads "G major"; a published one is bare, "E" or
+        // "F#m". Both transpose, so the quality part is optional.
         let parts = raw.split(separator: " ")
-        guard parts.count == 2,
-              let root = Chord.sharpNames.firstIndex(of: String(parts[0]))
-                ?? Chord.flatNames.firstIndex(of: String(parts[0]))
+        guard let first = parts.first else { return raw }
+
+        var name = String(first)
+        var suffix = parts.count > 1 ? " " + parts.dropFirst().joined(separator: " ") : ""
+        // "Bbm" — the minor marker rides on the root when there is no space.
+        if parts.count == 1, name.count > 1, name.hasSuffix("m") {
+            name = String(name.dropLast())
+            suffix = "m"
+        }
+
+        guard let root = Chord.sharpNames.firstIndex(of: name)
+                ?? Chord.flatNames.firstIndex(of: name)
         else { return raw }
+
         let newRoot = ((root + song.semitoneShift) % 12 + 12) % 12
-        let name = (useFlats ? Chord.flatNames : Chord.sharpNames)[newRoot]
-        return "\(name) \(parts[1])"
+        let shifted = (useFlats ? Chord.flatNames : Chord.sharpNames)[newRoot]
+        return shifted + suffix
     }
 
     private enum SearchEngine { case naver, google }

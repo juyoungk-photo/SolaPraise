@@ -70,6 +70,7 @@ final class AudioEngine: ObservableObject {
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private var routeObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
 
     // Hardware buffer size in frames. 1024 @ 44.1kHz ≈ 23 ms latency.
     private let bufferSize: AVAudioFrameCount = 1024
@@ -197,6 +198,26 @@ final class AudioEngine: ObservableObject {
         if outputs.contains(where: { $0.portType == .builtInReceiver }) {
             try? session.overrideOutputAudioPort(.speaker)
         }
+
+        preferLineInput(session)
+    }
+
+    /// Asks for the interface rather than the built-in microphone.
+    ///
+    /// With a Scarlett connected, `availableInputs` holds both it and the
+    /// phone's own mic, and iOS does not always choose the interface. Leaving
+    /// it to chance means the app can play through the interface while
+    /// listening to the room — the one combination that guarantees a useless
+    /// signal. Asking explicitly costs nothing when there is nothing to pick.
+    private func preferLineInput(_ session: AVAudioSession) {
+        guard let inputs = session.availableInputs, inputs.count > 1 else { return }
+        let preferredOrder: [AVAudioSession.Port] = [.usbAudio, .lineIn, .headsetMic]
+        for portType in preferredOrder {
+            if let port = inputs.first(where: { $0.portType == portType }) {
+                try? session.setPreferredInput(port)
+                return
+            }
+        }
     }
 
     // MARK: - Start / Stop
@@ -205,6 +226,7 @@ final class AudioEngine: ObservableObject {
         guard !engineStarted else { return }
         try configureSession()
         observeRouteChanges()
+        observeInterruptions()
 
         let input = engine.inputNode
         let nativeFormat = input.inputFormat(forBus: 0)
@@ -250,6 +272,10 @@ final class AudioEngine: ObservableObject {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
         }
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         DispatchQueue.main.async { self.isRunning = false }
@@ -258,6 +284,36 @@ final class AudioEngine: ObservableObject {
     /// A tap is installed with the input's format at that moment, so plugging
     /// in a USB interface mid-session leaves it reading a format the hardware
     /// no longer produces. Restarting is the only reliable fix.
+    /// A phone call, Siri, or another app taking the session stops capture.
+    ///
+    /// Without this the engine stayed nominally running through an
+    /// interruption and came back to a session it no longer owned, producing
+    /// silence that looked like a detection failure.
+    private func observeInterruptions() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw)
+            else { return }
+            switch type {
+            case .began:
+                self.stop()
+            case .ended:
+                // Deliberately not auto-resuming: detection is tied to a
+                // playing video, and restarting into a paused player would
+                // file silence as chords.
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
     private func observeRouteChanges() {
         guard routeObserver == nil else { return }
         routeObserver = NotificationCenter.default.addObserver(

@@ -90,6 +90,8 @@ struct WatchScreen: View {
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var leadSheet: SavedSong?
     @Query private var channels: [Channel]
+    @Query(sort: [SortDescriptor(\SavedSong.sourceStart)])
+    private var allSongs: [SavedSong]
     @StateObject private var player = PlayerCoordinator()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -506,6 +508,10 @@ struct WatchScreen: View {
                 ScripturePanel(chapter: psalm)
             }
 
+            if !sheetsForThisVideo.isEmpty {
+                savedSheetsList
+            }
+
             if !worshipSet.isEmpty {
                 worshipSetList
             }
@@ -526,6 +532,75 @@ struct WatchScreen: View {
         case 10_000...:      return String(format: "%.0f만", Double(n) / 10_000)
         case 1_000...:       return String(format: "%.1f천", Double(n) / 1_000)
         default:             return "\(n)"
+        }
+    }
+
+    // MARK: - Sheets already made from this video
+
+    /// Charts this video has already produced.
+    ///
+    /// Without this a detection run vanished into 악보 and the video had no
+    /// memory of it, so the only way to tell whether a set had been analysed
+    /// was to analyse it again.
+    private var sheetsForThisVideo: [SavedSong] {
+        guard let id = current?.id else { return [] }
+        return allSongs.filter { $0.videoId == id }
+    }
+
+    private var savedSheetsList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("이 영상의 악보")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(sheetsForThisVideo) { song in
+                Button { leadSheet = song } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "music.quarternote.3")
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(song.title)
+                                .font(.footnote)
+                                .lineLimit(1)
+                                .foregroundStyle(Color.primary)
+                            HStack(spacing: 5) {
+                                if let key = song.keyLabel {
+                                    Text(key)
+                                    if song.keyIsPublished {
+                                        Text("공식").foregroundStyle(.green)
+                                    }
+                                }
+                                if song.hasLyrics { Text("· 가사") }
+                                Text("· ^[\(song.chords.count) chord](inflect: true)")
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if song.sourceStart > 0 {
+                            Button {
+                                player.seek(to: song.sourceStart)
+                                player.play()
+                            } label: {
+                                Image(systemName: "arrow.turn.down.right")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -744,18 +819,75 @@ struct WatchScreen: View {
         detection.stop()
         guard !detection.history.isEmpty else { return }
 
-        let session = detection.buildSession(
-            title: current?.title ?? "Untitled",
-            url: current.flatMap { YouTubeID.watchURL($0.id) }
-        )
-        let song = SavedSong(
-            session: session,
-            sections: SongStructure.detect(chords: session.chords),
-            videoId: current?.id
-        )
-        modelContext.insert(song)
+        let songs = buildSongs()
+        guard !songs.isEmpty else { return }
+        for song in songs { modelContext.insert(song) }
         try? modelContext.save()
-        if showSheet { leadSheet = song }
+        if showSheet { leadSheet = songs.first }
+    }
+
+    /// One sheet per song, not one sheet per video.
+    ///
+    /// A 찬양 upload is usually a forty-minute set of five songs, and a single
+    /// chart spanning all of them is not a chart of anything. The channel
+    /// publishes the boundaries itself — start time, title, and very often the
+    /// key the team actually played in — so a run is sliced along them.
+    ///
+    /// This only became possible once chord timestamps came from the video's
+    /// position rather than the wall clock: the set list's times and the
+    /// detection's times are now the same clock.
+    private func buildSongs() -> [SavedSong] {
+        let history = detection.history.sorted { $0.timestamp < $1.timestamp }
+        let url = current.flatMap { YouTubeID.watchURL($0.id) }
+
+        guard worshipSet.count > 1 else {
+            let session = Session(
+                title: current?.title ?? "Untitled",
+                youTubeURL: url,
+                detectedKey: detection.detectedKey,
+                createdAt: Date(),
+                chords: history.map { SessionChord(chord: $0.chord, timestamp: $0.timestamp) }
+            )
+            return [SavedSong(
+                session: session,
+                sections: SongStructure.detect(chords: session.chords),
+                videoId: current?.id,
+                publishedKey: worshipSet.first?.key
+            )]
+        }
+
+        var result: [SavedSong] = []
+        for (index, item) in worshipSet.enumerated() {
+            let end = index + 1 < worshipSet.count
+                ? worshipSet[index + 1].start
+                : TimeInterval.greatestFiniteMagnitude
+
+            // Rebased to the song's own start, so its chart reads from 0:00
+            // rather than from 24 minutes into someone else's set.
+            let chords = history
+                .filter { $0.timestamp >= item.start && $0.timestamp < end }
+                .map { SessionChord(chord: $0.chord, timestamp: $0.timestamp - item.start) }
+
+            // A handful of readings is a transition or a spoken introduction,
+            // not a song worth filing.
+            guard chords.count >= 4 else { continue }
+
+            let session = Session(
+                title: item.title,
+                youTubeURL: url,
+                detectedKey: detection.detectedKey,
+                createdAt: Date(),
+                chords: chords
+            )
+            result.append(SavedSong(
+                session: session,
+                sections: SongStructure.detect(chords: chords),
+                videoId: current?.id,
+                publishedKey: item.key,
+                sourceStart: item.start
+            ))
+        }
+        return result
     }
 
     // MARK: - Actions
