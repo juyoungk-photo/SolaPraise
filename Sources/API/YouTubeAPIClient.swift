@@ -106,13 +106,29 @@ final class YouTubeAPIClient {
         comps.queryItems = query
         guard let url = comps.url else { throw APIError.transport(URLError(.badURL)) }
 
-        let token: String
-        do { token = try await auth.accessToken() }
-        catch { throw APIError.notSignedIn }
-
+        // Signed in? Use the account. Otherwise fall back to the app's own
+        // key, which is enough for everything public — feeds, search,
+        // playlists by id, video metadata.
+        //
+        // Writes are different: a key cannot create or modify anything, and
+        // there is no account to modify it on behalf of. Those still require
+        // sign-in, which on a worship team is the one or two people who
+        // curate rather than everyone who listens.
         var req = URLRequest(url: url)
+        var authorized = false
+
+        if auth.isSignedIn, let token = try? await auth.accessToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            authorized = true
+        } else if cost != .write, let key = AppSecrets.youtubeAPIKey {
+            comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "key", value: key)]
+            guard let keyed = comps.url else { throw APIError.transport(URLError(.badURL)) }
+            req.url = keyed
+            authorized = true
+        }
+        guard authorized else { throw APIError.notSignedIn }
+
         req.httpMethod = method
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if let body {

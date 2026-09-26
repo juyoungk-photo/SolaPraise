@@ -61,7 +61,9 @@ struct SignInView: View {
                 }
                 .font(.subheadline)
 
-                Text("시편과 말씀 피드는 로그인 없이 바로 쓸 수 있습니다.\n플레이리스트와 검색에만 Google 계정이 필요합니다.")
+                Text(AppSecrets.hasYouTubeAPIKey
+                     ? "찬양·말씀 피드, 검색, 시편과 성경 읽기, 코드 감지까지 로그인 없이 쓸 수 있습니다.\n내 재생목록을 보거나 편집할 때만 Google 계정이 필요합니다."
+                     : "시편과 말씀 읽기는 로그인 없이 바로 쓸 수 있습니다.\n영상과 재생목록에는 Google 계정이 필요합니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

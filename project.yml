@@ -20,6 +20,10 @@ packages:
     url: https://github.com/google/GoogleSignIn-iOS
     from: "7.1.0"
 
+configFiles:
+  Debug: Secrets.xcconfig
+  Release: Secrets.xcconfig
+
 targets:
   SolaPraise:
     type: application
