@@ -451,8 +451,30 @@ struct WatchScreen: View {
                 worshipSetList
             }
 
-            if !sheetLinks.isEmpty {
-                sheetMusicRow
+            // Always offered on 찬양, not only when the channel happened to
+            // publish a link. Most worship uploads publish none, so the
+            // official chart — which usually exists and is sold by the team
+            // that wrote the song — was invisible almost every time.
+            if showsChordButton, let current {
+                SheetMusicMenu(title: current.title, published: sheetLinks) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                        Text(sheetLinks.isEmpty ? "공식 악보 찾기" : "공식 악보")
+                            .font(.subheadline)
+                        if !sheetLinks.isEmpty {
+                            Text("\(sheetLinks.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(.secondarySystemBackground),
+                                in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

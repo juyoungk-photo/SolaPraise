@@ -281,6 +281,11 @@ struct ServicePrepView: View {
 
             Spacer(minLength: 0)
 
+            SheetMusicMenu(title: song.title) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .foregroundStyle(.secondary)
+            }
+
             if let id = song.videoId {
                 Button {
                     host.play(queue: [PlayableVideo(id: id, title: song.title)], startIndex: 0)

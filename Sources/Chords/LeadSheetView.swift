@@ -121,6 +121,10 @@ struct LeadSheetView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                SheetMusicMenu(title: song.title) {
+                    Label("공식 악보 찾기", systemImage: "doc.text.magnifyingglass")
+                }
+
                 Menu("가사 찾기") {
                     Button("네이버에서 검색") { search(on: .naver) }
                     Button("구글에서 검색") { search(on: .google) }
