@@ -18,6 +18,7 @@ struct PlaylistDetailView: View {
     @EnvironmentObject private var host: PlayerHost
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.openURL) private var openURL
 
     @State private var items: [YTPlaylistItem] = []
     @State private var durations: [String: Int] = [:]
