@@ -357,7 +357,7 @@ struct SettingsView: View {
     // MARK: - Account
 
     private var accountSection: some View {
-        Section("Account") {
+        Section {
             HStack(spacing: 12) {
                 if let url = auth.avatarURL {
                     AsyncImage(url: url) { image in
@@ -384,10 +384,27 @@ struct SettingsView: View {
             }
             .padding(.vertical, 2)
 
-            Button("Sign out", role: .destructive) {
-                auth.signOut()
-                dismiss()
+            if auth.isSignedIn {
+                Button("Sign out", role: .destructive) {
+                    auth.signOut()
+                    dismiss()
+                }
+            } else {
+                // Browsing without an account is a starting point, not a
+                // one-way door: the playlist half of the app is still here
+                // and signing in is what turns it on.
+                Button {
+                    Task { await auth.signIn() }
+                } label: {
+                    Label("Google 계정으로 로그인", systemImage: "person.crop.circle.badge.plus")
+                }
             }
+        } header: {
+            Text("계정")
+        } footer: {
+            Text(auth.isSignedIn
+                 ? "내 재생목록을 보고, 곡을 추가하고, 순서를 바꿀 수 있습니다."
+                 : "로그인하면 내 YouTube 재생목록을 이 앱에서 보고 편집할 수 있습니다. 나머지 기능은 로그인 없이도 그대로 동작합니다.")
         }
     }
 
