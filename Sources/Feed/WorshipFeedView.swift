@@ -23,6 +23,7 @@ struct WorshipFeedView: View {
         return 6
     }
 
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -50,7 +51,6 @@ struct WorshipFeedView: View {
     @State private var searchError: String?
     @State private var showSettings = false
     @State private var showAddTopic = false
-    @State private var playRequest: FeedPlayRequest?
     @State private var addTarget: PlayableVideo?
     @State private var genre: WorshipGenre = .all
     /// videoId → (duration, views), filled by one videos.list after a search.
@@ -88,9 +88,6 @@ struct WorshipFeedView: View {
                 .sheet(isPresented: $showAddTopic) { AddTopicSheet() }
                 .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(purpose: .worship) }
                 .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
-                .fullScreenCover(item: $playRequest) { request in
-                    WatchScreen(queue: request.queue, startIndex: request.startIndex)
-                }
                 .refreshable { await refresh() }
                 .task { await refreshIfNeeded() }
         }
@@ -340,16 +337,13 @@ struct WorshipFeedView: View {
                 RemoteResultSection(results: remoteResults, detail: resultDetail) { result in
                     guard let id = result.videoId else { return }
                     let info = resultDetail[id]
-                    playRequest = FeedPlayRequest(
-                        queue: [PlayableVideo(
+                    host.play(queue: [PlayableVideo(
                             id: id, title: result.title,
                             channelTitle: result.snippet?.channelTitle,
                             durationSeconds: info?.0,
                             publishedAt: result.snippet?.publishedAt,
                             viewCount: info?.1
-                        )],
-                        startIndex: 0
-                    )
+                        )], startIndex: 0)
                 } onAdd: { result in
                     guard let id = result.videoId else { return }
                     let info = resultDetail[id]
@@ -447,7 +441,7 @@ struct WorshipFeedView: View {
                 : "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
-        playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
+        host.play(queue: queue, startIndex: 0)
     }
 
     /// The browse feed: every worship video the cache holds, newest first,
@@ -499,7 +493,7 @@ struct WorshipFeedView: View {
     private func play(_ video: CachedVideo, in section: [CachedVideo]) {
         let queue = section.map(playable)
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
-        playRequest = FeedPlayRequest(queue: queue, startIndex: start)
+        host.play(queue: queue, startIndex: start)
     }
 
     private func runRemoteSearch() async {

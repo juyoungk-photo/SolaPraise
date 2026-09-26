@@ -14,6 +14,7 @@ import SwiftUI
 import SwiftData
 
 struct HomeSearchSheet: View {
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -29,7 +30,6 @@ struct HomeSearchSheet: View {
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var errorMessage: String?
-    @State private var playRequest: FeedPlayRequest?
     @FocusState private var fieldFocused: Bool
     @StateObject private var history = SearchHistory.shared("home")
 
@@ -52,9 +52,6 @@ struct HomeSearchSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("닫기") { dismiss() }
                 }
-            }
-            .fullScreenCover(item: $playRequest) { request in
-                WatchScreen(queue: request.queue, startIndex: request.startIndex)
             }
             // A brief hop gives the sheet time to present before the keyboard
             // is requested; focusing synchronously is unreliable here.
@@ -198,20 +195,14 @@ struct HomeSearchSheet: View {
     }
 
     private func play(_ video: CachedVideo) {
-        playRequest = FeedPlayRequest(
-            queue: [PlayableVideo(cached: video)],
-            startIndex: 0
-        )
+        host.play(queue: [PlayableVideo(cached: video)], startIndex: 0)
     }
 
     private func play(_ result: YTSearchResult) {
         guard let id = result.videoId else { return }
-        playRequest = FeedPlayRequest(
-            queue: [PlayableVideo(id: id, title: result.title,
+        host.play(queue: [PlayableVideo(id: id, title: result.title,
                                   channelTitle: result.snippet?.channelTitle,
-                                  publishedAt: result.snippet?.publishedAt)],
-            startIndex: 0
-        )
+                                  publishedAt: result.snippet?.publishedAt)], startIndex: 0)
     }
 
     private func runRemoteSearch() async {

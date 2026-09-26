@@ -14,6 +14,7 @@ import SwiftData
 
 struct ContentView: View {
     @EnvironmentObject private var daily: DailyReading
+    @EnvironmentObject private var playerHost: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @State private var selection: Tab = Tab.defaultForNow()
     @State private var showDailyGate = false
@@ -66,6 +67,15 @@ struct ContentView: View {
                     .tabItem { Label("작업실", systemImage: "recordingtape") }
                     .tag(Tab.studio)
             }
+        }
+        // The player lives here, above the tabs, so a song keeps playing while
+        // you move between them.
+        .safeAreaInset(edge: .bottom) { MiniPlayerBar(host: playerHost) }
+        .fullScreenCover(isPresented: Binding(
+            get: { playerHost.mode == .full },
+            set: { if !$0 && playerHost.mode == .full { playerHost.minimize() } }
+        )) {
+            WatchScreen()
         }
         // The once-a-day gate: today's psalm comes up before anything else,
         // and only once — dismissing it leaves the normal tabs alone.

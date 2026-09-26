@@ -15,6 +15,7 @@ import SwiftData
 struct ChannelDetailView: View {
     let channel: Channel
 
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -24,8 +25,6 @@ struct ChannelDetailView: View {
     private var allVideos: [CachedVideo]
 
     @Query private var allPlaylists: [CachedPlaylist]
-
-    @State private var playRequest: FeedPlayRequest?
     @State private var isLoadingPlaylist = false
     @State private var errorMessage: String?
 
@@ -82,9 +81,6 @@ struct ChannelDetailView: View {
         }
         .navigationTitle(channel.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(item: $playRequest) { request in
-            WatchScreen(queue: request.queue, startIndex: request.startIndex)
-        }
         .refreshable { await refresh() }
         .task { if videos.isEmpty { await refresh() } }
     }
@@ -142,7 +138,7 @@ struct ChannelDetailView: View {
             PlayableVideo(cached: $0)
         }
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
-        playRequest = FeedPlayRequest(queue: Array(queue), startIndex: start)
+        host.play(queue: Array(queue), startIndex: start)
     }
 
     private func play(_ playlist: CachedPlaylist) async {
@@ -165,7 +161,7 @@ struct ChannelDetailView: View {
                 errorMessage = "재생할 수 있는 영상이 없습니다."
                 return
             }
-            playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
+            host.play(queue: queue, startIndex: 0)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

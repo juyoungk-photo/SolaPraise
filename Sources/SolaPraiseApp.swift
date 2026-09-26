@@ -46,6 +46,9 @@ struct SolaPraiseApp: App {
     /// started it, so you can go and listen to something while it runs.
     @StateObject private var analyzer = AudioFileAnalyzer()
 
+    /// App level so a song survives leaving the screen that started it.
+    @StateObject private var playerHost = PlayerHost()
+
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -65,6 +68,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(quota)
                 .environmentObject(daily)
                 .environmentObject(analyzer)
+                .environmentObject(playerHost)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
@@ -96,7 +100,12 @@ struct SolaPraiseApp: App {
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
         } else if let debugId = DebugHarness.videoId {
-            WatchScreen(video: PlayableVideo(id: debugId, title: "Debug playback"))
+            WatchScreen()
+                .task {
+                    playerHost.play(queue: [
+                        PlayableVideo(id: debugId, title: "Debug playback")
+                    ])
+                }
         } else if DebugHarness.bypassAuth {
             DebugSeedContainer()
         } else {

@@ -70,7 +70,81 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// backwards must not shrink what we recorded as watched.
     private(set) var maxTimeReached: Double = 0
 
-    weak var webView: WKWebView?
+    /// Owned, not borrowed.
+    ///
+    /// The web view used to be created by FocusPlayerView and referenced
+    /// weakly here, which meant it died with whatever screen was showing it —
+    /// fine while the player only ever existed full-screen, and fatal for a
+    /// mini player, where moving between presentations would tear the document
+    /// down and restart the song. The coordinator builds it once and hands the
+    /// same instance to whoever is displaying it.
+    private(set) var webView: WKWebView?
+
+    /// What the live player currently holds, so a re-render does not reload.
+    private var loadedVideoId: String?
+    private var pendingAutoplay = true
+    private var hasRetriedLoad = false
+
+    /// Builds the player document, or returns the one already running.
+    func hostedWebView() -> WKWebView {
+        if let webView { return webView }
+
+        let controller = WKUserContentController()
+        controller.add(self, name: Self.messageName)
+
+        let config = WKWebViewConfiguration()
+        config.userContentController = controller
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.scrollView.isScrollEnabled = false
+        web.scrollView.bounces = false
+        web.isOpaque = false
+        web.backgroundColor = .black
+        web.scrollView.backgroundColor = .black
+        web.navigationDelegate = self
+
+        webView = web
+        return web
+    }
+
+    /// Shows `videoId`, swapping it inside the live player when one is already
+    /// running rather than reloading the document.
+    func present(videoId: String, autoplay: Bool) {
+        pendingAutoplay = autoplay
+        guard loadedVideoId != videoId else { return }
+        let isFirst = loadedVideoId == nil
+        loadedVideoId = videoId
+        hasRetriedLoad = false
+
+        if isFirst {
+            serve(videoId: videoId)
+        } else {
+            load(videoId: videoId)
+        }
+    }
+
+    private func serve(videoId: String) {
+        guard let webView else { return }
+        // Serve over loopback HTTP so the frame has a real origin AND sends a
+        // Referer. See LocalPlayerServer for why neither
+        // loadHTMLString(baseURL:) nor loadSimulatedRequest is enough.
+        if let port = LocalPlayerServer.shared.start(),
+           let url = URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(pendingAutoplay ? 1 : 0)") {
+            webView.load(URLRequest(url: url))
+        } else {
+            loadFallback(videoId: videoId)
+        }
+    }
+
+    private func loadFallback(videoId: String) {
+        guard let webView else { return }
+        webView.loadSimulatedRequest(
+            URLRequest(url: URL(string: "https://www.youtube.com/embed")!),
+            responseHTML: FocusPlayerView.html(videoId: videoId, autoplay: pendingAutoplay)
+        )
+    }
 
     // MARK: - Commands
 
@@ -124,6 +198,39 @@ final class PlayerCoordinator: NSObject, ObservableObject {
             .removeScriptMessageHandler(forName: Self.messageName)
         webView?.stopLoading()
         webView = nil
+        loadedVideoId = nil
+        state = .unstarted
+        isReady = false
+        didEnd = false
+        currentTime = 0
+        duration = 0
+        errorMessage = nil
+        isEmbedBlocked = false
+    }
+}
+
+// MARK: - Navigation
+
+extension PlayerCoordinator: WKNavigationDelegate {
+
+    /// A refused connection to the loopback port produces no error page, just
+    /// a black view — which is what a stale port looked like. Rebuild the
+    /// server once and retry before falling back.
+    nonisolated func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        Task { @MainActor in
+            guard let videoId = self.loadedVideoId else { return }
+            guard !self.hasRetriedLoad else {
+                self.loadFallback(videoId: videoId)
+                return
+            }
+            self.hasRetriedLoad = true
+            LocalPlayerServer.shared.stop()
+            self.serve(videoId: videoId)
+        }
     }
 }
 

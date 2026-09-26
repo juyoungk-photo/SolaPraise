@@ -15,6 +15,7 @@ import SwiftData
 struct HomeView: View {
     @Binding var selection: ContentView.Tab
 
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -35,7 +36,6 @@ struct HomeView: View {
     @State private var searchQuery = ""
     @State private var showReading = false
     @State private var isEditing = false
-    @State private var playRequest: FeedPlayRequest?
     @State private var showSearch = false
     @State private var isLoadingPlaylist = false
     @State private var playlistError: String?
@@ -226,9 +226,6 @@ struct HomeView: View {
             }
             .fullScreenCover(isPresented: $showReading) {
                 ReadingView { showReading = false }
-            }
-            .fullScreenCover(item: $playRequest) { request in
-                WatchScreen(queue: request.queue, startIndex: request.startIndex)
             }
             .refreshable { await refreshFeeds() }
             .task {
@@ -465,10 +462,7 @@ struct HomeView: View {
                 selection = .word
                 return
             }
-            playRequest = FeedPlayRequest(
-                queue: [PlayableVideo(cached: video)],
-                startIndex: 0
-            )
+            host.play(queue: [PlayableVideo(cached: video)], startIndex: 0)
 
         case .psalmAudio:
             // Always open the sheet: it reports its own state, so a tap can
@@ -477,10 +471,7 @@ struct HomeView: View {
                 showPsalmSheet = true
                 return
             }
-            playRequest = FeedPlayRequest(
-                queue: [PlayableVideo(cached: video)],
-                startIndex: 0
-            )
+            host.play(queue: [PlayableVideo(cached: video)], startIndex: 0)
 
         case .playlist:
             guard let playlistId = card.targetId else { selection = .library; return }
@@ -488,10 +479,7 @@ struct HomeView: View {
 
         case .video:
             guard let videoId = card.targetId else { return }
-            playRequest = FeedPlayRequest(
-                queue: [PlayableVideo(id: videoId, title: card.title)],
-                startIndex: 0
-            )
+            host.play(queue: [PlayableVideo(id: videoId, title: card.title)], startIndex: 0)
 
         case .topic:
             // Opens search pre-filled but does NOT spend a search: the cached
@@ -529,7 +517,7 @@ struct HomeView: View {
                 playlistError = "\(title): 재생할 수 있는 곡이 없습니다."
                 return
             }
-            playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
+            host.play(queue: queue, startIndex: 0)
         } catch {
             playlistError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

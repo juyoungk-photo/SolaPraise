@@ -77,9 +77,14 @@ struct PlayableVideo: Identifiable, Hashable {
 // MARK: - Screen
 
 struct WatchScreen: View {
-    let queue: [PlayableVideo]
+    @EnvironmentObject private var host: PlayerHost
 
-    @State private var index: Int
+    /// All of these read through the host, so the screen is a view onto a
+    /// player that outlives it rather than the thing that owns it.
+    private var queue: [PlayableVideo] { host.queue }
+    private var index: Int { host.index }
+    private var player: PlayerCoordinator { host.coordinator }
+
     @State private var addTarget: PlayableVideo?
     @StateObject private var detection = DetectionSession()
     @EnvironmentObject private var auth: GoogleAuthManager
@@ -102,19 +107,9 @@ struct WatchScreen: View {
     @Query private var channels: [Channel]
     @Query(sort: [SortDescriptor(\SavedSong.sourceStart)])
     private var allSongs: [SavedSong]
-    @StateObject private var player = PlayerCoordinator()
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
-    init(queue: [PlayableVideo], startIndex: Int = 0) {
-        self.queue = queue
-        _index = State(initialValue: max(0, min(startIndex, queue.count - 1)))
-    }
-
-    init(video: PlayableVideo) {
-        self.init(queue: [video], startIndex: 0)
-    }
 
     private var current: PlayableVideo? {
         queue.indices.contains(index) ? queue[index] : nil
@@ -143,8 +138,16 @@ struct WatchScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { host.minimize() }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .accessibilityLabel("작게 보기")
+                }
+                ToolbarItem(placement: .topBarLeading) {
                     Button { finishAndClose() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
+                        .accessibilityLabel("닫기")
                 }
                 ToolbarItem(placement: .principal) {
                     if isPlaylist {
@@ -174,7 +177,7 @@ struct WatchScreen: View {
             guard ended else { return }
             logWatch(completed: true)
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
-            if SolaPraiseConfig.endBehavior == .dismiss { dismiss() }
+            if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
         }
         .onChange(of: player.isReady) { _, ready in
             #if DEBUG
@@ -206,8 +209,9 @@ struct WatchScreen: View {
             finishDetection(showSheet: false)
             loadWorshipSet()
         }
+        // No detach here: leaving this screen for the mini player must not
+        // tear the player down. Teardown belongs to host.close().
         .onDisappear {
-            player.detach()
             detection.stop()
             startedEngineForRecording = false
         }
@@ -236,6 +240,15 @@ struct WatchScreen: View {
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .animation(.easeOut(duration: 0.15), value: player.didEnd)
+        // Drag the player down to dock it and keep listening while you browse.
+        .gesture(
+            DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    guard value.translation.height > 70,
+                          abs(value.translation.width) < 120 else { return }
+                    withAnimation(.easeOut(duration: 0.22)) { host.minimize() }
+                }
+        )
     }
 
     private var endCard: some View {
@@ -395,7 +408,7 @@ struct WatchScreen: View {
     private func jump(to position: Int) {
         guard queue.indices.contains(position), position != index else { return }
         logWatch(completed: false)
-        index = position
+        host.index = position
         player.load(videoId: queue[position].id)
     }
 
@@ -972,7 +985,7 @@ struct WatchScreen: View {
         logWatch(completed: delta > 0 && player.didEnd)
         let target = index + delta
         guard queue.indices.contains(target) else { return }
-        index = target
+        host.index = target
         if let next = current {
             player.load(videoId: next.id)
         }
@@ -980,7 +993,7 @@ struct WatchScreen: View {
 
     private func finishAndClose() {
         logWatch(completed: player.didEnd)
-        dismiss()
+        host.close()
     }
 
     // MARK: - Watch log

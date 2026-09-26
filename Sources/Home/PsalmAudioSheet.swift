@@ -13,6 +13,7 @@ import SwiftUI
 import SwiftData
 
 struct PsalmAudioSheet: View {
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var auth: GoogleAuthManager
@@ -33,7 +34,6 @@ struct PsalmAudioSheet: View {
     @State private var downloaded = ""
     @State private var note: String?
     @State private var isWorking = false
-    @State private var playRequest: FeedPlayRequest?
     @State private var autoTask: Task<Void, Never>?
 
     private var match: CachedVideo? {
@@ -55,9 +55,6 @@ struct PsalmAudioSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("닫기") { dismiss() }
                 }
-            }
-            .fullScreenCover(item: $playRequest) { request in
-                WatchScreen(queue: request.queue, startIndex: request.startIndex)
             }
             .task {
                 if chapter == 1 { chapter = daily.chapter }
@@ -124,10 +121,7 @@ struct PsalmAudioSheet: View {
     private func foundSection(_ video: CachedVideo) -> some View {
         Section {
             Button {
-                playRequest = FeedPlayRequest(
-                    queue: [PlayableVideo(cached: video)],
-                    startIndex: 0
-                )
+                host.play(queue: [PlayableVideo(cached: video)], startIndex: 0)
             } label: {
                 HStack(spacing: 10) {
                     VideoMetaRow(video: PlayableVideo(cached: video))

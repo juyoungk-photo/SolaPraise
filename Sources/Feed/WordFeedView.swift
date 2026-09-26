@@ -23,6 +23,7 @@ struct WordFeedView: View {
         return 4
     }
 
+    @EnvironmentObject private var host: PlayerHost
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -46,7 +47,6 @@ struct WordFeedView: View {
 
     @State private var showSettings = false
     @State private var showAddChannel = false
-    @State private var playRequest: FeedPlayRequest?
     @State private var isLoadingPlaylist = false
     @State private var playlistError: String?
 
@@ -71,9 +71,6 @@ struct WordFeedView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showAddChannel) { AddChannelView(defaultPurpose: .word) }
-            .fullScreenCover(item: $playRequest) { request in
-                WatchScreen(queue: request.queue, startIndex: request.startIndex)
-            }
             .refreshable { await refresh() }
             .task {
                 #if DEBUG
@@ -213,7 +210,7 @@ struct WordFeedView: View {
                 playlistError = "\(playlist.title): 재생할 수 있는 영상이 없습니다."
                 return
             }
-            playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
+            host.play(queue: queue, startIndex: 0)
         } catch {
             playlistError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -224,7 +221,7 @@ struct WordFeedView: View {
             PlayableVideo(cached: $0)
         }
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
-        playRequest = FeedPlayRequest(queue: queue, startIndex: start)
+        host.play(queue: queue, startIndex: start)
     }
 
     private func refresh() async {
@@ -325,10 +322,3 @@ struct ChannelSection: View {
     private static let previewCount = 3
 }
 
-// MARK: - Play request
-
-struct FeedPlayRequest: Identifiable {
-    let id = UUID()
-    let queue: [PlayableVideo]
-    let startIndex: Int
-}

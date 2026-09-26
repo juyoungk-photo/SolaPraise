@@ -20,118 +20,26 @@ struct FocusPlayerView: UIViewRepresentable {
     var autoplay: Bool = true
     @ObservedObject var coordinator: PlayerCoordinator
 
+    /// The web view belongs to the coordinator, so the same document survives
+    /// being moved between presentations — full screen, mini player, and back.
     func makeUIView(context: Context) -> WKWebView {
-        let controller = WKUserContentController()
-        controller.add(coordinator, name: PlayerCoordinator.messageName)
-
-        let config = WKWebViewConfiguration()
-        config.userContentController = controller
-        config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = []
-
-        let web = WKWebView(frame: .zero, configuration: config)
-        web.scrollView.isScrollEnabled = false
-        web.scrollView.bounces = false
-        web.isOpaque = false
-        web.backgroundColor = .black
-        web.scrollView.backgroundColor = .black
-
-        // Serve the player over loopback HTTP so the frame has a real origin
-        // AND sends a Referer. Neither loadHTMLString(baseURL:) nor
-        // loadSimulatedRequest provides a Referer, and without one YouTube
-        // rejects the embed with the 152/153 family — which surfaces as the
-        // misleading "owner doesn't allow embedding" even for videos that are
-        // demonstrably embeddable. See LocalPlayerServer for the evidence.
-        // Use "localhost", NOT "127.0.0.1". YouTube treats them differently:
-        // some channels' videos (성서유니온 among them) return error 150 and
-        // render "This video is unavailable" for a raw-IP origin, while the
-        // identical page served as localhost plays. Verified side by side on
-        // the same server with only the hostname changed.
-        context.coordinator.fallbackHTML = { Self.html(videoId: videoId, autoplay: autoplay) }
-        context.coordinator.load(videoId: videoId, autoplay: autoplay, into: web)
-
-        web.navigationDelegate = context.coordinator
-        coordinator.webView = web
+        let web = coordinator.hostedWebView()
+        coordinator.present(videoId: videoId, autoplay: autoplay)
         return web
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
-        // Only act on an actual video change, and swap it in-place rather than
-        // reloading the document — reloading is what restarted playback before.
-        guard context.coordinator.loadedVideoId != videoId else { return }
-        context.coordinator.loadedVideoId = videoId
-        coordinator.load(videoId: videoId)
+        coordinator.present(videoId: videoId, autoplay: autoplay)
     }
 
-    func makeCoordinator() -> Box { Box() }
-
-    /// The URL that serves one video from the loopback server.
-    static func playerURL(port: UInt16, videoId: String, autoplay: Bool) -> URL? {
-        URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(autoplay ? 1 : 0)")
-    }
-
-    static func dismantleUIView(_ web: WKWebView, coordinator: Box) {
-        // The userContentController holds the handler strongly; without this
-        // the PlayerCoordinator leaks for the life of the process.
-        web.configuration.userContentController
-            .removeScriptMessageHandler(forName: PlayerCoordinator.messageName)
-        web.stopLoading()
-    }
-
-    /// Tracks which video the live player currently holds, and catches a
-    /// failed load of the loopback page.
-    final class Box: NSObject, WKNavigationDelegate {
-        var loadedVideoId: String?
-        var autoplay = true
-        var fallbackHTML: (() -> String)?
-        private var hasRetried = false
-
-        func load(videoId: String, autoplay: Bool, into web: WKWebView) {
-            loadedVideoId = videoId
-            self.autoplay = autoplay
-            hasRetried = false
-            serve(videoId: videoId, into: web)
-        }
-
-        private func serve(videoId: String, into web: WKWebView) {
-            if let port = LocalPlayerServer.shared.start(),
-               let url = FocusPlayerView.playerURL(port: port, videoId: videoId, autoplay: autoplay) {
-                web.load(URLRequest(url: url))
-            } else {
-                loadFallback(into: web)
-            }
-        }
-
-        private func loadFallback(into web: WKWebView) {
-            guard let html = fallbackHTML?() else { return }
-            // Last resort if the loopback listener could not start. Without a
-            // Referer YouTube rejects many embeds, so this plays less than the
-            // server path does — but a degraded player beats a black screen.
-            web.loadSimulatedRequest(
-                URLRequest(url: URL(string: "https://www.youtube.com/embed")!),
-                responseHTML: html
-            )
-        }
-
-        /// A refused connection to the loopback port produces no error page —
-        /// just a black view, which is what a stale port looked like. Rebuild
-        /// the server once and try again before falling back.
-        func webView(_ web: WKWebView,
-                     didFailProvisionalNavigation navigation: WKNavigation!,
-                     withError error: Error) {
-            guard let videoId = loadedVideoId, !hasRetried else {
-                loadFallback(into: web)
-                return
-            }
-            hasRetried = true
-            LocalPlayerServer.shared.stop()
-            serve(videoId: videoId, into: web)
-        }
-    }
+    // Deliberately no dismantleUIView: the view is reused rather than
+    // destroyed, and removing the message handler here would kill the player
+    // every time it changed presentation. Teardown is PlayerCoordinator's
+    // detach(), called when playback actually ends.
 
     // MARK: - Player document
 
-    private static func html(videoId: String, autoplay: Bool) -> String {
+    static func html(videoId: String, autoplay: Bool) -> String {
         """
         <!DOCTYPE html>
         <html>

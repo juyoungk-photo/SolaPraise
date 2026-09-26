@@ -15,6 +15,7 @@ import SwiftUI
 struct PlaylistDetailView: View {
     let playlist: YTPlaylist
 
+    @EnvironmentObject private var host: PlayerHost
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
 
@@ -23,7 +24,6 @@ struct PlaylistDetailView: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var editError: String?
-    @State private var playRequest: FeedPlayRequest?
 
     /// What was just removed, and where it sat, so undo can put it back there.
     private struct Removal { let item: YTPlaylistItem; let position: Int }
@@ -54,7 +54,7 @@ struct PlaylistDetailView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if !playableVideos.isEmpty {
                     Button {
-                        playRequest = FeedPlayRequest(queue: playableVideos, startIndex: 0)
+                        host.play(queue: playableVideos, startIndex: 0)
                     } label: {
                         Image(systemName: "play.fill")
                     }
@@ -65,9 +65,6 @@ struct PlaylistDetailView: View {
                 }
                 EditButton()
             }
-        }
-        .fullScreenCover(item: $playRequest) { request in
-            WatchScreen(queue: request.queue, startIndex: request.startIndex)
         }
         .refreshable { await load() }
         .task { if items.isEmpty { await load() } }
@@ -212,7 +209,7 @@ struct PlaylistDetailView: View {
         guard let id = item.videoId else { return }
         let queue = playableVideos
         let start = queue.firstIndex { $0.id == id } ?? 0
-        playRequest = FeedPlayRequest(queue: queue, startIndex: start)
+        host.play(queue: queue, startIndex: start)
     }
 
     // MARK: - Editing
