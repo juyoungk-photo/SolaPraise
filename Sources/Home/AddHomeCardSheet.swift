@@ -156,8 +156,14 @@ struct AddHomeCardSheet: View {
     private func addPlaylistCard() {
         guard let id = pastedPlaylistId else { return }
         let purpose = playlistPurpose
+        // Keep the whole link when it is a collaboration invite: the id alone
+        // loses the token that lets a teammate join.
+        let raw = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invite = YouTubeID.isCollaborationInvite(raw) ? raw : nil
+
         add(kind: .playlist, targetId: id, title: "재생목록")
-        pinToFeed(id: id, title: "재생목록", purpose: purpose, thumbnail: nil, count: 0)
+        pinToFeed(id: id, title: "재생목록", purpose: purpose,
+                  thumbnail: nil, count: 0, invite: invite)
         linkInput = ""
 
         Task {
@@ -170,7 +176,8 @@ struct AddHomeCardSheet: View {
                 title: playlist.title,
                 purpose: purpose,
                 thumbnail: playlist.thumbnailURL?.absoluteString,
-                count: playlist.itemCount
+                count: playlist.itemCount,
+                invite: invite
             )
             try? modelContext.save()
         }
@@ -186,7 +193,8 @@ struct AddHomeCardSheet: View {
         title: String,
         purpose: Purpose,
         thumbnail: String?,
-        count: Int
+        count: Int,
+        invite: String?
     ) {
         let existing = (try? modelContext.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
         if let match = existing.first(where: { $0.playlistId == id }) {
@@ -195,6 +203,7 @@ struct AddHomeCardSheet: View {
             if title != "재생목록" { match.title = title }
             if let thumbnail { match.thumbnailURLString = thumbnail }
             if count > 0 { match.itemCount = count }
+            if let invite { match.inviteURLString = invite }
         } else {
             let playlist = CachedPlaylist(
                 playlistId: id,
@@ -203,7 +212,8 @@ struct AddHomeCardSheet: View {
                 thumbnailURLString: thumbnail,
                 itemCount: count,
                 purpose: purpose,
-                isPinned: true
+                isPinned: true,
+                inviteURLString: invite
             )
             modelContext.insert(playlist)
         }

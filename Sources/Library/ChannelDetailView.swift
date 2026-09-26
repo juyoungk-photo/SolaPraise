@@ -187,8 +187,9 @@ struct PlaylistBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: playlist.isPinned
-                  ? "pin.fill" : "list.bullet.rectangle.portrait")
+            Image(systemName: playlist.isCollaborative
+                  ? "person.2.fill"
+                  : (playlist.isPinned ? "pin.fill" : "list.bullet.rectangle.portrait"))
                 .font(.caption)
                 .foregroundStyle(.tint)
 

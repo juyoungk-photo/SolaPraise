@@ -67,6 +67,18 @@ enum YouTubeID {
         return comps.queryItems?.first(where: { $0.name == "list" })?.value
     }
 
+    /// True when a pasted playlist link is a collaboration invite.
+    ///
+    /// YouTube marks those with a `jct` token. The token is the invite — it
+    /// is what lets the person opening it join as a collaborator — so a link
+    /// carrying one is worth keeping whole rather than reducing to an id.
+    static func isCollaborationInvite(_ raw: String) -> Bool {
+        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return false }
+        return comps.queryItems?.contains { $0.name == "jct" } ?? false
+    }
+
     // MARK: - Channel references
 
     /// What a pasted channel string resolved to. A `.handle` still needs one

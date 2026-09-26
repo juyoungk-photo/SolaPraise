@@ -157,6 +157,16 @@ struct WorshipFeedView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
+                                    if let invite = playlist.inviteURL {
+                                        // The invite, not the plain link: a
+                                        // teammate needs the token to join
+                                        // as a collaborator, not just to
+                                        // read.
+                                        ShareLink(item: invite) {
+                                            Label("팀원 초대 링크 공유",
+                                                  systemImage: "person.2.badge.plus")
+                                        }
+                                    }
                                     PlaylistPinButton(playlist: playlist, purpose: .worship) {
                                         try? modelContext.save()
                                     }

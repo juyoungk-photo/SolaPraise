@@ -110,6 +110,15 @@ enum DefaultChannels {
             "2부예배"
         ),
         (
+            // The team's shared 콘티. Only the id lives here — an invite's
+            // `jct` token is what lets someone join as a collaborator, and
+            // that belongs in a message to a teammate, never in source.
+            "PLAMZz0bkBBUA",
+            "CCC 찬양콘티",
+            .worship,
+            nil
+        ),
+        (
             "UU" + "r1z2X_zyeC8GMbLv4swMVA",
             "코너스톤교회 주일 말씀",
             .word,

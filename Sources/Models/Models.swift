@@ -215,10 +215,20 @@ final class CachedPlaylist {
     /// but it needs narrowing to be worth opening.
     var titleFilter: String?
 
+    /// The full YouTube invite URL, when the playlist was added from one.
+    ///
+    /// A collaborative playlist's invite carries a `jct` token, and that
+    /// token is what actually lets someone join as a collaborator — the
+    /// playlist id alone only lets them read. Keeping it means the owner can
+    /// re-send the invite to a new team member without going to find it
+    /// again. Device only: it is closer to a credential than to a link, and
+    /// it is never written into the app's source.
+    var inviteURLString: String?
+
     init(playlistId: String, channelId: String, title: String,
          thumbnailURLString: String? = nil, itemCount: Int = 0,
          purpose: Purpose? = nil, isPinned: Bool = false,
-         titleFilter: String? = nil) {
+         titleFilter: String? = nil, inviteURLString: String? = nil) {
         self.playlistId = playlistId
         self.channelId = channelId
         self.title = title
@@ -228,7 +238,11 @@ final class CachedPlaylist {
         self.purposeRaw = purpose?.rawValue
         self.isPinned = isPinned
         self.titleFilter = titleFilter
+        self.inviteURLString = inviteURLString
     }
+
+    var inviteURL: URL? { inviteURLString.flatMap(URL.init(string:)) }
+    var isCollaborative: Bool { inviteURL != nil }
 
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }
 }
