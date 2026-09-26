@@ -43,7 +43,7 @@ struct ServicePrepView: View {
         allPlaylists.filter { $0.purposeRaw == Purpose.worship.rawValue }
     }
 
-    private var sheetId: String? { ReadingSettings.teamSheetId }
+    private var sheetId: String? { TeamSheetSource.current }
     private var service: TeamService? { selected ?? team.upcoming }
 
     var body: some View {

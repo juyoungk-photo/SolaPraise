@@ -39,4 +39,37 @@ enum AppSecrets {
     }
 
     static var hasYouTubeAPIKey: Bool { youtubeAPIKey != nil }
+
+    /// The team's sheet, shipped with the build.
+    ///
+    /// Without this every teammate would paste the same URL into the same
+    /// box on their own device — a setup step with one correct answer, asked
+    /// of everyone. It is not a secret: who can read the sheet is decided by
+    /// Google's sharing, not by whether the id is guessable. It still lives
+    /// in the gitignored xcconfig, because it is the team's document and does
+    /// not belong in a repository.
+    static var teamSheetId: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "TeamSheetId") as? String
+        else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return nil }
+        return trimmed
+    }
 }
+
+// MARK: - Which sheet this device uses
+
+enum TeamSheetSource {
+    /// A sheet typed in on this device wins over the build's, so one person
+    /// can point at a different sheet — a second team, or a test copy —
+    /// without a rebuild for everyone.
+    static var current: String? {
+        if let local = ReadingSettings.teamSheetId, !local.isEmpty { return local }
+        return AppSecrets.teamSheetId
+    }
+
+    static var isFromBuild: Bool {
+        (ReadingSettings.teamSheetId?.isEmpty ?? true) && AppSecrets.teamSheetId != nil
+    }
+}
+

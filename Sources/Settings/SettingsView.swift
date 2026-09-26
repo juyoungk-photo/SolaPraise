@@ -230,7 +230,7 @@ struct SettingsView: View {
                 .disabled(TeamAccess.sheetId(from: teamSheetInput) == nil)
             }
 
-            if ReadingSettings.teamSheetId != nil {
+            if TeamSheetSource.current != nil {
                 Button("연결 해제", role: .destructive) {
                     ReadingSettings.teamSheetId = nil
                     teamSheetInput = ""

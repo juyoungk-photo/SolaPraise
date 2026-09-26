@@ -22,7 +22,7 @@ struct ContentView: View {
     /// appears without a relaunch.
     private var teamAccess: TeamAccess.State {
         TeamAccess.evaluate(
-            sheetId: ReadingSettings.teamSheetId,
+            sheetId: TeamSheetSource.current,
             email: auth.email,
             displayName: auth.displayName,
             roster: team.memberEmails
@@ -107,7 +107,7 @@ struct ContentView: View {
         // sheet is the only place it lives.
         .task {
             team.configure(auth: auth)
-            if let sheetId = ReadingSettings.teamSheetId, team.services.isEmpty {
+            if let sheetId = TeamSheetSource.current, team.services.isEmpty {
                 await team.load(sheetId: sheetId)
             }
         }

@@ -123,7 +123,7 @@ struct PlaylistLibraryView: View {
                 }
             }
 
-            if ReadingSettings.teamSheetId == nil {
+            if TeamSheetSource.current == nil {
                 Section {
                     Button { showSettings = true } label: {
                         Label("팀 시트 연결하기", systemImage: "calendar.badge.plus")
