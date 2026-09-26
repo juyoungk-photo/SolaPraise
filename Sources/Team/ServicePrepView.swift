@@ -120,22 +120,24 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
-            .confirmationDialog(
+            // An alert, not a confirmationDialog. On iPad the latter is a
+            // popover anchored to whatever presented it, and anchored to a
+            // row inside a List it was drawn clipped — the buttons were
+            // there and invisible. An alert is centred and identical on both.
+            .alert(
                 "이 예배의 콘티를 덮어씁니다",
                 isPresented: Binding(
                     get: { pending != nil },
                     set: { if !$0 { pending = nil } }
                 ),
-                titleVisibility: .visible
-            ) {
-                if let pending, let service {
-                    Button("\(pending.playlist.title) 으로 채우기") {
-                        Task { await push(pending.playlist, to: service) }
-                    }
+                presenting: pending
+            ) { push in
+                Button("채우기") {
+                    if let service { Task { await self.push(push.playlist, to: service) } }
                 }
                 Button("취소", role: .cancel) { pending = nil }
-            } message: {
-                Text("시트의 이 날짜 곡 목록이 재생목록 내용으로 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
+            } message: { push in
+                Text("「\(push.playlist.title)」의 곡으로 이 날짜의 목록이 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
             }
         }
     }
