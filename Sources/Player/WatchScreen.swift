@@ -89,8 +89,6 @@ struct WatchScreen: View {
     @StateObject private var detection = DetectionSession()
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
-    @State private var isFindingAlternate = false
-    @State private var alternateError: String?
     @Environment(\.modelContext) private var context
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
@@ -118,61 +116,28 @@ struct WatchScreen: View {
     private var hasPrevious: Bool { index > 0 }
     private var isPlaylist: Bool { queue.count > 1 }
 
+    /// Everything except the player itself.
+    ///
+    /// The video is drawn by PlayerStage and stays in one place in the view
+    /// tree across both presentations. Moving it between a cover and an
+    /// overlay re-parented the WKWebView, which briefly cut the audio and
+    /// made the change a jump rather than a movement.
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                playerBlock
-                // What is playing stays under the player, where it belongs.
-                // It used to scroll away with everything else, so reading the
-                // psalm meant losing sight of which upload you were hearing —
-                // exactly the thing you compare versions by.
-                nowPlayingBlock
-                ScrollView {
-                    VStack(spacing: 0) {
-                        extrasBlock
-                        if isPlaylist { queueBlock }
-                    }
-                }
-            }
-            .background(Color(.systemBackground))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) { host.minimize() }
-                    } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                    .accessibilityLabel("작게 보기")
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { finishAndClose() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("닫기")
-                }
-                ToolbarItem(placement: .principal) {
-                    if isPlaylist {
-                        Text("\(index + 1) / \(queue.count)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if isPlaylist {
-                        Button { goPrevious() } label: {
-                            Image(systemName: "backward.end.fill")
-                        }
-                        .disabled(!hasPrevious)
-                        .accessibilityLabel("이전 곡")
-
-                        Button { advance() } label: {
-                            Image(systemName: "forward.end.fill")
-                        }
-                        .disabled(!hasNext)
-                        .accessibilityLabel("다음 곡")
-                    }
+        VStack(spacing: 0) {
+            header
+            // What is playing stays under the player, where it belongs. It
+            // used to scroll away with everything else, so reading the psalm
+            // meant losing sight of which upload you were hearing — exactly
+            // the thing you compare versions by.
+            nowPlayingBlock
+            ScrollView {
+                VStack(spacing: 0) {
+                    extrasBlock
+                    if isPlaylist { queueBlock }
                 }
             }
         }
+        .background(Color(.systemBackground))
         .onChange(of: player.didEnd) { _, ended in
             guard ended else { return }
             logWatch(completed: true)
@@ -196,6 +161,9 @@ struct WatchScreen: View {
         .onAppear {
             loadWorshipSet()
             hasExternalInput = AudioEngine.hasExternalInput
+            host.onAdvance = { advance() }
+            host.onClose = { finishAndClose() }
+            host.onFindAlternate = { await findPlayableAlternate() }
         }
         // Plugging an interface in mid-video should make the button appear.
         .onReceive(NotificationCenter.default.publisher(
@@ -217,137 +185,42 @@ struct WatchScreen: View {
         }
     }
 
-    // MARK: - Player + overlay
+    // MARK: - Header
 
-    private var playerBlock: some View {
-        ZStack {
-            Color.black
-            if let current {
-                FocusPlayerView(videoId: current.id, coordinator: player)
-            }
+    /// A plain row rather than a navigation bar: the player screen has no
+    /// push destinations, and a NavigationStack would have put its own chrome
+    /// between the video and the metadata.
+    private var header: some View {
+        HStack(spacing: 16) {
+            Button {
+                withAnimation(Self.stageAnimation) { host.minimize() }
+            } label: { Image(systemName: "chevron.down") }
+                .accessibilityLabel("작게 보기")
 
-            // The end-screen guard. Painted the instant ENDED arrives, after
-            // stopVideo() — so YouTube's suggestion grid never gets a frame.
-            if player.didEnd && SolaPraiseConfig.endBehavior == .overlay {
-                endCard
-                    .transition(.opacity)
-            }
+            Button { finishAndClose() } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("닫기")
 
-            if let message = player.errorMessage {
-                errorCard(message)
+            Spacer()
+
+            if isPlaylist {
+                Text("\(index + 1) / \(queue.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                Button { goPrevious() } label: { Image(systemName: "backward.end.fill") }
+                    .disabled(!hasPrevious)
+                    .accessibilityLabel("이전 곡")
+
+                Button { advance() } label: { Image(systemName: "forward.end.fill") }
+                    .disabled(!hasNext)
+                    .accessibilityLabel("다음 곡")
             }
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-        .animation(.easeOut(duration: 0.15), value: player.didEnd)
-        // Drag the player down to dock it and keep listening while you browse.
-        .gesture(
-            DragGesture(minimumDistance: 30)
-                .onEnded { value in
-                    guard value.translation.height > 70,
-                          abs(value.translation.width) < 120 else { return }
-                    withAnimation(.easeOut(duration: 0.22)) { host.minimize() }
-                }
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
-    private var endCard: some View {
-        ZStack {
-            // Opaque, not translucent — nothing of the player shows through.
-            Color.black
-            VStack(spacing: 18) {
-                Text("Done")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-
-                HStack(spacing: 12) {
-                    Button {
-                        player.replay()
-                    } label: {
-                        Label("Replay", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-
-                    if hasNext {
-                        Button {
-                            advance()
-                        } label: {
-                            Label("Next", systemImage: "forward.end")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-
-                    Button {
-                        finishAndClose()
-                    } label: {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-                }
-                .font(.subheadline)
-            }
-            .padding()
-        }
-    }
-
-    private func errorCard(_ message: String) -> some View {
-        ZStack {
-            Color.black
-            VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.title)
-                    .foregroundStyle(.yellow)
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                VStack(spacing: 10) {
-                    if player.isEmbedBlocked {
-                        // The song is usually available as another upload —
-                        // label copies get embedding disabled, church and
-                        // cover uploads generally do not.
-                        Button {
-                            Task { await findPlayableAlternate() }
-                        } label: {
-                            if isFindingAlternate {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Label("재생 가능한 다른 영상 찾기", systemImage: "arrow.triangle.2.circlepath")
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isFindingAlternate || !quota.canSearch)
-
-                        if let alternateError {
-                            Text(alternateError)
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                                .multilineTextAlignment(.center)
-                        }
-
-                        if let current, let url = YouTubeID.watchURL(current.id) {
-                            Button {
-                                logWatch(completed: false)
-                                openURL(url)
-                            } label: {
-                                Label("YouTube에서 열기", systemImage: "arrow.up.forward.app")
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                        }
-                    }
-                    if hasNext {
-                        Button("다음 곡으로") { advance() }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                    }
-                }
-            }
-            .padding()
-        }
-    }
+    static let stageAnimation = Animation.spring(response: 0.34, dampingFraction: 0.86)
 
     // MARK: - Queue
 
@@ -781,12 +654,12 @@ struct WatchScreen: View {
     private func findPlayableAlternate() async {
         guard let current else { return }
         guard auth.isSignedIn else {
-            alternateError = "다른 영상을 찾으려면 Google 로그인이 필요합니다."
+            host.alternateError = "다른 영상을 찾으려면 Google 로그인이 필요합니다."
             return
         }
-        isFindingAlternate = true
-        alternateError = nil
-        defer { isFindingAlternate = false }
+        host.isFindingAlternate = true
+        host.alternateError = nil
+        defer { host.isFindingAlternate = false }
 
         // Strip bracketed prefixes and channel suffixes so the query is the
         // song, not the uploader's decoration.
@@ -803,12 +676,12 @@ struct WatchScreen: View {
             let results = try await client.search(query: query, maxResults: 10)
             guard let match = results.first(where: { $0.videoId != nil && $0.videoId != current.id }),
                   let id = match.videoId else {
-                alternateError = "재생 가능한 다른 영상을 찾지 못했습니다."
+                host.alternateError = "재생 가능한 다른 영상을 찾지 못했습니다."
                 return
             }
             player.load(videoId: id)
         } catch {
-            alternateError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            host.alternateError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

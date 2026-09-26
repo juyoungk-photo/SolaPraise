@@ -68,15 +68,10 @@ struct ContentView: View {
                     .tag(Tab.studio)
             }
         }
-        // The player lives here, above the tabs, so a song keeps playing while
-        // you move between them.
-        .safeAreaInset(edge: .bottom) { MiniPlayerBar(host: playerHost) }
-        .fullScreenCover(isPresented: Binding(
-            get: { playerHost.mode == .full },
-            set: { if !$0 && playerHost.mode == .full { playerHost.minimize() } }
-        )) {
-            WatchScreen()
-        }
+        // The player lives here, above the tabs and in one place in the view
+        // tree, so a song keeps playing while you move between them and the
+        // web view is never re-parented.
+        .overlay { PlayerStage(host: playerHost) }
         // The once-a-day gate: today's psalm comes up before anything else,
         // and only once — dismissing it leaves the normal tabs alone.
         .fullScreenCover(isPresented: $showDailyGate) {
