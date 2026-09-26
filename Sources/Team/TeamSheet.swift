@@ -87,10 +87,22 @@ actor SheetsClient {
             case .noSheet:     return "팀 시트가 설정되지 않았습니다. 설정에서 시트 주소를 넣어 주세요."
             case .http(404, _):
                 return "시트를 찾을 수 없습니다. 주소와 공유 설정을 확인해 주세요."
-            case .http(403, _):
-                // Two very different causes, and the wrong guess sends
-                // someone hunting for a sharing problem that is not there.
-                return "시트를 열 권한이 없습니다. 내 시트인데도 이 메시지가 나오면 권한 범위가 바뀐 것이니, 설정에서 로그아웃 후 다시 로그인해 주세요. 남의 시트라면 리더에게 공유를 요청하세요."
+            case .http(403, let message):
+                // Google says which of these it is, in prose, and the three
+                // fixes have nothing in common — one is a console switch, one
+                // is re-consenting, one is a sharing change. Guessing wrong
+                // costs an evening, so read what it actually said.
+                let text = message ?? ""
+                if text.contains("has not been used in project")
+                    || text.contains("is disabled")
+                    || text.contains("SERVICE_DISABLED") {
+                    return "Google Sheets API가 이 프로젝트에서 켜져 있지 않습니다. Cloud Console → API 및 서비스 → 라이브러리에서 Google Sheets API를 사용 설정하세요. 새 사용자 인증 정보를 만들 필요는 없습니다."
+                }
+                if text.contains("insufficient authentication scopes")
+                    || text.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
+                    return "로그인 토큰에 시트 권한이 없습니다. 「시트 권한 허용」을 누르거나 다시 로그인하세요. 그래도 같으면 OAuth 동의 화면에 spreadsheets 범위를 추가해야 합니다."
+                }
+                return "시트를 열 권한이 없습니다. 이 계정이 시트를 편집할 수 있는지 확인하세요. (\(text.isEmpty ? "사유 불명" : text))"
             case .http(let code, let message):
                 return message ?? "시트 오류 (\(code))"
             case .transport(let error): return error.localizedDescription
