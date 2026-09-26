@@ -65,12 +65,12 @@ struct ScripturePanel: View {
 
             Spacer()
 
-            if passage.isPsalms, passage.verses == nil {
+            if passage.isPsalms || ReadingSettings.extraVersion != nil {
             Picker("", selection: Binding(
                 get: { shown },
                 set: { if $0.isAvailable { translation = $0 } }
             )) {
-                ForEach(BibleTranslation.allCases) { option in
+                ForEach(BibleTranslation.offered) { option in
                     Text(option.displayName)
                         .foregroundStyle(option.isAvailable ? Color.primary : Color.secondary)
                         .tag(option)
@@ -115,12 +115,18 @@ struct ScripturePanel: View {
         do {
             if passage.isPsalms, passage.verses == nil {
                 data = try await store.chapter(passage.chapter, in: shown)
+            } else if shown == .extra, let version = ReadingSettings.extraVersion {
+                data = BibleChapter(
+                    chapter: passage.chapter,
+                    verses: try await store.extraPassage(passage.esvQuery,
+                                                         versionId: version.id),
+                    translation: .extra
+                )
             } else {
-                // Everything outside the Psalms needs Crossway, so say that
-                // plainly rather than failing with a decoding error.
-                let verses = try await store.esvPassage(passage.esvQuery)
+                // Everything outside the Psalms comes from a licensed source,
+                // because 개역한글 is bundled for the Psalms alone.
                 data = BibleChapter(chapter: passage.chapter,
-                                    verses: verses,
+                                    verses: try await store.esvPassage(passage.esvQuery),
                                     translation: .esv)
             }
         } catch {

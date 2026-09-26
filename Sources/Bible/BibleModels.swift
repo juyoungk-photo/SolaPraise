@@ -24,6 +24,11 @@ import Foundation
 enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
     case krv        // 개역한글 — bundled, public domain
     case esv        // ESV — fetched, licensed
+    /// Whichever translation the reader picked from their API.Bible key.
+    ///
+    /// A case rather than an associated value so the enum stays Codable and
+    /// storable in AppStorage; the concrete version lives in ReadingSettings.
+    case extra
 
     var id: String { rawValue }
 
@@ -31,6 +36,7 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .krv: return "한"
         case .esv: return "영"
+        case .extra: return ReadingSettings.extraVersion?.abbreviation ?? "추가"
         }
     }
 
@@ -38,6 +44,7 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .krv: return "개역한글"
         case .esv: return "ESV"
+        case .extra: return ReadingSettings.extraVersion?.abbreviation ?? "추가 번역"
         }
     }
 
@@ -46,6 +53,10 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .krv: return "성경전서 개역한글판 · 대한성서공회"
         case .esv: return "ESV® Bible, © Crossway"
+        case .extra:
+            // The rights holder's own name, as API.Bible reports it.
+            return ReadingSettings.extraVersion.map { "\($0.name) · API.Bible" }
+                ?? "API.Bible"
         }
     }
 
@@ -56,13 +67,26 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
     /// visible, because knowing the app has an English text you have not set
     /// up is more useful than the option quietly not existing.
     var isAvailable: Bool {
-        isBundled || (ReadingSettings.esvAPIKey?.isEmpty == false)
+        switch self {
+        case .krv:   return true
+        case .esv:   return ReadingSettings.esvAPIKey?.isEmpty == false
+        case .extra:
+            return ReadingSettings.extraVersion != nil
+                && ReadingSettings.apiBibleKey?.isEmpty == false
+        }
+    }
+
+    /// Only offered once a version has been chosen — an empty slot in the
+    /// picker is worse than no slot.
+    static var offered: [BibleTranslation] {
+        allCases.filter { $0 != .extra || ReadingSettings.extraVersion != nil }
     }
 
     var bookLabel: String {
         switch self {
         case .krv: return "시편"
         case .esv: return "Psalm"
+        case .extra: return "Psalm"
         }
     }
 }

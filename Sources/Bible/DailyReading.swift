@@ -118,6 +118,11 @@ final class DailyReading: ObservableObject {
         switch t {
         case .krv: return "시편 \(chapter)편"
         case .esv: return "Psalm \(chapter)"
+        // The reader's extra translation may be in any language, so follow
+        // its own naming rather than assuming English.
+        case .extra:
+            let korean = ReadingSettings.extraVersion?.language.contains("Korean") ?? false
+            return korean ? "시편 \(chapter)편" : "Psalm \(chapter)"
         }
     }
 }

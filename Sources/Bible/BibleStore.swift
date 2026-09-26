@@ -14,9 +14,11 @@ final class BibleStore: ObservableObject {
     private var bundled: [Int: [BibleVerse]] = [:]
     private var bundledLoaded = false
     private let esv: ESVClient
+    private let apiBible: APIBibleClient
 
     init(esvKeyProvider: @escaping @Sendable () -> String? = { ReadingSettings.esvAPIKey }) {
         self.esv = ESVClient(keyProvider: esvKeyProvider)
+        self.apiBible = APIBibleClient()
     }
 
     func chapter(_ number: Int, in translation: BibleTranslation) async throws -> BibleChapter {
@@ -26,12 +28,26 @@ final class BibleStore: ObservableObject {
             return BibleChapter(chapter: n, verses: try loadBundled(n), translation: .krv)
         case .esv:
             return BibleChapter(chapter: n, verses: try await esv.chapter(n), translation: .esv)
+        case .extra:
+            guard let version = ReadingSettings.extraVersion else {
+                throw APIBibleClient.ClientError.missingKey
+            }
+            return BibleChapter(
+                chapter: n,
+                verses: try await apiBible.passage("Psalm \(n)", versionId: version.id),
+                translation: .extra
+            )
         }
     }
 
     /// Any passage outside the Psalms, which the bundle does not carry.
     func esvPassage(_ query: String) async throws -> [BibleVerse] {
         try await esv.passage(query)
+    }
+
+    /// The reader's chosen third translation, whatever their key allows.
+    func extraPassage(_ query: String, versionId: String) async throws -> [BibleVerse] {
+        try await apiBible.passage(query, versionId: versionId)
     }
 
     // MARK: - Bundled 개역한글
@@ -76,6 +92,8 @@ enum ReadingSettings {
 
     private enum Keys {
         static let esvKey = "reading.esvAPIKey"
+        static let apiBibleKey = "reading.apiBibleKey"
+        static let extraVersion = "reading.extraVersion"
         static let currentChapter = "reading.currentChapter"
         static let lastAdvancedDay = "reading.lastAdvancedDay"
         static let lastGateDay = "reading.lastGateDay"
@@ -91,6 +109,31 @@ enum ReadingSettings {
     static var esvAPIKey: String? {
         get { defaults.string(forKey: Keys.esvKey)?.trimmingCharacters(in: .whitespaces) }
         set { defaults.set(newValue, forKey: Keys.esvKey) }
+    }
+
+    /// The reader's own API.Bible key. Device only, never committed.
+    static var apiBibleKey: String? {
+        get { defaults.string(forKey: Keys.apiBibleKey)?.trimmingCharacters(in: .whitespaces) }
+        set { defaults.set(newValue, forKey: Keys.apiBibleKey) }
+    }
+
+    /// The one extra translation the reader has chosen from that key.
+    ///
+    /// One rather than many: the picker is a segmented control beside 개역한글
+    /// and ESV, and a fourth option is already the point at which it stops
+    /// being readable.
+    static var extraVersion: APIBibleClient.Version? {
+        get {
+            guard let data = defaults.data(forKey: Keys.extraVersion) else { return nil }
+            return try? JSONDecoder().decode(APIBibleClient.Version.self, from: data)
+        }
+        set {
+            guard let newValue else {
+                defaults.removeObject(forKey: Keys.extraVersion)
+                return
+            }
+            defaults.set(try? JSONEncoder().encode(newValue), forKey: Keys.extraVersion)
+        }
     }
 
     static var currentChapter: Int {

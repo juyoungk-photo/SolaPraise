@@ -70,7 +70,7 @@ struct ReadingView: View {
             // Version names rather than 한/영: "ESV" says which English text
             // this is, and 한 never did.
             Picker("Translation", selection: translationBinding) {
-                ForEach(BibleTranslation.allCases) { t in
+                ForEach(BibleTranslation.offered) { t in
                     Text(t.displayName)
                         .foregroundStyle(t.isAvailable ? Color.primary : Color.secondary)
                         .tag(t)

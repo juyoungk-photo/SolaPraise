@@ -22,6 +22,11 @@ struct SettingsView: View {
     @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @State private var notificationsOn = ReadingSettings.notificationsEnabled
     @State private var esvKey = ReadingSettings.esvAPIKey ?? ""
+    @State private var apiBibleKey = ReadingSettings.apiBibleKey ?? ""
+    @State private var extraVersion = ReadingSettings.extraVersion
+    @State private var availableVersions: [APIBibleClient.Version] = []
+    @State private var isLoadingVersions = false
+    @State private var versionsError: String?
     @StateObject private var feed = FeedStore()
     @State private var refreshNote: String?
     @State private var notifyTime: Date = {
@@ -128,6 +133,7 @@ struct SettingsView: View {
 
     // MARK: - Reading
 
+    @ViewBuilder
     private var readingSection: some View {
         Section {
             Toggle("아침 알림", isOn: Binding(
@@ -182,7 +188,100 @@ struct SettingsView: View {
         } header: {
             Text("시편 읽기")
         } footer: {
-            Text("한글은 개역한글(저작권 만료)이 앱에 포함되어 오프라인에서도 열립니다. 영문 ESV는 Crossway API로 불러오며 무료 비상업용 키가 필요합니다. 개역개정은 대한성서공회 허락을 받으면 추가할 수 있습니다.")
+            Text("한글은 개역한글(저작권 만료)이 앱에 포함되어 오프라인에서도 열립니다. 영문 ESV는 Crossway API로 불러오며 무료 비상업용 키가 필요합니다.")
+        }
+
+        extraTranslationSection
+    }
+
+    // MARK: - A third translation
+
+    /// NASB, NIV and the rest come from API.Bible, whose catalogue depends on
+    /// the reader's own key — so the list is fetched rather than hardcoded.
+    /// 새번역 and 개역개정 are not in it at any tier: 대한성서공회 licenses
+    /// those directly and publishes no developer API.
+    @ViewBuilder
+    private var extraTranslationSection: some View {
+        Section {
+            SecureField("API.Bible key", text: Binding(
+                get: { apiBibleKey },
+                set: { apiBibleKey = $0; ReadingSettings.apiBibleKey = $0 }
+            ))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            Link("Get a free key at scripture.api.bible",
+                 destination: URL(string: "https://scripture.api.bible/")!)
+                .font(.footnote)
+
+            if let chosen = extraVersion {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(chosen.abbreviation).font(.subheadline.weight(.semibold))
+                        Text("\(chosen.name) · \(chosen.language)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("해제") {
+                        extraVersion = nil
+                        ReadingSettings.extraVersion = nil
+                    }
+                    .font(.caption)
+                }
+            }
+
+            if !apiBibleKey.isEmpty {
+                Button {
+                    Task { await loadVersions() }
+                } label: {
+                    HStack {
+                        Text(availableVersions.isEmpty ? "번역본 불러오기" : "목록 새로고침")
+                        Spacer()
+                        if isLoadingVersions { ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(isLoadingVersions)
+            }
+
+            if let message = versionsError {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+
+            if !availableVersions.isEmpty {
+                Picker("번역본", selection: Binding(
+                    get: { extraVersion?.id ?? "" },
+                    set: { id in
+                        let match = availableVersions.first { $0.id == id }
+                        extraVersion = match
+                        ReadingSettings.extraVersion = match
+                    }
+                )) {
+                    Text("선택 안 함").tag("")
+                    ForEach(availableVersions) { version in
+                        Text("\(version.abbreviation) — \(version.language)").tag(version.id)
+                    }
+                }
+            }
+        } header: {
+            Text("번역본 추가")
+        } footer: {
+            Text("NASB·NIV 등은 API.Bible 키로 불러올 수 있으며, 어떤 번역본이 보이는지는 키의 플랜에 따라 다릅니다. NIV는 상업적 사용이 허용되지 않습니다. 새번역과 개역개정은 대한성서공회가 직접 허락하는 저작물이라 어떤 API로도 받을 수 없고, 공회에 사용 허가를 신청해야 합니다.")
+        }
+    }
+
+    private func loadVersions() async {
+        isLoadingVersions = true
+        versionsError = nil
+        defer { isLoadingVersions = false }
+        do {
+            availableVersions = try await APIBibleClient().versions()
+            if availableVersions.isEmpty {
+                versionsError = "이 키로 사용할 수 있는 번역본이 없습니다."
+            }
+        } catch {
+            versionsError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 
