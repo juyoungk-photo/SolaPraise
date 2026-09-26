@@ -60,12 +60,29 @@ private struct DurationBadge: View {
 
 struct VideoCard: View {
     let video: CachedVideo
+    /// True when a chord chart has already been made from this video.
+    var hasSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ThumbnailBox(url: video.thumbnailURL) {
-                if let label = video.durationLabel {
-                    DurationBadge(label: label)
+                ZStack {
+                    if let label = video.durationLabel {
+                        DurationBadge(label: label)
+                    }
+                    if hasSheet {
+                        // Marked on the card, because otherwise the only way
+                        // to know a song had been worked out already was to
+                        // open it and work it out again.
+                        Image(systemName: "music.quarternote.3")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(5)
+                            .background(Color.accentColor, in: Circle())
+                            .padding(5)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: .topLeading)
+                    }
                 }
             }
 

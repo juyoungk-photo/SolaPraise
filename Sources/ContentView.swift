@@ -92,6 +92,16 @@ struct ContentView: View {
         // The player lives here, above the tabs and in one place in the view
         // tree, so a song keeps playing while you move between them and the
         // web view is never re-parented.
+        // Reserve the docked player's height inside every tab, so the feed
+        // scrolls clear of it instead of ending underneath it. The overlay
+        // below still does the drawing; this only buys the space.
+        .safeAreaInset(edge: .bottom) {
+            if playerHost.mode == .mini {
+                Color.clear
+                    .frame(height: PlayerStage.miniBarHeight)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay { PlayerStage(host: playerHost) }
         // The roster has to be read before the tab can be decided, and the
         // sheet is the only place it lives.

@@ -124,8 +124,17 @@ final class PlayerHost: ObservableObject {
 struct PlayerStage: View {
     @ObservedObject var host: PlayerHost
 
-    private static let miniWidth: CGFloat = 112
-    private static let miniPadding: CGFloat = 8
+    static let miniWidth: CGFloat = 112
+    static let miniPadding: CGFloat = 8
+
+    /// The space the docked player occupies.
+    ///
+    /// Published so the tab content can reserve it. The player is an overlay,
+    /// which means it draws over the feed and knows nothing about it — the
+    /// bottom row of cards ended up underneath the bar, visible through the
+    /// material and impossible to tap. An overlay has to be paid for in
+    /// layout somewhere, and this is the number.
+    static var miniBarHeight: CGFloat { miniWidth * 9 / 16 + miniPadding * 2 }
 
     /// The tab bar sits below this overlay, not inside it.
     ///
@@ -143,7 +152,7 @@ struct PlayerStage: View {
                 let mini = host.mode == .mini
                 let fullWidth = geo.size.width
                 let dockBottom = geo.size.height - (mini ? tabBarHeight : 0)
-                let width = mini ? Self.miniWidth : fullWidth
+                let width = mini ? PlayerStage.miniWidth : fullWidth
                 let height = width * 9 / 16
 
                 ZStack(alignment: .topLeading) {
@@ -157,9 +166,9 @@ struct PlayerStage: View {
 
                     if mini {
                         MiniChrome(host: host, current: current)
-                            .padding(.leading, Self.miniWidth + Self.miniPadding * 2)
-                            .frame(height: height + Self.miniPadding * 2)
-                            .offset(y: dockBottom - height - Self.miniPadding * 2)
+                            .padding(.leading, PlayerStage.miniWidth + PlayerStage.miniPadding * 2)
+                            .frame(height: height + PlayerStage.miniPadding * 2)
+                            .offset(y: dockBottom - height - PlayerStage.miniPadding * 2)
                             .transition(.opacity)
                     }
 
@@ -184,8 +193,8 @@ struct PlayerStage: View {
                         .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0,
                                                     style: .continuous))
                         .offset(
-                            x: mini ? Self.miniPadding : 0,
-                            y: mini ? dockBottom - height - Self.miniPadding : 0
+                            x: mini ? PlayerStage.miniPadding : 0,
+                            y: mini ? dockBottom - height - PlayerStage.miniPadding : 0
                         )
                         .allowsHitTesting(!mini)
                         .gesture(dragGesture(mini: mini))
@@ -194,9 +203,9 @@ struct PlayerStage: View {
                     if mini {
                         Rectangle()
                             .fill(.regularMaterial)
-                            .frame(height: height + Self.miniPadding * 2)
+                            .frame(height: height + PlayerStage.miniPadding * 2)
                             .overlay(alignment: .top) { Divider() }
-                            .offset(y: dockBottom - height - Self.miniPadding * 2)
+                            .offset(y: dockBottom - height - PlayerStage.miniPadding * 2)
                             .onTapGesture {
                                 withAnimation(WatchScreen.stageAnimation) { host.expand() }
                             }

@@ -46,6 +46,13 @@ struct WorshipFeedView: View {
 
     @Query(sort: [SortDescriptor(\CachedPlaylist.title)])
     private var allPlaylists: [CachedPlaylist]
+
+    @Query private var savedSongs: [SavedSong]
+
+    /// Videos this app has already produced a chart from.
+    private var sheetedVideoIds: Set<String> {
+        Set(savedSongs.compactMap(\.videoId))
+    }
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var searchError: String?
@@ -201,7 +208,8 @@ struct WorshipFeedView: View {
                         LazyVGrid(columns: FeedGrid.columns, spacing: 16) {
                             ForEach(feedVideos) { video in
                                 Button { play(video, in: feedVideos) } label: {
-                                    VideoCard(video: video)
+                                    VideoCard(video: video,
+                                              hasSheet: sheetedVideoIds.contains(video.videoId))
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu { pinToggle(video) }

@@ -26,6 +26,7 @@ struct StudioView: View {
     private var songs: [SavedSong]
 
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
+    @EnvironmentObject private var host: PlayerHost
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
     @State private var recordings: [Recordings.Item] = []
@@ -130,6 +131,12 @@ struct StudioView: View {
                                 }
                                     Text("^[\(song.sections.count) section](inflect: true)")
                                     if song.hasLyrics { Text("· 가사") }
+                                    // Where it came from, so 찬양 and 악보
+                                    // stop looking like unrelated screens.
+                                    if song.videoId != nil {
+                                        Label("영상", systemImage: "play.rectangle")
+                                            .labelStyle(.titleAndIcon)
+                                    }
                                 }
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -139,6 +146,18 @@ struct StudioView: View {
                             Button {
                                 performanceSet = PerformanceSet(songs: [song])
                             } label: { Label("연주 모드", systemImage: "music.note.tv") }
+
+                            // The chart knows which video it was made from,
+                            // and nothing was showing that. A sheet with no
+                            // way back to its source is a dead end.
+                            if let videoId = song.videoId {
+                                Button {
+                                    host.play(
+                                        queue: [PlayableVideo(id: videoId, title: song.title)],
+                                        startIndex: 0
+                                    )
+                                } label: { Label("원본 영상 재생", systemImage: "play.rectangle") }
+                            }
                         }
                     }
                     .onDelete { offsets in
