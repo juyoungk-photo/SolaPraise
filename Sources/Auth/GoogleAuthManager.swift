@@ -46,11 +46,19 @@ final class GoogleAuthManager: ObservableObject {
     /// and playlist items. This is a *sensitive* scope — see the note above.
     static let scopes = [
         "https://www.googleapis.com/auth/youtube",
-        // Read and write the team's planning sheet. Narrower than
-        // `spreadsheets`: this grants access only to files the app itself
-        // opened, which for a sheet the leader pasted in means that sheet and
-        // nothing else in the person's Drive.
-        "https://www.googleapis.com/auth/drive.file"
+        // Read and write the team's planning sheet.
+        //
+        // NOT drive.file, which was the first attempt and does not work here.
+        // That scope covers only files the app itself created or that the
+        // user chose through Google's own file picker — a sheet whose URL was
+        // pasted in has been through neither, so every request came back 403
+        // even for the sheet's owner.
+        //
+        // This is broader than ideal: it reaches every spreadsheet the
+        // account can open, not just the team's. The narrow alternative is to
+        // put Google's Picker in front of it, which is a web view and a
+        // second SDK for a choice the leader makes once.
+        "https://www.googleapis.com/auth/spreadsheets"
     ]
 
     init() {
@@ -104,6 +112,43 @@ final class GoogleAuthManager: ObservableObject {
         }
         #else
         lastError = "GoogleSignIn SPM package not added to target."
+        #endif
+    }
+
+    /// Whether the current token actually carries a scope.
+    ///
+    /// A session signed in before a scope was added keeps working for
+    /// everything it already had and fails only on the new thing — which
+    /// looks like a permissions problem with the resource rather than with
+    /// the token, and sends people to check sharing settings that are fine.
+    func hasGranted(_ scope: String) -> Bool {
+        #if canImport(GoogleSignIn)
+        guard let user = GIDSignIn.sharedInstance.currentUser else { return false }
+        return user.grantedScopes?.contains(scope) ?? false
+        #else
+        return false
+        #endif
+    }
+
+    var canUseSheets: Bool { hasGranted("https://www.googleapis.com/auth/spreadsheets") }
+
+    /// Asks for a scope the current session lacks, without signing out.
+    @discardableResult
+    func requestScopes(_ scopes: [String]) async -> Bool {
+        #if canImport(GoogleSignIn)
+        guard let user = GIDSignIn.sharedInstance.currentUser,
+              let presenter = Self.topViewController() else { return false }
+        do {
+            let result = try await user.addScopes(scopes, presenting: presenter)
+            adopt(user: result.user)
+            lastError = nil
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+        #else
+        return false
         #endif
     }
 

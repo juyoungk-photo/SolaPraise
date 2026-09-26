@@ -21,6 +21,8 @@ struct ContentView: View {
     /// Recomputed as the roster loads and as sign-in changes, so the tab
     /// appears without a relaunch.
     private var teamAccess: TeamAccess.State {
+        // Shown while the scope is missing too, so the tab is where the fix
+        // is rather than vanishing and leaving nowhere to grant it.
         TeamAccess.evaluate(
             sheetId: TeamSheetSource.current,
             email: auth.email,
@@ -107,9 +109,12 @@ struct ContentView: View {
         // sheet is the only place it lives.
         .task {
             team.configure(auth: auth)
-            if let sheetId = TeamSheetSource.current, team.services.isEmpty {
-                await team.load(sheetId: sheetId)
-            }
+            // Without the scope the roster cannot be read, and hammering the
+            // API for 403s would only hide the real problem.
+            guard auth.canUseSheets,
+                  let sheetId = TeamSheetSource.current,
+                  team.services.isEmpty else { return }
+            await team.load(sheetId: sheetId)
         }
         // The once-a-day gate: today's psalm comes up before anything else,
         // and only once — dismissing it leaves the normal tabs alone.

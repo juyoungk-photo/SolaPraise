@@ -54,6 +54,24 @@ struct ServicePrepView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let service {
                     content(service)
+                } else if auth.isSignedIn, !auth.canUseSheets {
+                    // The session predates the scope, so the sheet is fine
+                    // and the token is not. Say which, and fix it here.
+                    ContentUnavailableView {
+                        Label("시트 접근 권한이 필요합니다", systemImage: "lock.rotation")
+                    } description: {
+                        Text("로그인할 때는 없던 권한입니다. 아래를 눌러 한 번만 허용하면 됩니다. 로그아웃할 필요는 없습니다.")
+                    } actions: {
+                        Button("시트 권한 허용") {
+                            Task {
+                                let ok = await auth.requestScopes(
+                                    ["https://www.googleapis.com/auth/spreadsheets"]
+                                )
+                                if ok, let sheetId { await team.load(sheetId: sheetId) }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     ContentUnavailableView(
                         "예정된 예배가 없습니다",
@@ -69,6 +87,7 @@ struct ServicePrepView: View {
             .refreshable { if let sheetId { await team.load(sheetId: sheetId) } }
             .task {
                 team.configure(auth: auth)
+                guard auth.canUseSheets else { return }
                 if team.services.isEmpty, let sheetId {
                     await team.load(sheetId: sheetId)
                 }

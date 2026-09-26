@@ -81,7 +81,9 @@ actor SheetsClient {
             case .http(404, _):
                 return "시트를 찾을 수 없습니다. 주소와 공유 설정을 확인해 주세요."
             case .http(403, _):
-                return "이 시트를 열 권한이 없습니다. 팀 리더에게 공유를 요청하세요."
+                // Two very different causes, and the wrong guess sends
+                // someone hunting for a sharing problem that is not there.
+                return "시트를 열 권한이 없습니다. 내 시트인데도 이 메시지가 나오면 권한 범위가 바뀐 것이니, 설정에서 로그아웃 후 다시 로그인해 주세요. 남의 시트라면 리더에게 공유를 요청하세요."
             case .http(let code, let message):
                 return message ?? "시트 오류 (\(code))"
             case .transport(let error): return error.localizedDescription
