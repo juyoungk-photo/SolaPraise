@@ -256,6 +256,20 @@ struct WatchScreen: View {
                             .frame(width: 22)
 
                             VideoMetaRow(video: item, thumbnailWidth: 72)
+
+                            // Per song, not just for whatever is playing.
+                            // A 콘티 is worked through one song at a time,
+                            // and the chart you want is usually for the one
+                            // you are about to rehearse rather than the one
+                            // currently sounding.
+                            SheetMusicMenu(title: item.title) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 40, height: 40)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 5)

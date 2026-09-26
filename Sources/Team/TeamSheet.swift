@@ -135,7 +135,13 @@ actor SheetsClient {
         return (try? JSONDecoder().decode(Response.self, from: data))?.values ?? []
     }
 
-    func append(sheetId: String, tab: String, row: [String]) async throws {
+    /// Appends and reports which row it landed on.
+    ///
+    /// The row number matters: without it the next edit to the same entry has
+    /// nowhere to write, and writing to row 0 is an invalid range rather than
+    /// a no-op. Google returns it in `updates.updatedRange`.
+    @discardableResult
+    func append(sheetId: String, tab: String, row: [String]) async throws -> Int? {
         let encoded = tab.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tab
         var comps = URLComponents(
             url: base.appendingPathComponent("\(sheetId)/values/\(encoded):append"),
@@ -146,7 +152,13 @@ actor SheetsClient {
             .init(name: "insertDataOption", value: "INSERT_ROWS")
         ]
         struct Body: Encodable { let values: [[String]] }
-        _ = try await send(url: comps.url!, method: "POST", body: Body(values: [row]))
+        let data = try await send(url: comps.url!, method: "POST", body: Body(values: [row]))
+        let decoded = try? JSONDecoder().decode(AppendResponse.self, from: data)
+        // "Signups!A7:F7" — the first run of digits is the row.
+        guard let range = decoded?.updates?.updatedRange,
+              let match = range.range(of: "[0-9]+", options: .regularExpression)
+        else { return nil }
+        return Int(range[match])
     }
 
     func write(sheetId: String, range: String, row: [String]) async throws {
@@ -222,4 +234,10 @@ actor SheetsClient {
 private struct SheetsFailure: Decodable {
     struct Inner: Decodable { let message: String? }
     let error: Inner?
+}
+
+
+private struct AppendResponse: Decodable {
+    struct Updates: Decodable { let updatedRange: String? }
+    let updates: Updates?
 }

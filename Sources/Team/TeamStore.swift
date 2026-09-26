@@ -43,7 +43,13 @@ struct TeamSignup: Identifiable, Hashable {
     let isAvailable: Bool
     /// 1-based row on the Signups tab, so an update rewrites in place rather
     /// than appending a second opinion.
-    let row: Int
+    ///
+    /// Optional because a signup created in this session has no row until
+    /// the append reports one. It used to default to 0, and the next edit
+    /// then addressed "A0:F0" — an invalid range, which failed silently and
+    /// made the buttons look like they had stopped toggling after the first
+    /// tap.
+    let row: Int?
     var id: String { "\(role)|\(email)" }
 }
 
@@ -197,22 +203,29 @@ final class TeamStore: ObservableObject {
 
         do {
             isReadOnly = false
-            if let existing = mySignup(for: service, role: role, email: email) {
+            let existing = mySignup(for: service, role: role, email: email)
+            var writtenRow = existing?.row
+
+            // Row 1 is the header, so anything below 2 is not a real row to
+            // rewrite — append and learn where it went.
+            if let target = existing?.row, target >= 2 {
                 try await client.write(
                     sheetId: sheetId,
-                    range: "\(TeamSheet.signupsTab)!A\(existing.row):F\(existing.row)",
+                    range: "\(TeamSheet.signupsTab)!A\(target):F\(target)",
                     row: row
                 )
             } else {
-                try await client.append(sheetId: sheetId, tab: TeamSheet.signupsTab, row: row)
+                writtenRow = try await client.append(
+                    sheetId: sheetId, tab: TeamSheet.signupsTab, row: row
+                )
             }
+
             // Reflect it immediately; the sheet is the truth but a reload is
             // four round trips and this is one tap.
             var list = signups[day] ?? []
             list.removeAll { $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame }
             list.append(TeamSignup(role: role, email: email, name: name,
-                                   isAvailable: available,
-                                   row: mySignup(for: service, role: role, email: email)?.row ?? 0))
+                                   isAvailable: available, row: writtenRow))
             signups[day] = list
         } catch SheetsClient.SheetsError.http(403, _) {
             // Reads work, so this is not the scope and not the sheet being

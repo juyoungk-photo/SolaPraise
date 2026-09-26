@@ -185,7 +185,13 @@ struct WorshipFeedView: View {
                                     PinnedSetBar(video: video)
                                 }
                                 .buttonStyle(.plain)
-                                .contextMenu { pinToggle(video) }
+                                .contextMenu {
+                                    pinToggle(video)
+                                    SheetMusicMenu(title: video.title) {
+                                        Label("공식 악보 찾기",
+                                              systemImage: "doc.text.magnifyingglass")
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
