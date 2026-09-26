@@ -191,7 +191,8 @@ struct PlaylistBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "list.bullet.rectangle.portrait")
+            Image(systemName: playlist.isPinned
+                  ? "pin.fill" : "list.bullet.rectangle.portrait")
                 .font(.caption)
                 .foregroundStyle(.tint)
 
@@ -231,10 +232,17 @@ struct ChannelPlaylistRow: View {
         HStack(spacing: 10) {
             Thumbnail(url: playlist.thumbnailURL, width: 72, height: 41)
             VStack(alignment: .leading, spacing: 2) {
-                Text(playlist.title)
-                    .font(.footnote)
-                    .lineLimit(2)
-                    .foregroundStyle(Color.primary)
+                HStack(spacing: 4) {
+                    if playlist.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tint)
+                    }
+                    Text(playlist.title)
+                        .font(.footnote)
+                        .lineLimit(2)
+                        .foregroundStyle(Color.primary)
+                }
                 Text("^[\(playlist.itemCount) video](inflect: true)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)

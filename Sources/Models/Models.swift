@@ -126,6 +126,13 @@ final class CachedVideo {
     /// it as much as the length does.
     var viewCount: Int?
 
+    /// Kept at the top of its feed.
+    ///
+    /// Not only playlists: a three-hour "찬송가 연속 듣기" is a set list that
+    /// happens to be one video, and it is exactly the thing you want waiting
+    /// on the tab rather than buried under this week's uploads.
+    var isPinned: Bool = false
+
     /// Raw description. Worship channels publish set lists with timestamps and
     /// keys here, which WorshipSetParser turns into a jumpable song list.
     var descriptionText: String?
@@ -193,9 +200,15 @@ final class CachedPlaylist {
     /// sermons and its worship from the same account.
     var purposeRaw: String?
 
+    /// Kept at the top of its feed.
+    ///
+    /// A channel can have eighty playlists and you return to three of them.
+    /// Pinning is how those three stop being eighty scrolls away.
+    var isPinned: Bool = false
+
     init(playlistId: String, channelId: String, title: String,
          thumbnailURLString: String? = nil, itemCount: Int = 0,
-         purpose: Purpose? = nil) {
+         purpose: Purpose? = nil, isPinned: Bool = false) {
         self.playlistId = playlistId
         self.channelId = channelId
         self.title = title
@@ -203,6 +216,7 @@ final class CachedPlaylist {
         self.itemCount = itemCount
         self.fetchedAt = Date()
         self.purposeRaw = purpose?.rawValue
+        self.isPinned = isPinned
     }
 
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }

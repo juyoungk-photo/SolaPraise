@@ -26,7 +26,9 @@ struct SuggestedChannel: Identifiable, Hashable {
 enum DefaultChannels {
 
     /// Verified against each channel's own page, which advertises exactly
-    /// these ids in its RSS link.
+    /// these ids in its RSS link, and each feed checked for entries — a
+    /// channel whose RSS returns nothing is indistinguishable in the app from
+    /// one that was never added.
     static let all: [SuggestedChannel] = [
         // ── 말씀 ──────────────────────────────────────────────
         SuggestedChannel(channelId: "UCr1z2X_zyeC8GMbLv4swMVA",
@@ -55,6 +57,15 @@ enum DefaultChannels {
         SuggestedChannel(channelId: "UCqZ6R9Js2HG-6ZNP71soeUg",
                          title: "어노인팅", handle: "@anointingworship",
                          purpose: .worship, isPinned: false),
+        SuggestedChannel(channelId: "UCwmy8BC5ng0a0PWKDuRH08Q",
+                         title: "ALL THAT HYMN 올댓힘", handle: "@ALLTHATHYMN645",
+                         purpose: .worship, isPinned: false),
+        SuggestedChannel(channelId: "UCjYmM82SWsjck55t1e6rzpQ",
+                         title: "Delivery Project", handle: "@deliveryproject_korea",
+                         purpose: .worship, isPinned: false),
+        SuggestedChannel(channelId: "UCn5qdSP9lz6BIl4bPwM41qg",
+                         title: "YWAM Worship Korea", handle: "@ywamworshipkorea",
+                         purpose: .worship, isPinned: false),
 
         // ── 교제 ──────────────────────────────────────────────
         // Id read off @c3sfbay-tv's own page. Its RSS feed 404s, which is the
@@ -80,6 +91,27 @@ enum DefaultChannels {
             "UULV" + "r1z2X_zyeC8GMbLv4swMVA",
             "코너스톤교회 주일예배 라이브",
             .worship
+        )
+    ]
+
+    /// Long-form sets pinned to 찬양 out of the box.
+    ///
+    /// These are single videos, not playlists — a three-hour 찬송가 연속 듣기
+    /// is a set list that happens to be one upload. They are the thing you
+    /// put on and leave on, so they belong at the top of the tab rather than
+    /// sinking under this week's uploads.
+    static let defaultPinnedVideos: [(videoId: String, title: String, channelId: String, channelTitle: String)] = [
+        (
+            "EwY1Z6_6H3I",
+            "일상에 틀어 놓는 잔잔한 찬송가 연속 듣기ㅣ어쿠스틱 편곡ㅣ3시간",
+            "UCwmy8BC5ng0a0PWKDuRH08Q",
+            "ALL THAT HYMN 올댓힘"
+        ),
+        (
+            "Xsnhus5FkKw",
+            "신나는 찬송가 리스트 1-5 총집합 (피아편곡 / 54곡 연속듣기)",
+            "UCmDCtLeqOzF7_uf_UXoNiYA",
+            "F.I.A WORSHIP"
         )
     ]
 
@@ -120,6 +152,7 @@ enum DefaultChannels {
         }
 
         seedPlaylists(context: context, defaults: defaults)
+        seedPinnedVideos(context: context, defaults: defaults)
 
         guard added > 0 else { return }
         defaults.set(Array(seeded), forKey: seededKey)
@@ -127,6 +160,42 @@ enum DefaultChannels {
         #if DEBUG
         print("[SolaPraise] seeded \(added) new default channels")
         #endif
+    }
+
+    @MainActor
+    private static func seedPinnedVideos(context: ModelContext, defaults: UserDefaults) {
+        let key = "videos.seededPinned"
+        var seeded = Set(defaults.stringArray(forKey: key) ?? [])
+
+        let existing = (try? context.fetch(FetchDescriptor<CachedVideo>())) ?? []
+        var added = 0
+
+        for entry in defaultPinnedVideos {
+            guard !seeded.contains(entry.videoId) else { continue }
+            if let known = existing.first(where: { $0.videoId == entry.videoId }) {
+                // Already fetched by a feed refresh — just pin it.
+                known.isPinned = true
+            } else {
+                let video = CachedVideo(
+                    videoId: entry.videoId,
+                    title: entry.title,
+                    channelId: entry.channelId,
+                    channelTitle: entry.channelTitle,
+                    // i.ytimg serves art for every video at a fixed path, so
+                    // the card is complete before any API call is made.
+                    thumbnailURLString: "https://i.ytimg.com/vi/\(entry.videoId)/mqdefault.jpg",
+                    source: .manual
+                )
+                video.isPinned = true
+                context.insert(video)
+            }
+            seeded.insert(entry.videoId)
+            added += 1
+        }
+
+        guard added > 0 else { return }
+        defaults.set(Array(seeded), forKey: key)
+        try? context.save()
     }
 
     /// Same per-item record as the channels, so a playlist you remove stays

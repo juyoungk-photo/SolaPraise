@@ -137,10 +137,12 @@ struct WorshipFeedView: View {
                     genreChips
                     topicChips
 
-                    if !pinnedPlaylists.isEmpty {
+                    if !pinnedPlaylists.isEmpty || !pinnedVideos.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("재생목록")
+                            Label("고정됨", systemImage: "pin.fill")
                                 .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
                             ForEach(pinnedPlaylists) { playlist in
                                 Button {
                                     Task { await playPlaylist(playlist) }
@@ -148,6 +150,19 @@ struct WorshipFeedView: View {
                                     PlaylistBar(playlist: playlist)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    PlaylistPinButton(playlist: playlist, purpose: .worship) {
+                                        try? modelContext.save()
+                                    }
+                                }
+                            }
+
+                            ForEach(pinnedVideos) { video in
+                                Button { play(video, in: pinnedVideos) } label: {
+                                    PinnedSetBar(video: video)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu { pinToggle(video) }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -173,6 +188,7 @@ struct WorshipFeedView: View {
                                     VideoCard(video: video)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu { pinToggle(video) }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -378,7 +394,25 @@ struct WorshipFeedView: View {
     /// sermons, so it cannot be found by following channel purpose — it has
     /// to be pinned deliberately.
     private var pinnedPlaylists: [CachedPlaylist] {
-        allPlaylists.filter { $0.purposeRaw == Purpose.worship.rawValue }
+        allPlaylists
+            .filter { $0.purposeRaw == Purpose.worship.rawValue }
+            .sorted { ($0.isPinned ? 0 : 1, $0.title) < ($1.isPinned ? 0 : 1, $1.title) }
+    }
+
+    /// Long-form sets kept at the top. Excluded from the feed below so they
+    /// are not listed twice.
+    private var pinnedVideos: [CachedVideo] {
+        allVideos.filter { $0.isPinned }
+    }
+
+    private func pinToggle(_ video: CachedVideo) -> some View {
+        Button {
+            video.isPinned.toggle()
+            try? modelContext.save()
+        } label: {
+            Label(video.isPinned ? "고정 해제" : "찬양에 고정",
+                  systemImage: video.isPinned ? "pin.slash" : "pin")
+        }
     }
 
     private func playPlaylist(_ playlist: CachedPlaylist) async {
@@ -418,6 +452,7 @@ struct WorshipFeedView: View {
                     || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
             }
             .filter { genre.matches($0.title) }
+            .filter { !$0.isPinned }
             .prefix(Self.browseCap)
             .map { $0 }
     }

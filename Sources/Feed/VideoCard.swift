@@ -230,3 +230,48 @@ struct VideoMetaRow: View {
         .contentShape(Rectangle())
     }
 }
+
+// MARK: - Pinned set bar
+
+/// A long-form set at the top of a feed.
+///
+/// Rendered as a bar rather than a card because it is not this week's upload
+/// competing with the others — it is a thing you put on and leave on, and a
+/// three-hour runtime is the detail that identifies it.
+struct PinnedSetBar: View {
+    let video: CachedVideo
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Thumbnail(url: video.thumbnailURL, width: 72, height: 41)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(video.title)
+                    .font(.footnote)
+                    .lineLimit(2)
+                    .foregroundStyle(Color.primary)
+                HStack(spacing: 5) {
+                    if let channel = video.channelTitle {
+                        Text(channel).lineLimit(1)
+                    }
+                    if let label = video.durationLabel {
+                        Text("·")
+                        Text(label).monospacedDigit()
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+            Image(systemName: "play.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+    }
+}

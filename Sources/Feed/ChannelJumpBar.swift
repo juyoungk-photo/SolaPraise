@@ -177,3 +177,31 @@ struct ChannelFilterBar: View {
         .buttonStyle(.plain)
     }
 }
+
+// MARK: - Pinning
+
+/// Pin or unpin a playlist from wherever it is shown.
+///
+/// Pinning also files the playlist on a feed, because the two go together: you
+/// pin something so it is waiting for you on the tab you open, and a playlist
+/// with no purpose has no tab to wait on.
+struct PlaylistPinButton: View {
+    let playlist: CachedPlaylist
+    let purpose: Purpose
+    let save: () -> Void
+
+    var body: some View {
+        Button {
+            playlist.isPinned.toggle()
+            if playlist.isPinned {
+                playlist.purposeRaw = purpose.rawValue
+            }
+            save()
+        } label: {
+            Label(
+                playlist.isPinned ? "고정 해제" : "\(purpose.title)에 고정",
+                systemImage: playlist.isPinned ? "pin.slash" : "pin"
+            )
+        }
+    }
+}
