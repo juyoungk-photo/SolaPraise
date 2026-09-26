@@ -73,6 +73,15 @@ final class TeamStore: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var lastLoaded: Date?
 
+    /// Set when a write comes back 403 while reads are fine.
+    ///
+    /// The sheet is commonly owned by the church's account while people sign
+    /// in with their own, so "can read" and "can write" are genuinely
+    /// separate here: link sharing gives everyone the first and nobody the
+    /// second. Signing up silently failing would be the worst version of
+    /// that, so it is stated and the buttons stop pretending.
+    @Published private(set) var isReadOnly = false
+
     private var client: SheetsClient?
 
     func configure(auth: GoogleAuthManager) {
@@ -175,6 +184,7 @@ final class TeamStore: ObservableObject {
         ]
 
         do {
+            isReadOnly = false
             if let existing = mySignup(for: service, role: role, email: email) {
                 try await client.write(
                     sheetId: sheetId,
@@ -192,6 +202,11 @@ final class TeamStore: ObservableObject {
                                    isAvailable: available,
                                    row: mySignup(for: service, role: role, email: email)?.row ?? 0))
             signups[day] = list
+        } catch SheetsClient.SheetsError.http(403, _) {
+            // Reads work, so this is not the scope and not the sheet being
+            // missing: this account has view access where it needs edit.
+            isReadOnly = true
+            errorMessage = "이 시트에 편집 권한이 없어 사인업을 저장하지 못했습니다. 시트 주인에게 이 계정을 편집자로 추가해 달라고 요청하세요."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

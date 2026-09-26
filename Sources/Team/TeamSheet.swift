@@ -29,6 +29,13 @@
 //  Who the 예배 준비 tab appears for. See TeamAccess for what that does
 //  and, more importantly, what it does not do.
 //
+//  NOTE: these are the addresses people sign into the APP with, which is
+//  often not the address that owns the sheet. A church account commonly owns
+//  the document while members sign in personally — so the owner must share
+//  the sheet with each member's own address as an editor, and that address is
+//  what belongs here. Link sharing is not enough: it grants reading, and a
+//  signup is a write.
+//
 
 import Foundation
 
