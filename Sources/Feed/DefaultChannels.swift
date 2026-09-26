@@ -86,21 +86,34 @@ enum DefaultChannels {
     /// every channel has one at UULV + the channel id minus its UC prefix. It
     /// needs no lookup and no maintenance — new services appear in it on their
     /// own.
-    /// `titleFilter` is not optional decoration here: the Live playlist holds
-    /// every stream the church has ever made — over 1,300 — and the weekly
-    /// shape is four weekday 모닝워십 to one 토요예배 and one 2부예배. Unfiltered
-    /// it is a devotional feed with the services scattered through it, which
-    /// is the wrong list entirely for 찬양.
+    /// `titleFilter` is not decoration here. Each of these playlists holds
+    /// far more than the thing it is pinned for, and the channel's own title
+    /// conventions are what separate them:
     ///
-    /// "예배" is the filter because it separates exactly along that line: both
-    /// weekend services carry it and 모닝워십 does not. A narrower "부예배"
-    /// would have dropped 토요예배, which has the worship team too.
+    ///   [2부예배] 9.20.2026 "…" @박요셉 목사      ← Sunday service, full
+    ///   [토요예배] 9.19.2026 …                    ← Saturday service
+    ///   [모닝워십] 금, 9.25.2026 …                ← weekday devotional
+    ///   09/20/2026 "…" 코너스톤교회-박요셉 목사   ← the sermon, cut out
+    ///
+    /// 찬양 wants the first: the full second service, because that is where
+    /// the worship team plays and what the team reviews afterwards.
+    ///
+    /// 말씀 wants the last: the same Sunday, trimmed to the preaching. Those
+    /// are ordinary uploads rather than streams, so they come from the
+    /// uploads playlist and not the Live one, and "코너스톤교회-" is what
+    /// marks them — the livestream titles never carry it.
     static let defaultPlaylists: [(playlistId: String, title: String, purpose: Purpose, titleFilter: String?)] = [
         (
             "UULV" + "r1z2X_zyeC8GMbLv4swMVA",
-            "코너스톤교회 주일·토요예배",
+            "코너스톤교회 주일 2부예배",
             .worship,
-            "예배"
+            "2부예배"
+        ),
+        (
+            "UU" + "r1z2X_zyeC8GMbLv4swMVA",
+            "코너스톤교회 주일 말씀",
+            .word,
+            "코너스톤교회-"
         )
     ]
 

@@ -55,9 +55,39 @@ final class PlayerHost: ObservableObject {
 
     func play(queue: [PlayableVideo], startIndex: Int = 0) {
         guard !queue.isEmpty else { return }
-        self.queue = queue
-        index = max(0, min(startIndex, queue.count - 1))
+        let chosen = queue.indices.contains(startIndex) ? queue[startIndex] : queue[0]
+        let cleaned = Self.watchable(queue, keeping: chosen)
+
+        self.queue = cleaned
+        index = cleaned.firstIndex { $0.id == chosen.id } ?? 0
         mode = .full
+    }
+
+    /// Drops what nobody queued a playlist to watch.
+    ///
+    /// A channel's uploads carry trailers, notices and Shorts alongside the
+    /// music, and once they are in the queue they play automatically — the
+    /// exact interruption this app exists to avoid. The video actually chosen
+    /// is always kept, however it looks: tapping a Short should still play
+    /// that Short.
+    static func watchable(_ videos: [PlayableVideo], keeping: PlayableVideo) -> [PlayableVideo] {
+        videos.filter { video in
+            if video.id == keeping.id { return true }
+            // A Short is a minute or less by definition. Unknown durations
+            // are kept, because a missing length is not evidence of anything.
+            if let seconds = video.durationSeconds, seconds <= 70 { return false }
+            return !isPromotional(video.title)
+        }
+    }
+
+    private static let promotionalMarkers = [
+        "#shorts", "shorts", "예고", "광고", "홍보", "안내", "공지",
+        "teaser", "trailer", "preview"
+    ]
+
+    private static func isPromotional(_ title: String) -> Bool {
+        let lower = title.lowercased()
+        return promotionalMarkers.contains { lower.contains($0) }
     }
 
     func minimize() {

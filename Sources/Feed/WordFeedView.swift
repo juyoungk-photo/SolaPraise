@@ -48,6 +48,7 @@ struct WordFeedView: View {
     @State private var showSettings = false
     @State private var showAddChannel = false
     @State private var isLoadingPlaylist = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var playlistError: String?
 
     var body: some View {
@@ -107,13 +108,21 @@ struct WordFeedView: View {
     private var scrollBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
-                if let hero = pinnedVideo {
-                    Button { play(hero, in: [hero]) } label: {
-                        PinnedVideoCard(video: hero)
+                heroRow
+
+                if !pinnedPlaylists.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("고정됨", systemImage: "pin.fill")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(pinnedPlaylists) { playlist in
+                            Button { Task { await openPlaylist(playlist) } } label: {
+                                PlaylistBar(playlist: playlist)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
                 }
 
                 ForEach(channels) { channel in
@@ -168,17 +177,84 @@ struct WordFeedView: View {
 
     // MARK: - Derived data
 
-    /// The pinned channel's newest upload, shown as the hero card.
+    /// One hero on a phone, two side by side on an iPad.
+    ///
+    /// The two are the day's two obligations and they are not the same
+    /// errand: today's devotional, and last Sunday's preaching. On a phone
+    /// there is only room to lead with one, so the daily one wins.
+    @ViewBuilder
+    private var heroRow: some View {
+        let today = pinnedVideo
+        let sermon = latestSermon
+        if today != nil || sermon != nil {
+            HStack(alignment: .top, spacing: 14) {
+                if let today {
+                    Button { play(today, in: [today]) } label: {
+                        PinnedVideoCard(video: today)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if sizeClass == .regular, let sermon, sermon.videoId != today?.videoId {
+                    Button { play(sermon, in: [sermon]) } label: {
+                        PinnedVideoCard(video: sermon)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+        }
+    }
+
+    /// Today's from the pinned channel — which on a Saturday is 토요예배,
+    /// because that is what the channel published that day. Following the
+    /// channel's own newest upload gets this right without the app having to
+    /// know the week's shape.
     private var pinnedVideo: CachedVideo? {
         guard let pinned = channels.first(where: \.isPinned) else { return nil }
         return allVideos.first { $0.channelId == pinned.youtubeChannelId }
     }
 
-    /// Latest N for a channel, minus whatever is already the hero card.
+    /// The most recent Sunday sermon cut, by the church's own title marker.
+    private var latestSermon: CachedVideo? {
+        allVideos.first { $0.title.contains("코너스톤교회-") }
+    }
+
+    private var pinnedPlaylists: [CachedPlaylist] {
+        allPlaylists.filter { $0.purposeRaw == Purpose.word.rawValue }
+    }
+
+    private func openPlaylist(_ playlist: CachedPlaylist) async {
+        guard auth.isSignedIn else {
+            playlistError = "재생목록을 열려면 Google 로그인이 필요합니다."
+            return
+        }
+        let client = AppServices.client(auth: auth, quota: quota)
+        let filter = playlist.titleFilter
+        guard let items = try? await client.recentPlaylistItems(
+            playlistId: playlist.playlistId,
+            pages: filter == nil ? 1 : 2
+        ) else {
+            playlistError = "\(playlist.title): 재생목록을 불러오지 못했습니다."
+            return
+        }
+        let queue = items.compactMap { item -> PlayableVideo? in
+            guard !item.isUnavailable else { return nil }
+            if let filter, !item.title.contains(filter) { return nil }
+            return PlayableVideo(item: item)
+        }
+        guard !queue.isEmpty else {
+            playlistError = "\(playlist.title): 최근 항목에서 찾지 못했습니다."
+            return
+        }
+        host.play(queue: queue, startIndex: 0)
+    }
+
+    /// Latest N for a channel, minus whatever is already a hero card.
     private func videos(for channel: Channel) -> [CachedVideo] {
-        let heroId = pinnedVideo?.videoId
+        let heroIds = Set([pinnedVideo?.videoId, latestSermon?.videoId].compactMap { $0 })
         return allVideos
-            .filter { $0.channelId == channel.youtubeChannelId && $0.videoId != heroId }
+            .filter { $0.channelId == channel.youtubeChannelId && !heroIds.contains($0.videoId) }
             .prefix(Self.perChannelCap)
             .map { $0 }
     }
