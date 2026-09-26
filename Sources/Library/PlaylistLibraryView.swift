@@ -17,6 +17,7 @@ struct PlaylistLibraryView: View {
     @Environment(\.modelContext) private var modelContext
     @StateObject private var state = LoadState<[YTPlaylist]>()
     @State private var showSettings = false
+    @State private var showAddChannel = false
 
     /// Channels kept here rather than in a purpose feed — 교제 content like
     /// 코너스톤TV or 아현이네TV that is worth having but shouldn't dilute
@@ -59,6 +60,9 @@ struct PlaylistLibraryView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showAddChannel) {
+                AddChannelView(defaultPurpose: .fellowship)
+            }
             .navigationDestination(item: $analyzedSong) { song in
                 LeadSheetView(song: song)
             }
@@ -94,7 +98,28 @@ struct PlaylistLibraryView: View {
                     }
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 0))
                 } header: {
-                    Text("채널")
+                    HStack {
+                        Text("채널")
+                        Spacer()
+                        Button { showAddChannel = true } label: {
+                            Label("추가", systemImage: "plus")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                } footer: {
+                    Text("교회 교제 채널이나 내 채널을 보관함에 둘 수 있습니다. 말씀·찬양 피드는 건드리지 않습니다.")
+                }
+            }
+
+            if shelfChannels.isEmpty {
+                Section {
+                    Button { showAddChannel = true } label: {
+                        Label("채널 추가", systemImage: "person.2.badge.plus")
+                    }
+                } footer: {
+                    Text("교회 교제 채널이나 내 채널을 보관함에 둘 수 있습니다.")
                 }
             }
 

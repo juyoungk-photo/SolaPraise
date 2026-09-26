@@ -185,14 +185,24 @@ final class CachedPlaylist {
     var itemCount: Int
     var fetchedAt: Date
 
+    /// Which feed this playlist belongs on, when it was added deliberately.
+    ///
+    /// Nil for playlists discovered by walking a channel — those inherit the
+    /// channel's purpose. Set when someone pastes a link, because a worship
+    /// playlist can live on a channel filed under 말씀: a church posts its
+    /// sermons and its worship from the same account.
+    var purposeRaw: String?
+
     init(playlistId: String, channelId: String, title: String,
-         thumbnailURLString: String? = nil, itemCount: Int = 0) {
+         thumbnailURLString: String? = nil, itemCount: Int = 0,
+         purpose: Purpose? = nil) {
         self.playlistId = playlistId
         self.channelId = channelId
         self.title = title
         self.thumbnailURLString = thumbnailURLString
         self.itemCount = itemCount
         self.fetchedAt = Date()
+        self.purposeRaw = purpose?.rawValue
     }
 
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }

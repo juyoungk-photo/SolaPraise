@@ -24,6 +24,8 @@ struct AddChannelView: View {
     @State private var purpose: Purpose
     @State private var isWorking = false
     @State private var errorMessage: String?
+    @State private var myChannels: [YTChannel] = []
+    @State private var isLoadingMine = false
 
     init(defaultPurpose: Purpose) {
         self.defaultPurpose = defaultPurpose
@@ -44,6 +46,7 @@ struct AddChannelView: View {
                     Text("Paste a channel link, a @handle, or a UC… channel id. A channel id or link costs no API quota; a @handle costs 1 unit to resolve.")
                 }
 
+                myChannelsSection
                 suggestionsSection
 
                 Section("Show in") {
@@ -77,6 +80,57 @@ struct AddChannelView: View {
                     }
                     .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || isWorking)
                 }
+            }
+        }
+    }
+
+    // MARK: - My own channels
+
+    /// Your own uploads, one tap.
+    ///
+    /// Nobody pastes a link to their own channel — you expect it to already be
+    /// there. One channels.list call with mine=true, made only when this sheet
+    /// is open and you are signed in.
+    @ViewBuilder
+    private var myChannelsSection: some View {
+        if auth.isSignedIn {
+            Section {
+                if myChannels.isEmpty {
+                    if isLoadingMine {
+                        HStack { ProgressView().controlSize(.small); Text("불러오는 중…") }
+                    } else {
+                        Text("이 계정에 채널이 없습니다.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(myChannels) { channel in
+                        let already = channelExists(channel.id)
+                        Button {
+                            addResolved(channel)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Label(channel.title, systemImage: "person.crop.square")
+                                    .foregroundStyle(Color.primary)
+                                Spacer()
+                                if already {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        }
+                        .disabled(already || isWorking)
+                    }
+                }
+            } header: {
+                Text("내 채널")
+            }
+            .task {
+                guard myChannels.isEmpty, !isLoadingMine else { return }
+                isLoadingMine = true
+                defer { isLoadingMine = false }
+                let client = AppServices.client(auth: auth, quota: quota)
+                myChannels = (try? await client.myChannels()) ?? []
             }
         }
     }
@@ -121,6 +175,19 @@ struct AddChannelView: View {
             title: suggestion.title,
             handle: suggestion.handle,
             purpose: suggestion.purpose,
+            sortOrder: nextSortOrder()
+        ))
+        try? modelContext.save()
+    }
+
+    /// Files an already-resolved channel — no lookup, so no quota.
+    private func addResolved(_ channel: YTChannel) {
+        guard !channelExists(channel.id) else { return }
+        modelContext.insert(Channel(
+            youtubeChannelId: channel.id,
+            title: channel.title,
+            handle: channel.handle,
+            purpose: purpose,
             sortOrder: nextSortOrder()
         ))
         try? modelContext.save()

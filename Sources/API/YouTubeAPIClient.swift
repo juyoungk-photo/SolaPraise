@@ -316,6 +316,23 @@ final class YouTubeAPIClient {
 
     // MARK: - Channels (1 unit)
 
+    /// The signed-in account's own channels (1 unit).
+    ///
+    /// Your own uploads are exactly the thing you would not think to add by
+    /// pasting a link — you do not search for your own channel, you expect it
+    /// to be there.
+    func myChannels() async throws -> [YTChannel] {
+        let page: YTListResponse<YTChannel> = try await get(
+            "channels",
+            query: [
+                .init(name: "part", value: "snippet,contentDetails"),
+                .init(name: "mine", value: "true")
+            ],
+            cost: .read
+        )
+        return page.items ?? []
+    }
+
     /// Resolves a pasted channel reference to a concrete channel.
     /// A `.channelId` costs 1 unit to look up metadata; a `.handle` also
     /// costs 1. Either way it happens once, when the channel is added.

@@ -64,6 +64,25 @@ enum DefaultChannels {
                          purpose: .fellowship, isPinned: false)
     ]
 
+    /// Playlists the app starts with, pinned to a feed by hand.
+    ///
+    /// A church posts its sermons and its worship from one account, so channel
+    /// purpose cannot separate them — 코너스톤교회 is filed under 말씀, but its
+    /// Sunday livestreams open with the worship team playing, which is 찬양 and
+    /// is what the team itself wants to review afterwards.
+    ///
+    /// The id is YouTube's own auto-generated "Live streams" playlist:
+    /// every channel has one at UULV + the channel id minus its UC prefix. It
+    /// needs no lookup and no maintenance — new services appear in it on their
+    /// own.
+    static let defaultPlaylists: [(playlistId: String, title: String, purpose: Purpose)] = [
+        (
+            "UULV" + "r1z2X_zyeC8GMbLv4swMVA",
+            "코너스톤교회 주일예배 라이브",
+            .worship
+        )
+    ]
+
     /// The channel whose psalm readings pair with the 시편 screen.
     static let psalmAudioChannelId = "UCISl2wEDnzYeg-k_kElfN4Q"   // 공동체성경읽기
 
@@ -100,11 +119,42 @@ enum DefaultChannels {
             added += 1
         }
 
+        seedPlaylists(context: context, defaults: defaults)
+
         guard added > 0 else { return }
         defaults.set(Array(seeded), forKey: seededKey)
         try? context.save()
         #if DEBUG
         print("[SolaPraise] seeded \(added) new default channels")
         #endif
+    }
+
+    /// Same per-item record as the channels, so a playlist you remove stays
+    /// removed rather than coming back on the next launch.
+    @MainActor
+    private static func seedPlaylists(context: ModelContext, defaults: UserDefaults) {
+        let key = "playlists.seededIds"
+        var seeded = Set(defaults.stringArray(forKey: key) ?? [])
+
+        let existing = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        let present = Set(existing.map(\.playlistId))
+
+        var added = 0
+        for entry in defaultPlaylists {
+            guard !present.contains(entry.playlistId),
+                  !seeded.contains(entry.playlistId) else { continue }
+            context.insert(CachedPlaylist(
+                playlistId: entry.playlistId,
+                channelId: "",
+                title: entry.title,
+                purpose: entry.purpose
+            ))
+            seeded.insert(entry.playlistId)
+            added += 1
+        }
+
+        guard added > 0 else { return }
+        defaults.set(Array(seeded), forKey: key)
+        try? context.save()
     }
 }

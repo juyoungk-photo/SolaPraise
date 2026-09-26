@@ -41,6 +41,10 @@ struct WorshipFeedView: View {
     @StateObject private var history = SearchHistory.shared("worship")
     /// Nil means every whitelisted channel.
     @State private var channelFilter: String?
+    @State private var showAddPlaylist = false
+
+    @Query(sort: [SortDescriptor(\CachedPlaylist.title)])
+    private var allPlaylists: [CachedPlaylist]
     @State private var remoteResults: [YTSearchResult] = []
     @State private var isSearching = false
     @State private var searchError: String?
@@ -82,6 +86,7 @@ struct WorshipFeedView: View {
                 }
                 .sheet(isPresented: $showSettings) { SettingsView() }
                 .sheet(isPresented: $showAddTopic) { AddTopicSheet() }
+                .sheet(isPresented: $showAddPlaylist) { AddPlaylistSheet(purpose: .worship) }
                 .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
                 .fullScreenCover(item: $playRequest) { request in
                     WatchScreen(queue: request.queue, startIndex: request.startIndex)
@@ -93,7 +98,12 @@ struct WorshipFeedView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { showAddPlaylist = true } label: {
+                Image(systemName: "text.badge.plus")
+            }
+            .accessibilityLabel("재생목록 추가")
+
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
         }
@@ -126,6 +136,22 @@ struct WorshipFeedView: View {
                 LazyVStack(alignment: .leading, spacing: 26) {
                     genreChips
                     topicChips
+
+                    if !pinnedPlaylists.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("재생목록")
+                                .font(.footnote.weight(.semibold))
+                            ForEach(pinnedPlaylists) { playlist in
+                                Button {
+                                    Task { await playPlaylist(playlist) }
+                                } label: {
+                                    PlaylistBar(playlist: playlist)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
 
                 if channels.isEmpty && topics.isEmpty {
                     emptyGuidance
@@ -344,6 +370,37 @@ struct WorshipFeedView: View {
             .filter { $0.title.lowercased().contains(needle) }
             .prefix(20)
             .map { $0 }
+    }
+
+    /// Playlists pinned to 찬양 by link.
+    ///
+    /// A church's worship playlist commonly lives on the same channel as its
+    /// sermons, so it cannot be found by following channel purpose — it has
+    /// to be pinned deliberately.
+    private var pinnedPlaylists: [CachedPlaylist] {
+        allPlaylists.filter { $0.purposeRaw == Purpose.worship.rawValue }
+    }
+
+    private func playPlaylist(_ playlist: CachedPlaylist) async {
+        guard auth.isSignedIn else {
+            searchError = "재생목록을 열려면 Google 로그인이 필요합니다."
+            return
+        }
+        let client = AppServices.client(auth: auth, quota: quota)
+        guard let items = try? await client.playlistItems(playlistId: playlist.playlistId)
+        else {
+            searchError = "\(playlist.title): 재생목록을 불러오지 못했습니다."
+            return
+        }
+        let queue = items.compactMap { item -> PlayableVideo? in
+            guard !item.isUnavailable else { return nil }
+            return PlayableVideo(item: item)
+        }
+        guard !queue.isEmpty else {
+            searchError = "\(playlist.title): 재생할 수 있는 영상이 없습니다."
+            return
+        }
+        playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
     }
 
     /// The browse feed: every worship video the cache holds, newest first,
