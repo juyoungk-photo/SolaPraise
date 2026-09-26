@@ -197,6 +197,84 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    // MARK: - Pushing a 콘티 into the sheet
+
+    struct PushResult {
+        let written: Int
+        let replaced: Int
+    }
+
+    /// Writes a playlist into the Songs tab as this service's 콘티.
+    ///
+    /// The point of the bridge: the playlist already holds the order and the
+    /// links, and the app already knows the key from any chart the team has
+    /// made — so the leader should not be retyping all three into a
+    /// spreadsheet.
+    ///
+    /// Existing rows for the date are rewritten in place rather than
+    /// appended to. Appending would leave last week's attempt underneath the
+    /// new one, and the sheet is what the team reads on Sunday morning.
+    func pushSongs(
+        _ incoming: [TeamSong],
+        to service: TeamService,
+        sheetId: String,
+        existingRows: [[String]]
+    ) async throws -> PushResult {
+        guard let client else { throw SheetsClient.SheetsError.noSheet }
+        let day = TeamSheet.dateFormatter.string(from: service.date)
+
+        // 1-based sheet rows already holding this date.
+        var targets: [Int] = []
+        for (offset, row) in existingRows.enumerated() where offset > 0 {
+            guard row.count > TeamSheet.Songs.date,
+                  let date = TeamSheet.day(row[TeamSheet.Songs.date]),
+                  Calendar.current.isDate(date, inSameDayAs: service.date) else { continue }
+            targets.append(offset + 1)
+        }
+
+        func cells(_ song: TeamSong) -> [String] {
+            [
+                day,
+                String(song.order),
+                song.title,
+                song.url?.absoluteString ?? "",
+                song.key ?? "",
+                song.transpose == 0 ? "" : String(song.transpose),
+                song.notes ?? ""
+            ]
+        }
+
+        var updates: [(range: String, rows: [[String]])] = []
+        for (index, song) in incoming.enumerated() where index < targets.count {
+            let row = targets[index]
+            updates.append(("\(TeamSheet.songsTab)!A\(row):G\(row)", [cells(song)]))
+        }
+        // Rows the old 콘티 used and the new one does not: blanked, not left
+        // behind claiming to be part of this Sunday.
+        for row in targets.dropFirst(incoming.count) {
+            updates.append(("\(TeamSheet.songsTab)!A\(row):G\(row)",
+                            [Array(repeating: "", count: 7)]))
+        }
+        if !updates.isEmpty {
+            try await client.batchWrite(sheetId: sheetId, updates: updates)
+        }
+
+        // Anything beyond the rows that existed has to be appended.
+        for song in incoming.dropFirst(targets.count) {
+            try await client.append(sheetId: sheetId, tab: TeamSheet.songsTab, row: cells(song))
+        }
+
+        songs[Calendar.current.startOfDay(for: service.date)] = incoming
+        return PushResult(written: incoming.count, replaced: targets.count)
+    }
+
+    /// The Songs tab exactly as it stands, so a push knows which rows to
+    /// rewrite rather than guessing from the parsed view.
+    func rawSongRows(sheetId: String) async throws -> [[String]] {
+        guard let client else { throw SheetsClient.SheetsError.noSheet }
+        return try await client.read(sheetId: sheetId, range: TeamSheet.songsTab)
+    }
+
     // MARK: - Parsing
 
     static func parseRoles(_ rows: [[String]]) -> [TeamRole] {

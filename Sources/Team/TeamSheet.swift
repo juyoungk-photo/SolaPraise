@@ -139,6 +139,29 @@ actor SheetsClient {
         _ = try await send(url: comps.url!, method: "PUT", body: Body(values: [row]))
     }
 
+    /// Several ranges in one request.
+    ///
+    /// Pushing a 콘티 rewrites one row per song, and doing that as separate
+    /// PUTs would be a dozen round trips and a dozen chances to leave the
+    /// sheet half-written.
+    func batchWrite(sheetId: String, updates: [(range: String, rows: [[String]])]) async throws {
+        guard !updates.isEmpty else { return }
+        struct ValueRange: Encodable { let range: String; let values: [[String]] }
+        struct Body: Encodable {
+            let valueInputOption: String
+            let data: [ValueRange]
+        }
+        let url = base.appendingPathComponent("\(sheetId)/values:batchUpdate")
+        _ = try await send(
+            url: url,
+            method: "POST",
+            body: Body(
+                valueInputOption: "USER_ENTERED",
+                data: updates.map { ValueRange(range: $0.range, values: $0.rows) }
+            )
+        )
+    }
+
     // MARK: - Transport
 
     private func send<B: Encodable>(url: URL, method: String, body: B?) async throws -> Data {

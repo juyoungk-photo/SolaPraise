@@ -24,6 +24,25 @@ struct ServicePrepView: View {
     @State private var selected: TeamService?
     @State private var showSettings = false
 
+    @Query(sort: [SortDescriptor(\CachedPlaylist.title)])
+    private var allPlaylists: [CachedPlaylist]
+
+    /// A push waiting on confirmation, because it rewrites the sheet the
+    /// team reads on Sunday morning.
+    private struct Push: Identifiable {
+        let playlist: CachedPlaylist
+        var id: String { playlist.playlistId }
+    }
+    @State private var pending: Push?
+    @State private var isPushing = false
+    @State private var pushNote: String?
+
+    @EnvironmentObject private var quota: QuotaLedger
+
+    private var pinnedPlaylists: [CachedPlaylist] {
+        allPlaylists.filter { $0.purposeRaw == Purpose.worship.rawValue }
+    }
+
     private var sheetId: String? { ReadingSettings.teamSheetId }
     private var service: TeamService? { selected ?? team.upcoming }
 
@@ -55,6 +74,23 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .confirmationDialog(
+                "이 예배의 콘티를 덮어씁니다",
+                isPresented: Binding(
+                    get: { pending != nil },
+                    set: { if !$0 { pending = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pending, let service {
+                    Button("\(pending.playlist.title) 으로 채우기") {
+                        Task { await push(pending.playlist, to: service) }
+                    }
+                }
+                Button("취소", role: .cancel) { pending = nil }
+            } message: {
+                Text("시트의 이 날짜 곡 목록이 재생목록 내용으로 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
+            }
         }
     }
 
@@ -134,6 +170,29 @@ struct ServicePrepView: View {
                     }
                 }
             }
+
+            if pinnedPlaylists.isEmpty {
+                Text("찬양 탭에 재생목록을 고정하면 여기로 보낼 수 있습니다.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Menu {
+                    ForEach(pinnedPlaylists) { playlist in
+                        Button(playlist.title) { pending = Push(playlist: playlist) }
+                    }
+                } label: {
+                    HStack {
+                        Label("재생목록에서 콘티 채우기", systemImage: "square.and.arrow.down")
+                        Spacer()
+                        if isPushing { ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(isPushing)
+            }
+
+            if let note = pushNote {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
         } header: {
             Text("콘티")
         } footer: {
@@ -199,9 +258,60 @@ struct ServicePrepView: View {
     /// Matched on title: the sheet names a song, the chart was made from a
     /// video whose title contains it.
     private func existingSheet(for song: TeamSong) -> SavedSong? {
-        let needle = song.title.trimmingCharacters(in: .whitespaces)
+        existingSheet(forTitle: song.title)
+    }
+
+    private func existingSheet(forTitle title: String) -> SavedSong? {
+        let needle = title.trimmingCharacters(in: .whitespaces)
         guard needle.count >= 2 else { return nil }
         return sheets.first { $0.title.contains(needle) || needle.contains($0.title) }
+    }
+
+    // MARK: - Pushing the 콘티
+
+    private func push(_ playlist: CachedPlaylist, to service: TeamService) async {
+        guard let sheetId else { return }
+        pending = nil
+        isPushing = true
+        pushNote = nil
+        defer { isPushing = false }
+
+        let client = AppServices.client(auth: auth, quota: quota)
+        guard let items = try? await client.playlistItems(playlistId: playlist.playlistId) else {
+            pushNote = "재생목록을 불러오지 못했습니다."
+            return
+        }
+
+        let songs: [TeamSong] = items.enumerated().compactMap { index, item in
+            guard !item.isUnavailable, let id = item.videoId else { return nil }
+            let chart = existingSheet(forTitle: item.title)
+            return TeamSong(
+                order: index + 1,
+                title: item.title,
+                url: YouTubeID.watchURL(id),
+                // The team's own key if a chart has one, otherwise what
+                // detection guessed, otherwise blank for the leader to fill.
+                key: chart?.keyLabel,
+                transpose: chart?.semitoneShift ?? 0,
+                notes: nil
+            )
+        }
+        guard !songs.isEmpty else {
+            pushNote = "재생할 수 있는 곡이 없습니다."
+            return
+        }
+
+        do {
+            let existing = try await team.rawSongRows(sheetId: sheetId)
+            let result = try await team.pushSongs(
+                songs, to: service, sheetId: sheetId, existingRows: existing
+            )
+            pushNote = result.replaced > 0
+                ? "\(result.written)곡을 보냈습니다. 기존 \(result.replaced)줄을 바꿨습니다."
+                : "\(result.written)곡을 보냈습니다."
+        } catch {
+            pushNote = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Roles
