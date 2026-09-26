@@ -54,23 +54,45 @@ struct ServicePrepView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let service {
                     content(service)
-                } else if auth.isSignedIn, !auth.canUseSheets {
+                } else if auth.isSignedIn, !auth.canUseSheets || team.needsAuthorization {
                     // The session predates the scope, so the sheet is fine
                     // and the token is not. Say which, and fix it here.
                     ContentUnavailableView {
                         Label("시트 접근 권한이 필요합니다", systemImage: "lock.rotation")
                     } description: {
-                        Text("로그인할 때는 없던 권한입니다. 아래를 눌러 한 번만 허용하면 됩니다. 로그아웃할 필요는 없습니다.")
+                        Text("로그인할 때는 없던 권한입니다. 먼저 위 버튼으로 허용해 보고, 그래도 안 되면 다시 로그인하세요. 그래도 같은 문제라면 Cloud Console의 OAuth 동의 화면에 spreadsheets 범위가 등록되어 있는지 확인해야 합니다.")
                     } actions: {
-                        Button("시트 권한 허용") {
-                            Task {
-                                let ok = await auth.requestScopes(
-                                    ["https://www.googleapis.com/auth/spreadsheets"]
-                                )
-                                if ok, let sheetId { await team.load(sheetId: sheetId) }
+                        VStack(spacing: 10) {
+                            Button("시트 권한 허용") {
+                                Task {
+                                    let ok = await auth.requestScopes(
+                                        ["https://www.googleapis.com/auth/spreadsheets"]
+                                    )
+                                    if ok, let sheetId { await team.load(sheetId: sheetId) }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            // Incremental consent fails outright if the scope
+                            // is not listed on the OAuth consent screen, and
+                            // a full re-login is the only thing that then
+                            // picks it up.
+                            Button("로그아웃 후 다시 로그인") {
+                                Task {
+                                    auth.signOut()
+                                    await auth.signIn()
+                                    if let sheetId { await team.load(sheetId: sheetId) }
+                                }
+                            }
+                            .buttonStyle(.bordered)
+
+                            if let message = team.errorMessage {
+                                Text(message)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
                             }
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 } else {
                     ContentUnavailableView(

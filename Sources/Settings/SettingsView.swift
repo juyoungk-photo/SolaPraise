@@ -238,6 +238,31 @@ struct SettingsView: View {
                 .font(.caption)
             }
 
+            if auth.isSignedIn {
+                Button {
+                    Task {
+                        _ = await auth.requestScopes(
+                            ["https://www.googleapis.com/auth/spreadsheets"]
+                        )
+                        if let id = TeamSheetSource.current { await team.load(sheetId: id) }
+                    }
+                } label: {
+                    Label("시트 권한 다시 요청", systemImage: "lock.rotation")
+                }
+                .font(.caption)
+
+                Button {
+                    Task {
+                        auth.signOut()
+                        await auth.signIn()
+                        if let id = TeamSheetSource.current { await team.load(sheetId: id) }
+                    }
+                } label: {
+                    Label("로그아웃 후 다시 로그인", systemImage: "arrow.clockwise")
+                }
+                .font(.caption)
+            }
+
             if let message = team.errorMessage {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }

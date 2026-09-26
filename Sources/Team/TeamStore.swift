@@ -82,6 +82,14 @@ final class TeamStore: ObservableObject {
     /// that, so it is stated and the buttons stop pretending.
     @Published private(set) var isReadOnly = false
 
+    /// Set when even a READ comes back 403.
+    ///
+    /// With the sheet shared to anyone-with-the-link, a refused read cannot
+    /// be about the document — it is the token missing the scope. Inferring
+    /// that from `grantedScopes` alone proved unreliable on a restored
+    /// session, so the server's answer is treated as the authority.
+    @Published var needsAuthorization = false
+
     private var client: SheetsClient?
 
     func configure(auth: GoogleAuthManager) {
@@ -135,6 +143,10 @@ final class TeamStore: ObservableObject {
             signups = Self.parseSignups(signupData)
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             lastLoaded = Date()
+            needsAuthorization = false
+        } catch SheetsClient.SheetsError.http(403, let message) {
+            needsAuthorization = true
+            errorMessage = message ?? "시트를 읽을 권한이 없습니다."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

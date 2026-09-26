@@ -165,11 +165,28 @@ struct PlayerStage: View {
                         .allowsHitTesting(!mini)
 
                     if mini {
-                        MiniChrome(host: host, current: current)
-                            .padding(.leading, PlayerStage.miniWidth + PlayerStage.miniPadding * 2)
-                            .frame(height: height + PlayerStage.miniPadding * 2)
-                            .offset(y: dockBottom - height - PlayerStage.miniPadding * 2)
-                            .transition(.opacity)
+                        // One bar, laid out across the full width, with a
+                        // gap where the player sits on top of it. The first
+                        // version positioned the chrome with padding and an
+                        // offset inside a topLeading ZStack, so it sized
+                        // itself to its content and its buttons ended up
+                        // somewhere other than where they appeared to be —
+                        // which is why stop and close did nothing.
+                        HStack(spacing: 0) {
+                            Color.clear
+                                .frame(width: PlayerStage.miniWidth + PlayerStage.miniPadding * 2)
+                            MiniChrome(host: host, current: current)
+                        }
+                        .frame(width: geo.size.width, height: PlayerStage.miniBarHeight)
+                        .background(.regularMaterial)
+                        .overlay(alignment: .top) { Divider() }
+                        .offset(y: dockBottom - PlayerStage.miniBarHeight)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(WatchScreen.stageAnimation) { host.expand() }
+                        }
+                        .gesture(dragGesture(mini: true))
+                        .transition(.opacity)
                     }
 
                     ZStack {
@@ -178,9 +195,7 @@ struct PlayerStage: View {
 
                         // The end-screen guard, painted the instant ENDED
                         // arrives so YouTube's suggestion grid never gets a
-                        // frame. It moved here with the player: it has to be
-                        // over the video, and the video no longer lives in
-                        // the screen that used to draw it.
+                        // frame.
                         if host.coordinator.didEnd,
                            SolaPraiseConfig.endBehavior == .overlay, !mini {
                             PlayerEndCard(host: host)
@@ -189,27 +204,14 @@ struct PlayerStage: View {
                             PlayerErrorCard(host: host, message: message)
                         }
                     }
-                        .frame(width: width, height: height)
-                        .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0,
-                                                    style: .continuous))
-                        .offset(
-                            x: mini ? PlayerStage.miniPadding : 0,
-                            y: mini ? dockBottom - height - PlayerStage.miniPadding : 0
-                        )
-                        .allowsHitTesting(!mini)
-                        .gesture(dragGesture(mini: mini))
-                }
-                .background {
-                    if mini {
-                        Rectangle()
-                            .fill(.regularMaterial)
-                            .frame(height: height + PlayerStage.miniPadding * 2)
-                            .overlay(alignment: .top) { Divider() }
-                            .offset(y: dockBottom - height - PlayerStage.miniPadding * 2)
-                            .onTapGesture {
-                                withAnimation(WatchScreen.stageAnimation) { host.expand() }
-                            }
-                    }
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0, style: .continuous))
+                    .offset(
+                        x: mini ? PlayerStage.miniPadding : 0,
+                        y: mini ? dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding : 0
+                    )
+                    .allowsHitTesting(!mini)
+                    .gesture(dragGesture(mini: mini))
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
             }
