@@ -269,7 +269,25 @@ struct SettingsView: View {
         } header: {
             Text("팀 시트")
         } footer: {
-            Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에 적힌 주소만 「예배」 탭을 볼 수 있습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
+            VStack(alignment: .leading, spacing: 6) {
+                // The one address that matters, stated plainly.
+                //
+                // The sheet is commonly owned by the church's account while
+                // the app is signed in personally, and the app holds only one
+                // account — so this is the address that must be able to read
+                // and write the sheet, and the one that belongs on Members.
+                // Leaving it implicit meant sharing with the wrong address and
+                // wondering why nothing changed.
+                if let email = auth.email {
+                    (Text("시트에 접근하는 계정: ").foregroundStyle(.secondary)
+                     + Text(email).bold())
+                        .font(.caption)
+                } else {
+                    Text("로그인하지 않아 시트를 열 수 없습니다.").font(.caption)
+                }
+                Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다 — 링크 공유가 열려 있거나, 시트 주인이 위 주소를 편집자로 추가했으면 됩니다.")
+                Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에는 앱에 로그인하는 주소를 적습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 「예배」 탭이 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
+            }
         }
     }
 

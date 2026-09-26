@@ -86,6 +86,11 @@ struct ServicePrepView: View {
                             }
                             .buttonStyle(.bordered)
 
+                            if let email = auth.email {
+                                Text("현재 계정: \(email)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                             if let message = team.errorMessage {
                                 Text(message)
                                     .font(.caption2)
@@ -373,7 +378,7 @@ struct ServicePrepView: View {
             Text("파트")
         } footer: {
             if team.isReadOnly {
-                Text("이 계정은 시트를 볼 수만 있어 사인업을 저장할 수 없습니다. 시트 주인에게 편집자로 추가해 달라고 요청하세요. 시트가 다른 계정(교회 계정) 소유라면, 앱에 로그인한 주소를 그대로 알려 주면 됩니다.")
+                Text("\(auth.email ?? "이 계정")은 시트를 볼 수만 있어 사인업을 저장할 수 없습니다. 시트 주인(교회 계정)에게 이 주소를 편집자로 추가해 달라고 하세요. 앱은 계정을 하나만 쓰므로, 시트 주인 계정으로 로그인할 필요는 없습니다.")
             } else {
                 Text("「가능」은 리더에게 알리는 것이고, 확정은 리더가 시트에서 이름을 넣어 정합니다.")
             }
