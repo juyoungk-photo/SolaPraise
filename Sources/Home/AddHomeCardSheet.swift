@@ -23,6 +23,7 @@ struct AddHomeCardSheet: View {
 
     @State private var linkInput = ""
     @State private var topicInput = ""
+    @State private var playlistPurpose: Purpose = .worship
 
     private var existingKeys: Set<String> { Set(cards.map(\.dedupeKey)) }
 
@@ -66,8 +67,26 @@ struct AddHomeCardSheet: View {
                         .font(.caption2).foregroundStyle(.orange)
                 }
                 HStack {
+                    // A shared playlist arrives in a message, so the link is
+                    // already on the clipboard by the time this sheet opens.
+                    PasteButton(payloadType: String.self) { strings in
+                        guard let text = strings.first else { return }
+                        linkInput = text
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonBorderShape(.capsule)
+
                     Spacer()
                     if pastedPlaylistId != nil {
+                        // Which feed it also belongs on. A shared set is
+                        // usually 찬양, so that leads.
+                        Picker("", selection: $playlistPurpose) {
+                            Text("찬양").tag(Purpose.worship)
+                            Text("말씀").tag(Purpose.word)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 120)
+
                         Button("재생목록 카드") { addPlaylistCard() }
                             .font(.caption)
                             .buttonStyle(.bordered)
@@ -136,15 +155,59 @@ struct AddHomeCardSheet: View {
     /// by anyone holding the link.
     private func addPlaylistCard() {
         guard let id = pastedPlaylistId else { return }
+        let purpose = playlistPurpose
         add(kind: .playlist, targetId: id, title: "재생목록")
+        pinToFeed(id: id, title: "재생목록", purpose: purpose, thumbnail: nil, count: 0)
         linkInput = ""
+
         Task {
             guard auth.isSignedIn else { return }
             let client = AppServices.client(auth: auth, quota: quota)
             guard let playlist = try? await client.playlist(id: id) else { return }
             cards.first { $0.dedupeKey == "playlist-\(id)" }?.title = playlist.title
+            pinToFeed(
+                id: id,
+                title: playlist.title,
+                purpose: purpose,
+                thumbnail: playlist.thumbnailURL?.absoluteString,
+                count: playlist.itemCount
+            )
             try? modelContext.save()
         }
+    }
+
+    /// A playlist put on the home screen also belongs on its tab.
+    ///
+    /// Adding it in one place and having to add it again in another is busy
+    /// work — the home card says which playlist matters, and 찬양 or 말씀 is
+    /// where you go looking for it later.
+    private func pinToFeed(
+        id: String,
+        title: String,
+        purpose: Purpose,
+        thumbnail: String?,
+        count: Int
+    ) {
+        let existing = (try? modelContext.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        if let match = existing.first(where: { $0.playlistId == id }) {
+            match.purposeRaw = purpose.rawValue
+            match.isPinned = true
+            if title != "재생목록" { match.title = title }
+            if let thumbnail { match.thumbnailURLString = thumbnail }
+            if count > 0 { match.itemCount = count }
+        } else {
+            let playlist = CachedPlaylist(
+                playlistId: id,
+                channelId: "",
+                title: title,
+                thumbnailURLString: thumbnail,
+                itemCount: count,
+                purpose: purpose,
+                isPinned: true
+            )
+            modelContext.insert(playlist)
+        }
+        try? modelContext.save()
     }
 
     private func addTopicCard() {

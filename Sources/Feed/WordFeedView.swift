@@ -275,7 +275,9 @@ struct WordFeedView: View {
     }
 
     private var pinnedPlaylists: [CachedPlaylist] {
-        allPlaylists.filter { $0.purposeRaw == Purpose.word.rawValue }
+        allPlaylists
+            .filter { $0.purposeRaw == Purpose.word.rawValue }
+            .sorted { ($0.isPinned ? 0 : 1, $0.title) < ($1.isPinned ? 0 : 1, $1.title) }
     }
 
     private func openPlaylist(_ playlist: CachedPlaylist) async {
