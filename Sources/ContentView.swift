@@ -99,9 +99,19 @@ struct ContentView: View {
         // below still does the drawing; this only buys the space.
         .safeAreaInset(edge: .bottom) {
             if playerHost.mode == .mini {
-                Color.clear
-                    .frame(height: PlayerStage.miniBarHeight)
-                    .allowsHitTesting(false)
+                // Doubles as the measurement. This sits directly above the
+                // tab bar, so its bottom edge IS the top of the tab bar —
+                // which is where the docked player has to end, and the thing
+                // that was previously being guessed at.
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { playerHost.dockAnchorY = proxy.frame(in: .global).maxY }
+                        .onChange(of: proxy.frame(in: .global).maxY) { _, new in
+                            playerHost.dockAnchorY = new
+                        }
+                }
+                .frame(height: PlayerStage.miniBarHeight)
+                .allowsHitTesting(false)
             }
         }
         .overlay { PlayerStage(host: playerHost) }

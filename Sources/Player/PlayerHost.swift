@@ -37,6 +37,15 @@ final class PlayerHost: ObservableObject {
     /// never rebuilt by a change of presentation.
     let coordinator = PlayerCoordinator()
 
+    /// Where the tab bar starts, in global coordinates.
+    ///
+    /// Measured, not assumed. A hardcoded tab-bar height was wrong often
+    /// enough to put the docked player ON the tab bar — and because the bar
+    /// is hit-testable, it then swallowed every tap meant for a tab. Two
+    /// symptoms, one cause: tabs stopped switching and the close button
+    /// became unreliable, because both were fighting the same overlap.
+    @Published var dockAnchorY: CGFloat?
+
     /// Handlers the player screen installs, so the overlays drawn over the
     /// video can act without the video having to live inside that screen.
     var onAdvance: (() -> Void)?
@@ -136,14 +145,6 @@ struct PlayerStage: View {
     /// layout somewhere, and this is the number.
     static var miniBarHeight: CGFloat { miniWidth * 9 / 16 + miniPadding * 2 }
 
-    /// The tab bar sits below this overlay, not inside it.
-    ///
-    /// PlayerStage is an overlay on the TabView, so it covers the tab bar —
-    /// and the mini player landed straight on top of it, swallowing every tap
-    /// meant for a tab and putting its own buttons where the tab bar already
-    /// was. The bar has to be lifted clear of it.
-    private var tabBarHeight: CGFloat { sizeClass == .regular ? 56 : 49 }
-
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
@@ -151,7 +152,11 @@ struct PlayerStage: View {
             GeometryReader { geo in
                 let mini = host.mode == .mini
                 let fullWidth = geo.size.width
-                let dockBottom = geo.size.height - (mini ? tabBarHeight : 0)
+                // The measured top of the tab bar, converted into this
+                // view's space. Falls back to the full height only until the
+                // first measurement arrives.
+                let anchor = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
+                let dockBottom = mini ? (anchor ?? geo.size.height) : geo.size.height
                 let width = mini ? PlayerStage.miniWidth : fullWidth
                 let height = width * 9 / 16
 
@@ -181,10 +186,11 @@ struct PlayerStage: View {
                         .background(.regularMaterial)
                         .overlay(alignment: .top) { Divider() }
                         .offset(y: dockBottom - PlayerStage.miniBarHeight)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(WatchScreen.stageAnimation) { host.expand() }
-                        }
+                        // No tap gesture on the bar itself: a container tap
+                        // competes with the buttons inside it, which is the
+                        // other half of why close was unreliable. Expanding
+                        // is the title's job, and dragging still works
+                        // anywhere because a drag and a tap do not collide.
                         .gesture(dragGesture(mini: true))
                         .transition(.opacity)
                     }
@@ -255,12 +261,11 @@ private struct MiniChrome: View {
                         .lineLimit(1)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(WatchScreen.stageAnimation) { host.expand() }
             }
-
-            Spacer(minLength: 0)
 
             Button {
                 if host.coordinator.state == .playing {
@@ -269,16 +274,21 @@ private struct MiniChrome: View {
                     host.coordinator.play()
                 }
             } label: {
+                // 44pt, the minimum Apple specifies for a touch target. The
+                // old 34 and 30 were small enough to miss, which read as the
+                // buttons not working at all.
                 Image(systemName: host.coordinator.state == .playing
                       ? "pause.fill" : "play.fill")
-                    .frame(width: 34, height: 34)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button { host.close() } label: {
                 Image(systemName: "xmark")
                     .font(.footnote.weight(.semibold))
-                    .frame(width: 30, height: 34)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
