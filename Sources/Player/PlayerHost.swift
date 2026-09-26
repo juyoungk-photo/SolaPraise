@@ -362,6 +362,26 @@ struct PlayerErrorCard: View {
                     .multilineTextAlignment(.center)
 
                 VStack(spacing: 10) {
+                    if host.coordinator.canRetryLoad {
+                        Button {
+                            host.coordinator.retryLoad()
+                        } label: {
+                            Label("다시 시도", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        if let current = host.current,
+                           let url = YouTubeID.watchURL(current.id) {
+                            Button {
+                                openURL(url)
+                            } label: {
+                                Label("YouTube에서 열기", systemImage: "arrow.up.forward.app")
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.white)
+                        }
+                    }
+
                     if host.coordinator.isEmbedBlocked {
                         // The song is usually available as another upload —
                         // label copies get embedding disabled, church and

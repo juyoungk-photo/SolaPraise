@@ -84,6 +84,10 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     private var loadedVideoId: String?
     private var pendingAutoplay = true
     private var hasRetriedLoad = false
+    private var readinessWatchdog: Task<Void, Never>?
+
+    /// True when the failure is worth another attempt rather than a hand-off.
+    @Published private(set) var canRetryLoad = false
 
     /// Builds the player document, or returns the one already running.
     func hostedWebView() -> WKWebView {
@@ -114,7 +118,11 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     func present(videoId: String, autoplay: Bool) {
         pendingAutoplay = autoplay
         guard loadedVideoId != videoId else { return }
-        let isFirst = loadedVideoId == nil
+        // A document is only "already running" if the web view that held it
+        // still exists. detach() clears that reference, and swapping a video
+        // by JavaScript into a view that is gone loaded nothing and reported
+        // nothing — a black rectangle with no error to explain it.
+        let isFirst = loadedVideoId == nil || webView == nil
         loadedVideoId = videoId
         hasRetriedLoad = false
 
@@ -123,6 +131,37 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         } else {
             load(videoId: videoId)
         }
+        watchForSilentFailure(videoId: videoId)
+    }
+
+    /// Turns an unexplained black player into something a person can act on.
+    ///
+    /// Every known failure so far — a stale loopback port, a torn-down web
+    /// view, a page that never ran its script — looks identical from the
+    /// outside: black, no error, no spinner. If the player has not reported
+    /// itself ready in a few seconds, say so and offer the way out.
+    private func watchForSilentFailure(videoId: String) {
+        readinessWatchdog?.cancel()
+        readinessWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self, !Task.isCancelled else { return }
+            guard self.loadedVideoId == videoId, !self.isReady,
+                  self.errorMessage == nil else { return }
+            self.errorMessage = "영상이 열리지 않습니다. 다시 시도하거나 YouTube에서 열어 보세요."
+            self.canRetryLoad = true
+        }
+    }
+
+    /// Rebuilds the loopback server and the document from scratch.
+    func retryLoad() {
+        guard let videoId = loadedVideoId else { return }
+        errorMessage = nil
+        canRetryLoad = false
+        isReady = false
+        hasRetriedLoad = false
+        LocalPlayerServer.shared.stop()
+        serve(videoId: videoId)
+        watchForSilentFailure(videoId: videoId)
     }
 
     private func serve(videoId: String) {
@@ -194,6 +233,9 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// Must be called when the view goes away, or the userContentController
     /// keeps a strong reference to this coordinator forever.
     func detach() {
+        readinessWatchdog?.cancel()
+        readinessWatchdog = nil
+        canRetryLoad = false
         webView?.configuration.userContentController
             .removeScriptMessageHandler(forName: Self.messageName)
         webView?.stopLoading()
