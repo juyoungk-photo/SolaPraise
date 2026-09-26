@@ -130,7 +130,16 @@ struct WorshipFeedView: View {
 
     private var browseScroll: some View {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 26) {
+                // A pinned section header, not a safeAreaInset.
+                //
+                // The inset shared the top safe area with `.searchable`'s
+                // drawer, so every time iOS animated the search field on
+                // scroll it dragged the channel row up and down with it —
+                // which looked like the bar flickering out of existence. A
+                // pinned header lives in the scroll's own coordinate space
+                // and stays put.
+                LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
+                    Section {
                     genreChips
                     topicChips
 
@@ -206,16 +215,17 @@ struct WorshipFeedView: View {
                     if !(channels.isEmpty && topics.isEmpty) {
                         FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
                     }
+                    } header: {
+                        // Was a jump bar, which only made sense while the
+                        // feed was cut into per-channel sections. With one
+                        // feed there is nowhere to jump, so the same row
+                        // filters instead.
+                        if !channels.isEmpty {
+                            ChannelFilterBar(channels: channels, selected: $channelFilter)
+                        }
+                    }
                 }
                 .padding(.top, 8)
-            }
-            .safeAreaInset(edge: .top) {
-                // Was a jump bar, which only made sense while the feed was
-                // cut into per-channel sections. With one feed there is
-                // nowhere to jump, so the same row filters instead.
-                if !channels.isEmpty {
-                    ChannelFilterBar(channels: channels, selected: $channelFilter)
-                }
             }
     }
 

@@ -159,7 +159,7 @@ struct AddHomeCardSheet: View {
     @ViewBuilder
     private var shortcutSection: some View {
         let available = [
-            (HomeCardKind.reading, "시편", "오늘의 말씀"),
+            (HomeCardKind.reading, "오늘의 시편", "그날의 시편 · 앞뒤 날짜로 이동"),
             (HomeCardKind.search, "검색", "찬양·말씀 검색")
         ].filter { !existingKeys.contains("\($0.0.rawValue)--") }
 

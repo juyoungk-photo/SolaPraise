@@ -13,7 +13,9 @@
 import SwiftUI
 
 struct ScripturePanel: View {
-    let chapter: Int
+    /// Whole-chapter Psalms come from the bundle; anything else is a passage
+    /// fetched from ESV, because 개역한글 is bundled for the Psalms only.
+    let passage: ScriptureReference.Passage
 
     @EnvironmentObject private var daily: DailyReading
     @StateObject private var store = BibleStore()
@@ -49,7 +51,7 @@ struct ScripturePanel: View {
         .padding(14)
         .background(Color(.secondarySystemBackground),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .task(id: "\(chapter)-\(shown.rawValue)") { await load() }
+        .task(id: "\(passage.esvQuery)-\(shown.rawValue)") { await load() }
     }
 
     private var headerRow: some View {
@@ -58,11 +60,12 @@ struct ScripturePanel: View {
                 .font(.footnote)
                 .foregroundStyle(.tint)
 
-            Text("시편 \(chapter)편")
+            Text(passage.display)
                 .font(.subheadline.weight(.semibold))
 
             Spacer()
 
+            if passage.isPsalms, passage.verses == nil {
             Picker("", selection: Binding(
                 get: { shown },
                 set: { if $0.isAvailable { translation = $0 } }
@@ -75,6 +78,7 @@ struct ScripturePanel: View {
             }
             .pickerStyle(.segmented)
             .fixedSize()
+            }
 
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
@@ -109,7 +113,16 @@ struct ScripturePanel: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            data = try await store.chapter(chapter, in: shown)
+            if passage.isPsalms, passage.verses == nil {
+                data = try await store.chapter(passage.chapter, in: shown)
+            } else {
+                // Everything outside the Psalms needs Crossway, so say that
+                // plainly rather than failing with a decoding error.
+                let verses = try await store.esvPassage(passage.esvQuery)
+                data = BibleChapter(chapter: passage.chapter,
+                                    verses: verses,
+                                    translation: .esv)
+            }
         } catch {
             data = nil
             errorMessage = (error as? LocalizedError)?.errorDescription
@@ -136,5 +149,105 @@ enum ScriptureReference {
         guard let number = Int(title[range].filter(\.isNumber)),
               (1...Psalms.chapterCount).contains(number) else { return nil }
         return number
+    }
+}
+
+// MARK: - Any passage
+
+extension ScriptureReference {
+
+    /// A reference found in a video title.
+    struct Passage: Equatable {
+        let koreanBook: String
+        let englishBook: String
+        let chapter: Int
+        /// "46-57" when the title gives verses, nil for a whole chapter.
+        let verses: String?
+
+        var display: String {
+            let base = "\(koreanBook) \(chapter)"
+            guard let verses else { return base + "장" }
+            return base + ":" + verses
+        }
+
+        /// ESV's own reference syntax.
+        var esvQuery: String {
+            let base = "\(englishBook) \(chapter)"
+            guard let verses else { return base }
+            return base + ":" + verses
+        }
+
+        var isPsalms: Bool { englishBook == "Psalm" }
+    }
+
+    /// Korean book names as the church actually writes them, mapped to what
+    /// Crossway's API expects.
+    ///
+    /// Longest-first matching matters: 사사기 must be tried before 사기 would
+    /// ever be, and 요한일서 before 요한.
+    private static let books: [(korean: String, english: String)] = [
+        ("창세기","Genesis"),("출애굽기","Exodus"),("레위기","Leviticus"),("민수기","Numbers"),
+        ("신명기","Deuteronomy"),("여호수아","Joshua"),("사사기","Judges"),("룻기","Ruth"),
+        ("사무엘상","1 Samuel"),("사무엘하","2 Samuel"),("열왕기상","1 Kings"),("열왕기하","2 Kings"),
+        ("역대상","1 Chronicles"),("역대하","2 Chronicles"),("에스라","Ezra"),("느헤미야","Nehemiah"),
+        ("에스더","Esther"),("욥기","Job"),("시편","Psalm"),("잠언","Proverbs"),
+        ("전도서","Ecclesiastes"),("아가","Song of Solomon"),("이사야","Isaiah"),("예레미야애가","Lamentations"),
+        ("예레미야","Jeremiah"),("에스겔","Ezekiel"),("다니엘","Daniel"),("호세아","Hosea"),
+        ("요엘","Joel"),("아모스","Amos"),("오바댜","Obadiah"),("요나","Jonah"),
+        ("미가","Micah"),("나훔","Nahum"),("하박국","Habakkuk"),("스바냐","Zephaniah"),
+        ("학개","Haggai"),("스가랴","Zechariah"),("말라기","Malachi"),
+        ("마태복음","Matthew"),("마가복음","Mark"),("누가복음","Luke"),("요한계시록","Revelation"),
+        ("요한복음","John"),("사도행전","Acts"),("로마서","Romans"),
+        ("고린도전서","1 Corinthians"),("고린도후서","2 Corinthians"),("갈라디아서","Galatians"),
+        ("에베소서","Ephesians"),("빌립보서","Philippians"),("골로새서","Colossians"),
+        ("데살로니가전서","1 Thessalonians"),("데살로니가후서","2 Thessalonians"),
+        ("디모데전서","1 Timothy"),("디모데후서","2 Timothy"),("디도서","Titus"),
+        ("빌레몬서","Philemon"),("히브리서","Hebrews"),("야고보서","James"),
+        ("베드로전서","1 Peter"),("베드로후서","2 Peter"),
+        ("요한일서","1 John"),("요한이서","2 John"),("요한삼서","3 John"),("유다서","Jude"),
+        // Short forms the church uses in its own titles: "(수 7:1-26)".
+        ("수","Joshua"),("삿","Judges"),("창","Genesis"),("출","Exodus"),("레","Leviticus"),
+        ("민","Numbers"),("신","Deuteronomy"),("삼상","1 Samuel"),("삼하","2 Samuel"),
+        ("왕상","1 Kings"),("왕하","2 Kings"),("대상","1 Chronicles"),("대하","2 Chronicles"),
+        ("느","Nehemiah"),("욥","Job"),("시","Psalm"),("잠","Proverbs"),("전","Ecclesiastes"),
+        ("사","Isaiah"),("렘","Jeremiah"),("겔","Ezekiel"),("단","Daniel"),
+        ("마","Matthew"),("막","Mark"),("눅","Luke"),("요","John"),("행","Acts"),
+        ("롬","Romans"),("고전","1 Corinthians"),("고후","2 Corinthians"),("갈","Galatians"),
+        ("엡","Ephesians"),("빌","Philippians"),("골","Colossians"),("히","Hebrews"),
+        ("약","James"),("벧전","1 Peter"),("벧후","2 Peter"),("계","Revelation")
+    ]
+
+    /// Pulls a reference out of a title like
+    /// "[모닝워십] 화, 9.22.2026 욕심쟁이 세상 (사사기 9:46–57) @…".
+    static func passage(in title: String) -> Passage? {
+        // Longest names first so a short form never shadows a full one.
+        let ordered = books.sorted { $0.korean.count > $1.korean.count }
+
+        for book in ordered {
+            let pattern = NSRegularExpression.escapedPattern(for: book.korean)
+                // The en-dash is what these titles actually use for ranges.
+                + "\\s*(\\d{1,3})(?:\\s*[:장]\\s*(\\d{1,3}(?:\\s*[-–—]\\s*\\d{1,3})?))?"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let ns = title as NSString
+            guard let match = regex.firstMatch(
+                in: title, range: NSRange(location: 0, length: ns.length)
+            ) else { continue }
+
+            guard let chapter = Int(ns.substring(with: match.range(at: 1))) else { continue }
+            var verses: String?
+            if match.range(at: 2).location != NSNotFound {
+                verses = ns.substring(with: match.range(at: 2))
+                    .replacingOccurrences(of: "–", with: "-")
+                    .replacingOccurrences(of: "—", with: "-")
+                    .replacingOccurrences(of: " ", with: "")
+            }
+            return Passage(
+                koreanBook: book.korean,
+                englishBook: book.english,
+                chapter: chapter,
+                verses: verses
+            )
+        }
+        return nil
     }
 }

@@ -436,10 +436,11 @@ struct WatchScreen: View {
                 chordPanel
             }
 
-            // A psalm reading video shows one static frame for twenty
-            // minutes. The text belongs under it.
-            if let psalm = current.flatMap({ ScriptureReference.psalmChapter(in: $0.title) }) {
-                ScripturePanel(chapter: psalm)
+            // A reading or a sermon shows one static frame for an hour, and
+            // the passage it is working through is named in the title. Any
+            // book, not just the Psalms — 모닝워십 walks 사사기 for weeks.
+            if let passage = current.flatMap({ ScriptureReference.passage(in: $0.title) }) {
+                ScripturePanel(passage: passage)
             }
 
             if !sheetsForThisVideo.isEmpty {

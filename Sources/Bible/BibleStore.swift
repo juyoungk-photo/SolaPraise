@@ -29,6 +29,11 @@ final class BibleStore: ObservableObject {
         }
     }
 
+    /// Any passage outside the Psalms, which the bundle does not carry.
+    func esvPassage(_ query: String) async throws -> [BibleVerse] {
+        try await esv.passage(query)
+    }
+
     // MARK: - Bundled 개역한글
 
     enum BundleError: LocalizedError {

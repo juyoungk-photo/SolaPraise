@@ -127,11 +127,22 @@ struct PlayerStage: View {
     private static let miniWidth: CGFloat = 112
     private static let miniPadding: CGFloat = 8
 
+    /// The tab bar sits below this overlay, not inside it.
+    ///
+    /// PlayerStage is an overlay on the TabView, so it covers the tab bar —
+    /// and the mini player landed straight on top of it, swallowing every tap
+    /// meant for a tab and putting its own buttons where the tab bar already
+    /// was. The bar has to be lifted clear of it.
+    private var tabBarHeight: CGFloat { sizeClass == .regular ? 56 : 49 }
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     var body: some View {
         if host.isVisible, let current = host.current {
             GeometryReader { geo in
                 let mini = host.mode == .mini
                 let fullWidth = geo.size.width
+                let dockBottom = geo.size.height - (mini ? tabBarHeight : 0)
                 let width = mini ? Self.miniWidth : fullWidth
                 let height = width * 9 / 16
 
@@ -148,7 +159,7 @@ struct PlayerStage: View {
                         MiniChrome(host: host, current: current)
                             .padding(.leading, Self.miniWidth + Self.miniPadding * 2)
                             .frame(height: height + Self.miniPadding * 2)
-                            .offset(y: geo.size.height - height - Self.miniPadding * 2)
+                            .offset(y: dockBottom - height - Self.miniPadding * 2)
                             .transition(.opacity)
                     }
 
@@ -174,7 +185,7 @@ struct PlayerStage: View {
                                                     style: .continuous))
                         .offset(
                             x: mini ? Self.miniPadding : 0,
-                            y: mini ? geo.size.height - height - Self.miniPadding : 0
+                            y: mini ? dockBottom - height - Self.miniPadding : 0
                         )
                         .allowsHitTesting(!mini)
                         .gesture(dragGesture(mini: mini))
@@ -185,7 +196,7 @@ struct PlayerStage: View {
                             .fill(.regularMaterial)
                             .frame(height: height + Self.miniPadding * 2)
                             .overlay(alignment: .top) { Divider() }
-                            .offset(y: geo.size.height - height - Self.miniPadding * 2)
+                            .offset(y: dockBottom - height - Self.miniPadding * 2)
                             .onTapGesture {
                                 withAnimation(WatchScreen.stageAnimation) { host.expand() }
                             }

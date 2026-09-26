@@ -55,12 +55,24 @@ actor ESVClient {
 
     func chapter(_ number: Int) async throws -> [BibleVerse] {
         if let cached = cache[number] { return cached }
+        let verses = try await passage("Psalm \(number)")
+        cache[number] = verses
+        return verses
+    }
+
+    /// Any passage, in ESV's own reference syntax ("Judges 9:46-57").
+    ///
+    /// The app bundles 개역한글 for the Psalms only, so every other book has
+    /// to come from here — which is why a sermon on 사사기 can show its text
+    /// at all, and why it cannot without a Crossway key.
+    func passage(_ query: String) async throws -> [BibleVerse] {
+        if let cached = passageCache[query] { return cached }
 
         guard let key = keyProvider(), !key.isEmpty else { throw ESVError.missingKey }
 
         var comps = URLComponents(string: "https://api.esv.org/v3/passage/text/")!
         comps.queryItems = [
-            .init(name: "q", value: "Psalm \(number)"),
+            .init(name: "q", value: query),
             .init(name: "include-passage-references", value: "false"),
             .init(name: "include-verse-numbers", value: "true"),
             .init(name: "include-first-verse-numbers", value: "true"),
@@ -90,12 +102,18 @@ actor ESVClient {
         let verses = Self.parse(passage)
         guard !verses.isEmpty else { throw ESVError.empty }
 
-        store(number, verses)
+        // Same 500-verse ceiling as the chapter cache, counted together.
+        if passageCache.values.reduce(0, { $0 + $1.count }) + verses.count > Self.maxCachedVerses {
+            passageCache.removeAll()
+        }
+        passageCache[query] = verses
         return verses
     }
 
     /// Keeps the cache under Crossway's 500-verse ceiling by evicting the
     /// oldest chapters until the newcomer fits.
+    private var passageCache: [String: [BibleVerse]] = [:]
+
     private func store(_ number: Int, _ verses: [BibleVerse]) {
         cache[number] = verses
         insertionOrder.removeAll { $0 == number }

@@ -49,6 +49,8 @@ struct WordFeedView: View {
     @State private var showAddChannel = false
     @State private var isLoadingPlaylist = false
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @EnvironmentObject private var daily: DailyReading
+    @State private var showReading = false
     @State private var playlistError: String?
 
     var body: some View {
@@ -59,6 +61,9 @@ struct WordFeedView: View {
                 } else {
                     feedScroll
                 }
+            }
+            .fullScreenCover(isPresented: $showReading) {
+                ReadingView { showReading = false }
             }
             .navigationTitle("말씀")
             // Inline, because a large title plus the pinned channel bar leaves
@@ -94,20 +99,18 @@ struct WordFeedView: View {
 
     private var feedScroll: some View {
         ScrollViewReader { proxy in
-            scrollBody
-                .safeAreaInset(edge: .top) {
-                    ChannelJumpBar(channels: channels) { channel in
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo(channel.youtubeChannelId, anchor: .top)
-                        }
-                    }
-                }
+            scrollBody(proxy)
         }
     }
 
-    private var scrollBody: some View {
+    private func scrollBody(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
+            // Pinned section header rather than a top safe-area inset: the
+            // inset moved vertically as the navigation chrome animated, which
+            // read as the bar flickering away.
+            LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
+                Section {
+                bibleBar
                 heroRow
 
                 if !pinnedPlaylists.isEmpty {
@@ -160,6 +163,15 @@ struct WordFeedView: View {
                 }
 
                 FeedEndMarker(refreshedAt: feed.lastRefreshedAt, text: "여기까지입니다")
+                } header: {
+                    if !channels.isEmpty {
+                        ChannelJumpBar(channels: channels) { channel in
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                proxy.scrollTo(channel.youtubeChannelId, anchor: .top)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -176,6 +188,48 @@ struct WordFeedView: View {
     }
 
     // MARK: - Derived data
+
+    /// The text itself, before any video.
+    ///
+    /// 말씀 opened straight into uploads, which put watching ahead of
+    /// reading on the tab named for the word. The reading is the errand;
+    /// the videos are how someone else works through it.
+    private var bibleBar: some View {
+        Button { showReading = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "text.book.closed.fill")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(daily.title(for: daily.translation))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                    Text(daily.isCurrentRead ? "읽음" : "오늘의 성경 읽기")
+                        .font(.caption2)
+                        .foregroundStyle(daily.isCurrentRead ? .green : .secondary)
+                }
+
+                Spacer(minLength: 0)
+
+                if daily.isCurrentRead {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
 
     /// One hero on a phone, two side by side on an iPad.
     ///

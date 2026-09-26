@@ -42,7 +42,6 @@ struct HomeView: View {
     @State private var showError = false
     @State private var showPsalmSheet = false
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var dayOffset: [String: Int] = [:]
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
     @State private var attemptedPsalmChannels: Set<String> = []
@@ -189,6 +188,10 @@ struct HomeView: View {
             .safeAreaInset(edge: .top) { pinnedReading }
             .safeAreaInset(edge: .bottom) { searchBar }
             .navigationTitle("홈")
+            // Inline: a large title collapses as you scroll, and with the
+            // 시편 card pinned right under it the two moved against each
+            // other every time the feed was touched.
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(isEditing ? "완료" : "편집") {
@@ -218,7 +221,10 @@ struct HomeView: View {
                     await autoFindPsalmVideo()
                 }
             }
-            .task { await autoFindPsalmVideo() }
+            .task {
+                migrateCardTitles()
+                await autoFindPsalmVideo()
+            }
             .alert("시편 듣기", isPresented: $showError, presenting: playlistError) { _ in
                 Button("확인", role: .cancel) { }
             } message: { message in
@@ -342,15 +348,11 @@ struct HomeView: View {
         }
     }
 
+    /// Only 오늘의 시편 carries the arrows; everything else follows the day
+    /// they set.
     private func stepper(for card: HomeCard) -> ((Int) -> Void)? {
-        switch card.kind {
-        case .reading:
-            return { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
-        case .channel:
-            return { delta in stepDay(card, by: delta) }
-        default:
-            return nil
-        }
+        guard card.kind == .reading else { return nil }
+        return { delta in daily.setChapter(Psalms.wrap(daily.chapter + delta)) }
     }
 
     private func subtitle(for card: HomeCard) -> String? {
@@ -428,7 +430,7 @@ struct HomeView: View {
         let episodes = allVideos.filter { $0.channelId == id }
         guard !episodes.isEmpty else { return nil }
 
-        let offset = dayOffset[id] ?? 0
+        let offset = dayOffset
         guard offset != 0 else { return episodes.first }
 
         // Step through what exists rather than through the calendar: a channel
@@ -437,15 +439,21 @@ struct HomeView: View {
         return episodes[index]
     }
 
-    /// How many days back each channel card is showing. 0 is the newest.
-    private func stepDay(_ card: HomeCard, by delta: Int) {
-        guard let id = card.targetId else { return }
-        let count = allVideos.filter { $0.channelId == id }.count
-        guard count > 0 else { return }
-        let next = (dayOffset[id] ?? 0) + delta
-        // Clamped: forward stops at the newest, back stops at the oldest the
-        // cache holds.
-        dayOffset[id] = min(0, max(next, -(count - 1)))
+    /// How far back the whole screen is looking, in days.
+    ///
+    /// One control, not three. The psalm chapter advances a day at a time, so
+    /// the distance between the chapter on screen and today's is exactly the
+    /// number of days stepped — which means 시편 듣기 and the QT cards can
+    /// follow it without a stepper of their own. Three sets of arrows that
+    /// each moved a different card was the confusing part, not the stepping.
+    private var dayOffset: Int {
+        let today = DailyReading.scheduledChapter()
+        var delta = daily.chapter - today
+        // Psalms wrap at 150, so a small step near the boundary must not read
+        // as a 149-day jump.
+        if delta > 75 { delta -= Psalms.chapterCount }
+        if delta < -75 { delta += Psalms.chapterCount }
+        return delta
     }
 
     // MARK: - Actions
@@ -625,6 +633,17 @@ struct HomeView: View {
         try? modelContext.save()
     }
 
+    /// Renames a card created before the title changed, so an existing home
+    /// screen does not keep the old one forever.
+    private func migrateCardTitles() {
+        var changed = false
+        for card in cards where card.kind == .reading && card.title == "시편" {
+            card.title = "오늘의 시편"
+            changed = true
+        }
+        if changed { try? modelContext.save() }
+    }
+
     private func seedDefaultsIfEmpty() {
         #if DEBUG
         print("[SolaPraise] home seeding: existing cards=\(cards.count) channels=\(channels.count)")
@@ -640,7 +659,7 @@ struct HomeView: View {
             order += 1
         }
 
-        add(.reading, "시편")
+        add(.reading, "오늘의 시편")
         add(.psalmAudio, "시편 듣기", target: DefaultChannels.psalmAudioChannelId)
         add(.channel, "매일성경 QT", target: "UCroCQn7T3UZsE8N5oyaIP1w")
         add(.channel, "⛪ 코너스톤교회", target: "UCr1z2X_zyeC8GMbLv4swMVA")
