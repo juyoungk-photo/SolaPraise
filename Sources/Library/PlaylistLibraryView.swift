@@ -123,6 +123,19 @@ struct PlaylistLibraryView: View {
                 }
             }
 
+            if ReadingSettings.teamSheetId == nil {
+                Section {
+                    Button { showSettings = true } label: {
+                        Label("팀 시트 연결하기", systemImage: "calendar.badge.plus")
+                    }
+                } footer: {
+                    // The 예배 준비 tab appears only once a sheet is
+                    // connected, and a tab that is simply absent explains
+                    // nothing about why.
+                    Text("팀 시트를 연결하면 「예배 준비」 탭이 생깁니다. 주일 콘티, 파트, 사인업을 팀과 함께 봅니다.")
+                }
+            }
+
             Section {
                 NavigationLink {
                     StudioView()
