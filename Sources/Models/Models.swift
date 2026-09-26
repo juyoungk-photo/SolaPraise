@@ -206,9 +206,19 @@ final class CachedPlaylist {
     /// Pinning is how those three stop being eighty scrolls away.
     var isPinned: Bool = false
 
+    /// Keeps only the items whose title contains this.
+    ///
+    /// YouTube's auto-generated "Live streams" playlist holds every stream a
+    /// channel has ever made, which for a church means weekday 모닝워십 by the
+    /// hundred with the Sunday services scattered among them. The playlist is
+    /// still the right source — it updates itself and needs no maintenance —
+    /// but it needs narrowing to be worth opening.
+    var titleFilter: String?
+
     init(playlistId: String, channelId: String, title: String,
          thumbnailURLString: String? = nil, itemCount: Int = 0,
-         purpose: Purpose? = nil, isPinned: Bool = false) {
+         purpose: Purpose? = nil, isPinned: Bool = false,
+         titleFilter: String? = nil) {
         self.playlistId = playlistId
         self.channelId = channelId
         self.title = title
@@ -217,6 +227,7 @@ final class CachedPlaylist {
         self.fetchedAt = Date()
         self.purposeRaw = purpose?.rawValue
         self.isPinned = isPinned
+        self.titleFilter = titleFilter
     }
 
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }

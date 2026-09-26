@@ -212,6 +212,35 @@ final class YouTubeAPIClient {
         return page.items?.first
     }
 
+    /// The newest items of a playlist, stopping early.
+    ///
+    /// A channel's auto-generated Live playlist can hold well over a thousand
+    /// streams; walking all of it costs a unit per fifty and returns years of
+    /// history nobody asked for. These playlists are newest-first, so a couple
+    /// of pages is the recent weeks — which is what a "latest service" row
+    /// actually needs.
+    func recentPlaylistItems(playlistId: String, pages: Int = 2) async throws -> [YTPlaylistItem] {
+        var collected: [YTPlaylistItem] = []
+        var pageToken: String?
+
+        for _ in 0 ..< max(1, pages) {
+            var query: [URLQueryItem] = [
+                .init(name: "part", value: "snippet,contentDetails"),
+                .init(name: "playlistId", value: playlistId),
+                .init(name: "maxResults", value: "50")
+            ]
+            if let pageToken { query.append(.init(name: "pageToken", value: pageToken)) }
+
+            let page: YTListResponse<YTPlaylistItem> = try await get(
+                "playlistItems", query: query, cost: .read
+            )
+            collected.append(contentsOf: page.items ?? [])
+            guard let next = page.nextPageToken else { break }
+            pageToken = next
+        }
+        return collected
+    }
+
     /// Items of one playlist, in playlist order.
     func playlistItems(playlistId: String) async throws -> [YTPlaylistItem] {
         let items: [YTPlaylistItem] = try await getAllPages(

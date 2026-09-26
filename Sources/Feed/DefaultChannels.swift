@@ -86,11 +86,21 @@ enum DefaultChannels {
     /// every channel has one at UULV + the channel id minus its UC prefix. It
     /// needs no lookup and no maintenance — new services appear in it on their
     /// own.
-    static let defaultPlaylists: [(playlistId: String, title: String, purpose: Purpose)] = [
+    /// `titleFilter` is not optional decoration here: the Live playlist holds
+    /// every stream the church has ever made — over 1,300 — and the weekly
+    /// shape is four weekday 모닝워십 to one 토요예배 and one 2부예배. Unfiltered
+    /// it is a devotional feed with the services scattered through it, which
+    /// is the wrong list entirely for 찬양.
+    ///
+    /// "예배" is the filter because it separates exactly along that line: both
+    /// weekend services carry it and 모닝워십 does not. A narrower "부예배"
+    /// would have dropped 토요예배, which has the worship team too.
+    static let defaultPlaylists: [(playlistId: String, title: String, purpose: Purpose, titleFilter: String?)] = [
         (
             "UULV" + "r1z2X_zyeC8GMbLv4swMVA",
-            "코너스톤교회 주일예배 라이브",
-            .worship
+            "코너스톤교회 주일·토요예배",
+            .worship,
+            "예배"
         )
     ]
 
@@ -210,13 +220,25 @@ enum DefaultChannels {
 
         var added = 0
         for entry in defaultPlaylists {
+            // Correct one already seeded rather than leaving a device stuck
+            // with an earlier, wrong definition of the same playlist.
+            if let existing = existing.first(where: { $0.playlistId == entry.playlistId }) {
+                if existing.titleFilter != entry.titleFilter || existing.title != entry.title {
+                    existing.title = entry.title
+                    existing.titleFilter = entry.titleFilter
+                    added += 1
+                }
+                seeded.insert(entry.playlistId)
+                continue
+            }
             guard !present.contains(entry.playlistId),
                   !seeded.contains(entry.playlistId) else { continue }
             context.insert(CachedPlaylist(
                 playlistId: entry.playlistId,
                 channelId: "",
                 title: entry.title,
-                purpose: entry.purpose
+                purpose: entry.purpose,
+                titleFilter: entry.titleFilter
             ))
             seeded.insert(entry.playlistId)
             added += 1

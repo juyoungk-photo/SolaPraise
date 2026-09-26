@@ -421,17 +421,30 @@ struct WorshipFeedView: View {
             return
         }
         let client = AppServices.client(auth: auth, quota: quota)
-        guard let items = try? await client.playlistItems(playlistId: playlist.playlistId)
-        else {
+        // Bounded: an auto-generated Live playlist runs to thousands of items
+        // and is newest-first, so recent pages are what a "latest service" row
+        // means. Filtered because such a playlist holds everything the channel
+        // ever streamed, not the one kind you pinned it for.
+        let filter = playlist.titleFilter
+        guard let items = try? await client.recentPlaylistItems(
+            playlistId: playlist.playlistId,
+            // One page is 50 streams, about eight weeks — a dozen services
+            // after filtering, which is more than a "latest service" row can
+            // use. Two gives headroom if the mix shifts.
+            pages: filter == nil ? 1 : 2
+        ) else {
             searchError = "\(playlist.title): 재생목록을 불러오지 못했습니다."
             return
         }
         let queue = items.compactMap { item -> PlayableVideo? in
             guard !item.isUnavailable else { return nil }
+            if let filter, !item.title.contains(filter) { return nil }
             return PlayableVideo(item: item)
         }
         guard !queue.isEmpty else {
-            searchError = "\(playlist.title): 재생할 수 있는 영상이 없습니다."
+            searchError = playlist.titleFilter == nil
+                ? "\(playlist.title): 재생할 수 있는 영상이 없습니다."
+                : "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
         playRequest = FeedPlayRequest(queue: queue, startIndex: 0)
