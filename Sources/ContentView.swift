@@ -14,7 +14,20 @@ import SwiftData
 
 struct ContentView: View {
     @EnvironmentObject private var daily: DailyReading
+    @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var playerHost: PlayerHost
+    @EnvironmentObject private var team: TeamStore
+
+    /// Recomputed as the roster loads and as sign-in changes, so the tab
+    /// appears without a relaunch.
+    private var teamAccess: TeamAccess.State {
+        TeamAccess.evaluate(
+            sheetId: ReadingSettings.teamSheetId,
+            email: auth.email,
+            displayName: auth.displayName,
+            roster: team.memberEmails
+        )
+    }
     @Environment(\.modelContext) private var modelContext
     @State private var selection: Tab = Tab.defaultForNow()
     @State private var showDailyGate = false
@@ -28,7 +41,7 @@ struct ContentView: View {
     }
 
     enum Tab: Hashable {
-        case home, worship, word, library, studio
+        case home, worship, word, library, studio, team
 
         static func defaultForNow(_ date: Date = Date()) -> Tab {
             #if DEBUG
@@ -62,6 +75,14 @@ struct ContentView: View {
                 .tabItem { Label("보관함", systemImage: "list.bullet.rectangle") }
                 .tag(Tab.library)
 
+            // Members only, and only once a sheet is configured. Appears
+            // when the signed-in address is on the Members tab.
+            if teamAccess.isMember {
+                ServicePrepView()
+                    .tabItem { Label("예배", systemImage: "calendar.badge.clock") }
+                    .tag(Tab.team)
+            }
+
             if showsStudioTab {
                 StudioView()
                     .tabItem { Label("작업실", systemImage: "recordingtape") }
@@ -72,6 +93,14 @@ struct ContentView: View {
         // tree, so a song keeps playing while you move between them and the
         // web view is never re-parented.
         .overlay { PlayerStage(host: playerHost) }
+        // The roster has to be read before the tab can be decided, and the
+        // sheet is the only place it lives.
+        .task {
+            team.configure(auth: auth)
+            if let sheetId = ReadingSettings.teamSheetId, team.services.isEmpty {
+                await team.load(sheetId: sheetId)
+            }
+        }
         // The once-a-day gate: today's psalm comes up before anything else,
         // and only once — dismissing it leaves the normal tabs alone.
         .fullScreenCover(isPresented: $showDailyGate) {

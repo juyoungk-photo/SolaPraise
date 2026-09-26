@@ -45,7 +45,12 @@ final class GoogleAuthManager: ObservableObject {
     /// Manage the user's own YouTube account: list/create/update playlists
     /// and playlist items. This is a *sensitive* scope — see the note above.
     static let scopes = [
-        "https://www.googleapis.com/auth/youtube"
+        "https://www.googleapis.com/auth/youtube",
+        // Read and write the team's planning sheet. Narrower than
+        // `spreadsheets`: this grants access only to files the app itself
+        // opened, which for a sheet the leader pasted in means that sheet and
+        // nothing else in the person's Drive.
+        "https://www.googleapis.com/auth/drive.file"
     ]
 
     init() {

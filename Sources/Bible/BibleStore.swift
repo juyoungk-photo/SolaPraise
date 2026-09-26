@@ -94,6 +94,7 @@ enum ReadingSettings {
         static let esvKey = "reading.esvAPIKey"
         static let apiBibleKey = "reading.apiBibleKey"
         static let youtubeKey = "app.youtubeAPIKey"
+        static let teamSheetId = "team.sheetId"
         static let extraVersion = "reading.extraVersion"
         static let currentChapter = "reading.currentChapter"
         static let lastAdvancedDay = "reading.lastAdvancedDay"
@@ -110,6 +111,12 @@ enum ReadingSettings {
     static var esvAPIKey: String? {
         get { defaults.string(forKey: Keys.esvKey)?.trimmingCharacters(in: .whitespaces) }
         set { defaults.set(newValue, forKey: Keys.esvKey) }
+    }
+
+    /// The team's planning sheet. A pasted Sheets URL is reduced to its id.
+    static var teamSheetId: String? {
+        get { defaults.string(forKey: Keys.teamSheetId)?.trimmingCharacters(in: .whitespaces) }
+        set { defaults.set(newValue, forKey: Keys.teamSheetId) }
     }
 
     /// A YouTube API key typed in on this device, overriding the build's.

@@ -27,6 +27,8 @@ struct SettingsView: View {
     @State private var availableVersions: [APIBibleClient.Version] = []
     @State private var isLoadingVersions = false
     @State private var versionsError: String?
+    @State private var teamSheetInput = ReadingSettings.teamSheetId ?? ""
+    @EnvironmentObject private var team: TeamStore
     @StateObject private var feed = FeedStore()
     @State private var refreshNote: String?
     @State private var notifyTime: Date = {
@@ -192,6 +194,58 @@ struct SettingsView: View {
         }
 
         extraTranslationSection
+        teamSheetSection
+    }
+
+    // MARK: - Team sheet
+
+    /// Where 예배 준비 gets its data, and the only thing the leader has to
+    /// set up for the team.
+    @ViewBuilder
+    private var teamSheetSection: some View {
+        Section {
+            TextField("Google Sheets 주소 붙여넣기", text: $teamSheetInput, axis: .vertical)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.footnote)
+
+            HStack {
+                if let id = TeamAccess.sheetId(from: teamSheetInput), !teamSheetInput.isEmpty {
+                    Text(id).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                } else if !teamSheetInput.isEmpty {
+                    Text("시트 주소를 알아볼 수 없습니다")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+                Spacer()
+                Button("저장") {
+                    ReadingSettings.teamSheetId = TeamAccess.sheetId(from: teamSheetInput)
+                    Task {
+                        team.configure(auth: auth)
+                        if let id = ReadingSettings.teamSheetId {
+                            await team.load(sheetId: id)
+                        }
+                    }
+                }
+                .font(.caption)
+                .disabled(TeamAccess.sheetId(from: teamSheetInput) == nil)
+            }
+
+            if ReadingSettings.teamSheetId != nil {
+                Button("연결 해제", role: .destructive) {
+                    ReadingSettings.teamSheetId = nil
+                    teamSheetInput = ""
+                }
+                .font(.caption)
+            }
+
+            if let message = team.errorMessage {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+        } header: {
+            Text("팀 시트")
+        } footer: {
+            Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에 적힌 주소만 「예배」 탭을 볼 수 있습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
+        }
     }
 
     // MARK: - A third translation
