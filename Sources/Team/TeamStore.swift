@@ -308,18 +308,23 @@ final class TeamStore: ObservableObject {
     /// sharing is what actually protects it.
     private func loadMembers(sheetId: String, client: SheetsClient) async -> Set<String> {
         guard let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.membersTab),
-              rows.count > 1 else { return [] }
+              rows.count > 1 else { members = []; return [] }
+
         var emails: Set<String> = []
-        for row in rows.dropFirst() {
+        var list: [Member] = []
+        for (offset, row) in rows.enumerated() where offset > 0 {
             guard row.count > TeamSheet.Members.email else { continue }
             let email = row[TeamSheet.Members.email].trimmingCharacters(in: .whitespaces)
-            guard !email.isEmpty else { continue }
-            let active = row.count > TeamSheet.Members.active
+            guard !email.isEmpty, email.contains("@") else { continue }
+            let activeCell = row.count > TeamSheet.Members.active
                 ? row[TeamSheet.Members.active].lowercased()
                 : "true"
-            guard !["false", "no", "n", "0"].contains(active) else { continue }
-            emails.insert(email.lowercased())
+            let active = !["false", "no", "n", "0"].contains(activeCell)
+            let name = row.count > TeamSheet.Members.name ? row[TeamSheet.Members.name] : ""
+            list.append(Member(email: email, name: name, isActive: active, row: offset + 1))
+            if active { emails.insert(email.lowercased()) }
         }
+        members = list
         return emails
     }
 
@@ -554,6 +559,68 @@ final class TeamStore: ObservableObject {
             )
         }
         return out
+    }
+
+    // MARK: - Roster
+
+    /// Everyone on the Members tab, with their row so a change rewrites.
+    struct Member: Identifiable, Hashable {
+        let email: String
+        let name: String
+        let isActive: Bool
+        let row: Int
+        var id: String { email.lowercased() }
+    }
+
+    @Published private(set) var members: [Member] = []
+
+    func addMember(email: String, name: String, sheetId: String) async {
+        guard let client else { return }
+        let address = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard address.contains("@") else {
+            errorMessage = "이메일 주소가 아닙니다."
+            return
+        }
+        guard !members.contains(where: { $0.email.lowercased() == address }) else {
+            errorMessage = "이미 명단에 있습니다."
+            return
+        }
+        do {
+            let row = try await client.append(
+                sheetId: sheetId, tab: TeamSheet.membersTab,
+                row: [address, name, "TRUE"]
+            )
+            members.append(Member(email: address, name: name, isActive: true, row: row ?? 0))
+            memberEmails.insert(address)
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Deactivates rather than deletes.
+    ///
+    /// Removing the row would also remove the record that this person was
+    /// ever on the team, and their signups would then point at nobody. A
+    /// FALSE keeps the history and is reversible by the leader in one cell.
+    func setMemberActive(_ active: Bool, member: Member, sheetId: String) async {
+        guard let client, member.row >= 2 else { return }
+        do {
+            try await client.write(
+                sheetId: sheetId,
+                range: "\(TeamSheet.membersTab)!A\(member.row):C\(member.row)",
+                row: [member.email, member.name, active ? "TRUE" : "FALSE"]
+            )
+            members = members.map {
+                $0.id == member.id
+                    ? Member(email: $0.email, name: $0.name, isActive: active, row: $0.row)
+                    : $0
+            }
+            if active { memberEmails.insert(member.email.lowercased()) }
+            else { memberEmails.remove(member.email.lowercased()) }
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Live

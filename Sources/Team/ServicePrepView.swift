@@ -437,7 +437,7 @@ struct ServicePrepView: View {
     private func responseSection(_ service: TeamService) -> some View {
         let answers = team.responses(for: service)
         let silent = team.unanswered(for: service)
-        if !answers.isEmpty || !silent.isEmpty {
+        Group {
             Section {
                 ForEach(answers) { answer in
                     HStack {
@@ -459,6 +459,14 @@ struct ServicePrepView: View {
                         Text("미응답").font(.caption).foregroundStyle(.tertiary)
                     }
                 }
+
+                NavigationLink {
+                    MembersView()
+                } label: {
+                    Label(team.memberEmails.isEmpty ? "팀원 명단 만들기" : "팀원 명단",
+                          systemImage: "person.2")
+                        .font(.subheadline)
+                }
             } header: {
                 HStack {
                     Text("응답")
@@ -471,7 +479,7 @@ struct ServicePrepView: View {
                 }
             } footer: {
                 if team.memberEmails.isEmpty {
-                    Text("시트에 Members 탭을 두면 아직 답하지 않은 사람까지 보입니다.")
+                    Text("명단이 없으면 누가 답했는지는 알아도 누가 아직 답하지 않았는지는 알 수 없습니다.")
                 }
             }
         }
