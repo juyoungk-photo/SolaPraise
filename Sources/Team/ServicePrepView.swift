@@ -188,6 +188,7 @@ struct ServicePrepView: View {
 
             songSection(service)
             roleSection(service)
+            upcomingSection
 
             if let message = team.errorMessage {
                 Section { Text(message).font(.caption).foregroundStyle(.orange) }
@@ -195,26 +196,35 @@ struct ServicePrepView: View {
         }
     }
 
-    // MARK: - Songs
+    // MARK: - Order of service
 
     @ViewBuilder
     private func songSection(_ service: TeamService) -> some View {
-        let list = team.songs(for: service)
+        let items = team.plan(for: service)
+        let times = TeamStore.startTimes(for: items, from: serviceStart(service))
+        let total = items.compactMap(\.minutes).reduce(0, +)
+
         Section {
-            if list.isEmpty {
-                Text("이 예배의 콘티가 아직 비어 있습니다. 시트의 Songs 탭에 추가하세요.")
+            if items.isEmpty {
+                Text("이 예배의 순서가 비어 있습니다. 시트의 Plan 탭에 추가하거나, 아래에서 재생목록으로 찬양을 채우세요.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(list) { song in
-                    songRow(song)
+                ForEach(items) { item in
+                    planRow(item, startsAt: times[item.id])
                 }
 
-                if !playable(list).isEmpty {
+                let songs = items.filter { $0.kind == .song && $0.videoId != nil }
+                if !songs.isEmpty {
                     Button {
-                        host.play(queue: playable(list), startIndex: 0)
+                        host.play(
+                            queue: songs.compactMap { item in
+                                item.videoId.map { PlayableVideo(id: $0, title: item.title) }
+                            },
+                            startIndex: 0
+                        )
                     } label: {
-                        Label("콘티 전체 재생", systemImage: "play.fill")
+                        Label("찬양만 이어 듣기", systemImage: "play.fill")
                     }
                 }
             }
@@ -230,7 +240,7 @@ struct ServicePrepView: View {
                     }
                 } label: {
                     HStack {
-                        Label("재생목록에서 콘티 채우기", systemImage: "square.and.arrow.down")
+                        Label("재생목록에서 찬양 채우기", systemImage: "square.and.arrow.down")
                         Spacer()
                         if isPushing { ProgressView().controlSize(.small) }
                     }
@@ -242,55 +252,114 @@ struct ServicePrepView: View {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
-            Text("콘티")
+            HStack {
+                Text("순서")
+                Spacer()
+                if total > 0 {
+                    // The number a leader is actually watching.
+                    Text("\(total)분")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
         } footer: {
-            Text("키는 시트에 적힌 값입니다. 팀이 실제로 연주하는 키이므로 감지된 키보다 우선합니다.")
+            if team.hasPlanTab {
+                Text("시작 시각은 \(Self.clockFormatter.string(from: serviceStart(service)))을 기준으로 계산합니다. 길이를 적지 않은 순서는 시계를 넘기지 않으므로 그 뒤는 대략적인 값입니다.")
+            } else {
+                Text("시트에 Plan 탭을 추가하면 기도·설교·광고까지 포함한 순서와 시간이 보입니다. 지금은 Songs 탭의 찬양만 보여 주고 있습니다.")
+            }
         }
     }
 
-    private func songRow(_ song: TeamSong) -> some View {
-        HStack(spacing: 12) {
-            Text("\(song.order)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 18, alignment: .trailing)
+    /// 11:00 unless the leader wrote a time into the service title or notes.
+    ///
+    /// Guessed rather than configured, because a second service time is one
+    /// more thing to set up and nearly every service in this church starts on
+    /// the hour. A time anywhere in the title or notes wins over the guess.
+    private func serviceStart(_ service: TeamService) -> Date {
+        let calendar = Calendar.current
+        let haystack = [service.title, service.notes ?? ""].joined(separator: " ")
+        if let match = haystack.range(of: "\\b([0-9]{1,2})[:시]([0-9]{2})\\b",
+                                      options: .regularExpression) {
+            let digits = haystack[match].split(whereSeparator: { !$0.isNumber })
+            if digits.count == 2, let h = Int(digits[0]), let m = Int(digits[1]),
+               (0...23).contains(h), (0...59).contains(m) {
+                return calendar.date(bySettingHour: h, minute: m, second: 0,
+                                     of: service.date) ?? service.date
+            }
+        }
+        return calendar.date(bySettingHour: 11, minute: 0, second: 0,
+                             of: service.date) ?? service.date
+    }
+
+    static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ko_KR")
+        f.dateFormat = "a h:mm"
+        return f
+    }()
+
+    private func planRow(_ item: PlanItem, startsAt: Date?) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .trailing, spacing: 2) {
+                if let startsAt {
+                    Text(Self.clockFormatter.string(from: startsAt))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(item.kind == .song ? Color.accentColor : .secondary)
+                }
+                if let minutes = item.minutes {
+                    Text("\(minutes)분")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 54, alignment: .trailing)
+
+            Image(systemName: item.kind.symbolName)
+                .font(.caption)
+                .foregroundStyle(item.kind == .song ? Color.accentColor : .secondary)
+                .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(song.title).font(.subheadline)
+                Text(item.title).font(.subheadline)
                 HStack(spacing: 6) {
-                    if let key = song.key {
-                        Text(key)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tint)
-                    }
-                    if song.transpose != 0 {
-                        Text(song.transpose > 0 ? "+\(song.transpose)" : "\(song.transpose)")
-                            .font(.caption.monospacedDigit())
+                    if item.kind != .song {
+                        Text(item.kind.label)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    // A chart this team already made for the same song, so
-                    // the work is not repeated every week.
-                    if existingSheet(for: song) != nil {
+                    if let key = item.key {
+                        Text(key).font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                    }
+                    if let person = item.person {
+                        Text(person).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if item.kind == .song, existingSheet(forTitle: item.title) != nil {
                         Label("악보", systemImage: "music.quarternote.3")
                             .font(.caption2)
                             .foregroundStyle(.green)
                     }
-                    if let notes = song.notes {
-                        Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    }
+                }
+                if let notes = item.notes {
+                    Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
 
             Spacer(minLength: 0)
 
-            SheetMusicMenu(title: song.title) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .foregroundStyle(.secondary)
+            if item.kind == .song {
+                SheetMusicMenu(title: item.title) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
-            if let id = song.videoId {
+            if let id = item.videoId {
                 Button {
-                    host.play(queue: [PlayableVideo(id: id, title: song.title)], startIndex: 0)
+                    host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
                 }
@@ -298,26 +367,7 @@ struct ServicePrepView: View {
                 .foregroundStyle(.tint)
             }
         }
-        .padding(.vertical, 2)
-    }
-
-    private func playable(_ list: [TeamSong]) -> [PlayableVideo] {
-        list.compactMap { song in
-            guard let id = song.videoId else { return nil }
-            return PlayableVideo(id: id, title: song.title)
-        }
-    }
-
-    /// Matched on title: the sheet names a song, the chart was made from a
-    /// video whose title contains it.
-    private func existingSheet(for song: TeamSong) -> SavedSong? {
-        existingSheet(forTitle: song.title)
-    }
-
-    private func existingSheet(forTitle title: String) -> SavedSong? {
-        let needle = title.trimmingCharacters(in: .whitespaces)
-        guard needle.count >= 2 else { return nil }
-        return sheets.first { $0.title.contains(needle) || needle.contains($0.title) }
+        .padding(.vertical, 3)
     }
 
     // MARK: - Pushing the 콘티
@@ -335,7 +385,7 @@ struct ServicePrepView: View {
             return
         }
 
-        let songs: [TeamSong] = items.enumerated().compactMap { index, item in
+        let songs: [TeamSong] = items.enumerated().compactMap { index, item -> TeamSong? in
             guard !item.isUnavailable, let id = item.videoId else { return nil }
             let chart = existingSheet(forTitle: item.title)
             return TeamSong(
@@ -360,11 +410,70 @@ struct ServicePrepView: View {
                 songs, to: service, sheetId: sheetId, existingRows: existing
             )
             pushNote = result.replaced > 0
-                ? "\(result.written)곡을 보냈습니다. 기존 \(result.replaced)줄을 바꿨습니다."
-                : "\(result.written)곡을 보냈습니다."
+                ? "\(result.written)곡을 Songs 탭에 보냈습니다. 기존 \(result.replaced)줄을 바꿨습니다."
+                : "\(result.written)곡을 Songs 탭에 보냈습니다."
         } catch {
             pushNote = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // MARK: - Weeks ahead
+
+    /// Who is serving over the coming Sundays.
+    ///
+    /// The question a leader asks is never only about this week — it is
+    /// "who have I asked too often" and "what is still unfilled in three
+    /// weeks". One service at a time cannot answer either.
+    @ViewBuilder
+    private var upcomingSection: some View {
+        let future = team.services.filter { !$0.isPast }.prefix(6)
+        if future.count > 1 {
+            Section {
+                ForEach(Array(future)) { upcoming in
+                    Button { selected = upcoming } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(upcoming.date, format: .dateTime.month().day().weekday())
+                                    .font(.subheadline.weight(
+                                        upcoming.id == service?.id ? .semibold : .regular
+                                    ))
+                                Text(upcoming.title)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            filledSummary(upcoming)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("다음 예배")
+            } footer: {
+                Text("비어 있는 파트가 몇 개인지 먼저 보입니다. 날짜를 누르면 그 예배로 바뀝니다.")
+            }
+        }
+    }
+
+    private func filledSummary(_ upcoming: TeamService) -> some View {
+        let filled = team.roles.filter { upcoming.assignments[$0.name] != nil }.count
+        let total = team.roles.count
+        let complete = total > 0 && filled == total
+        return HStack(spacing: 4) {
+            Image(systemName: complete ? "checkmark.circle.fill" : "person.badge.clock")
+                .font(.caption2)
+            Text(total > 0 ? "\(filled)/\(total)" : "—")
+                .font(.caption.monospacedDigit())
+        }
+        .foregroundStyle(complete ? Color.green : .secondary)
+    }
+
+    /// A chart the team has already made for this song, matched on title.
+    private func existingSheet(forTitle title: String) -> SavedSong? {
+        let needle = title.trimmingCharacters(in: .whitespaces)
+        guard needle.count >= 2 else { return nil }
+        return sheets.first { $0.title.contains(needle) || needle.contains($0.title) }
     }
 
     // MARK: - Roles

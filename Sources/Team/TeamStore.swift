@@ -36,6 +36,69 @@ struct TeamSong: Identifiable, Hashable {
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
 }
 
+/// One line in the order of service.
+struct PlanItem: Identifiable, Hashable {
+    enum Kind: String, CaseIterable {
+        case song, prayer, reading, sermon, announcement, offering, transition, other
+
+        init(raw: String) {
+            let key = raw.trimmingCharacters(in: .whitespaces).lowercased()
+            switch key {
+            case "song", "찬양", "곡":            self = .song
+            case "prayer", "기도":                self = .prayer
+            case "reading", "말씀", "성경봉독":    self = .reading
+            case "sermon", "설교":                self = .sermon
+            case "announcement", "광고", "환영":   self = .announcement
+            case "offering", "헌금", "봉헌":       self = .offering
+            case "transition", "전환", "간주":     self = .transition
+            default:                              self = Kind(rawValue: key) ?? .other
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .song:         return "찬양"
+            case .prayer:       return "기도"
+            case .reading:      return "말씀"
+            case .sermon:       return "설교"
+            case .announcement: return "광고"
+            case .offering:     return "헌금"
+            case .transition:   return "전환"
+            case .other:        return "순서"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .song:         return "music.note"
+            case .prayer:       return "hands.and.sparkles"
+            case .reading:      return "book.closed"
+            case .sermon:       return "text.bubble"
+            case .announcement: return "megaphone"
+            case .offering:     return "basket"
+            case .transition:   return "arrow.right"
+            case .other:        return "circle"
+            }
+        }
+    }
+
+    let order: Int
+    let kind: Kind
+    let title: String
+    /// Planned length. Nil means nobody has estimated it, which is different
+    /// from zero and must not be added into a running time as if it were.
+    let minutes: Int?
+    let person: String?
+    let key: String?
+    let url: URL?
+    let notes: String?
+    /// 1-based row, so an edit rewrites in place.
+    let row: Int?
+
+    var id: String { "\(order)-\(title)" }
+    var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
+}
+
 struct TeamSignup: Identifiable, Hashable {
     let role: String
     let email: String
@@ -72,6 +135,7 @@ final class TeamStore: ObservableObject {
     @Published private(set) var services: [TeamService] = []
     @Published private(set) var roles: [TeamRole] = []
     @Published private(set) var songs: [Date: [TeamSong]] = [:]
+    @Published private(set) var plans: [Date: [PlanItem]] = [:]
     @Published private(set) var signups: [Date: [TeamSignup]] = [:]
     @Published private(set) var memberEmails: Set<String> = []
 
@@ -109,6 +173,41 @@ final class TeamStore: ObservableObject {
         services.first { !$0.isPast } ?? services.last
     }
 
+    /// The order of service, or the 콘티 promoted into one.
+    ///
+    /// A sheet without a Plan tab still has songs, and a list of songs is a
+    /// perfectly good order of service for a team that only plans music — so
+    /// it is shown as one rather than showing nothing.
+    func plan(for service: TeamService) -> [PlanItem] {
+        let day = Calendar.current.startOfDay(for: service.date)
+        if let items = plans[day], !items.isEmpty {
+            return items.sorted { $0.order < $1.order }
+        }
+        return songs(for: service).map {
+            PlanItem(order: $0.order, kind: .song, title: $0.title,
+                     minutes: nil, person: nil, key: $0.key, url: $0.url,
+                     notes: $0.notes, row: nil)
+        }
+    }
+
+    var hasPlanTab: Bool { !plans.isEmpty }
+
+    /// Clock times for a plan, from a start time and the planned lengths.
+    ///
+    /// An item with no length does not advance the clock, and everything
+    /// after an unestimated item is therefore approximate — which is honest,
+    /// and better than inventing a duration to keep the arithmetic tidy.
+    static func startTimes(for items: [PlanItem], from start: Date) -> [String: Date] {
+        var out: [String: Date] = [:]
+        var cursor = start
+        for item in items {
+            out[item.id] = cursor
+            guard let minutes = item.minutes, minutes > 0 else { continue }
+            cursor = cursor.addingTimeInterval(TimeInterval(minutes * 60))
+        }
+        return out
+    }
+
     func songs(for service: TeamService) -> [TeamSong] {
         (songs[Calendar.current.startOfDay(for: service.date)] ?? [])
             .sorted { $0.order < $1.order }
@@ -142,6 +241,11 @@ final class TeamStore: ObservableObject {
 
             let (schedule, roleData, songData, signupData) =
                 try await (scheduleRows, roleRows, songRows, signupRows)
+
+            // Optional tab: absent on a sheet made before the order of
+            // service existed, which must keep working.
+            let planData = (try? await client.read(sheetId: sheetId, range: TeamSheet.planTab)) ?? []
+            plans = Self.parsePlan(planData)
 
             roles = Self.parseRoles(roleData)
             services = Self.parseSchedule(schedule, roles: roles)
@@ -383,6 +487,34 @@ final class TeamStore: ObservableObject {
                     key: cell(TeamSheet.Songs.key),
                     transpose: Int(cell(TeamSheet.Songs.transpose) ?? "") ?? 0,
                     notes: cell(TeamSheet.Songs.notes)
+                )
+            )
+        }
+        return out
+    }
+
+    static func parsePlan(_ rows: [[String]]) -> [Date: [PlanItem]] {
+        var out: [Date: [PlanItem]] = [:]
+        for (offset, row) in rows.enumerated() where offset > 0 {
+            guard row.count > TeamSheet.Plan.title,
+                  let date = TeamSheet.day(row[TeamSheet.Plan.date]) else { continue }
+            func cell(_ i: Int) -> String? {
+                guard row.count > i else { return nil }
+                let v = row[i].trimmingCharacters(in: .whitespaces)
+                return v.isEmpty ? nil : v
+            }
+            guard let title = cell(TeamSheet.Plan.title) else { continue }
+            out[Calendar.current.startOfDay(for: date), default: []].append(
+                PlanItem(
+                    order: Int(cell(TeamSheet.Plan.order) ?? "") ?? 0,
+                    kind: PlanItem.Kind(raw: cell(TeamSheet.Plan.type) ?? ""),
+                    title: title,
+                    minutes: cell(TeamSheet.Plan.minutes).flatMap { Int($0.filter(\.isNumber)) },
+                    person: cell(TeamSheet.Plan.person),
+                    key: cell(TeamSheet.Plan.key),
+                    url: cell(TeamSheet.Plan.url).flatMap(URL.init(string:)),
+                    notes: cell(TeamSheet.Plan.notes),
+                    row: offset + 1
                 )
             )
         }

@@ -21,6 +21,19 @@
 //  ── TAB "Songs" ──────────────────────────────────────────────
 //  Date | Order | Title | YouTubeURL | Key | Transpose | Notes
 //
+//  ── TAB "Plan" ───────────────────────────────────────────────
+//  Date | Order | Type | Title | Minutes | Person | Key | YouTubeURL | Notes
+//
+//  The order of service, which is the thing a 콘티 cannot express. A service
+//  is not a list of songs — it is songs interleaved with a welcome, a
+//  prayer, a reading, the sermon and a benediction, each with a length, and
+//  the useful question on a Sunday morning is "what is next and when does it
+//  start". Songs appear here too, carrying their key and link, so there is
+//  one timeline rather than two half-orders.
+//
+//  Optional: a sheet with no Plan tab falls back to Songs, so an existing
+//  setup keeps working and gains an order of service whenever it wants one.
+//
 //  ── TAB "Signups" ────────────────────────────────────────────
 //  Date | Role | MemberEmail | MemberName | Status | UpdatedAt
 //
@@ -46,12 +59,18 @@ enum TeamSheet {
     static let songsTab    = "Songs"
     static let signupsTab  = "Signups"
     static let membersTab  = "Members"
+    /// The order of service. See the note on Plan below.
+    static let planTab     = "Plan"
 
     enum Schedule { static let date = 0, title = 1, notes = 2, fixedColumns = 3 }
     enum Roles    { static let name = 0, order = 1, active = 2 }
     enum Songs    { static let date = 0, order = 1, title = 2, url = 3, key = 4, transpose = 5, notes = 6 }
     enum Signups  { static let date = 0, role = 1, email = 2, name = 3, status = 4, updatedAt = 5 }
     enum Members  { static let email = 0, name = 1, active = 2 }
+    enum Plan {
+        static let date = 0, order = 1, type = 2, title = 3,
+                   minutes = 4, person = 5, key = 6, url = 7, notes = 8
+    }
 
     /// ISO-8601 with the date only, so Sheets cannot silently reinterpret it
     /// as one of its own date types and hand back a serial number.
