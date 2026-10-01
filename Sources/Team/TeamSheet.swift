@@ -21,6 +21,14 @@
 //  ── TAB "Songs" ──────────────────────────────────────────────
 //  Date | Order | Title | YouTubeURL | Key | Transpose | Notes
 //
+//  ── TAB "Live" ───────────────────────────────────────────────
+//  Date | CurrentOrder | UpdatedAt | UpdatedBy
+//
+//  One row per service, rewritten as the service moves. The sheet is a poor
+//  transport for this — there is no push, so followers poll and run a few
+//  seconds behind. That is fine for "what is next", and not fine for a cue;
+//  the screen says which it is rather than implying precision it lacks.
+//
 //  ── TAB "Plan" ───────────────────────────────────────────────
 //  Date | Order | Type | Title | Minutes | Person | Key | YouTubeURL | Notes
 //
@@ -61,12 +69,15 @@ enum TeamSheet {
     static let membersTab  = "Members"
     /// The order of service. See the note on Plan below.
     static let planTab     = "Plan"
+    /// Where the service currently is. One row per date.
+    static let liveTab     = "Live"
 
     enum Schedule { static let date = 0, title = 1, notes = 2, fixedColumns = 3 }
     enum Roles    { static let name = 0, order = 1, active = 2 }
     enum Songs    { static let date = 0, order = 1, title = 2, url = 3, key = 4, transpose = 5, notes = 6 }
     enum Signups  { static let date = 0, role = 1, email = 2, name = 3, status = 4, updatedAt = 5 }
     enum Members  { static let email = 0, name = 1, active = 2 }
+    enum Live { static let date = 0, order = 1, updatedAt = 2, by = 3 }
     enum Plan {
         static let date = 0, order = 1, type = 2, title = 3,
                    minutes = 4, person = 5, key = 6, url = 7, notes = 8

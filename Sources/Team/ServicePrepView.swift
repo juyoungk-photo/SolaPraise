@@ -36,6 +36,7 @@ struct ServicePrepView: View {
     @State private var pending: Push?
     @State private var isPushing = false
     @State private var pushNote: String?
+    @State private var live: TeamService?
 
     @EnvironmentObject private var quota: QuotaLedger
 
@@ -120,6 +121,7 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
             // An alert, not a confirmationDialog. On iPad the latter is a
             // popover anchored to whatever presented it, and anchored to a
             // row inside a List it was drawn clipped — the buttons were
@@ -162,7 +164,13 @@ struct ServicePrepView: View {
                 }
             }
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if let service, !team.plan(for: service).isEmpty {
+                Button { live = service } label: {
+                    Image(systemName: "play.square.stack")
+                }
+                .accessibilityLabel("라이브 진행")
+            }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
         }
     }
@@ -187,6 +195,7 @@ struct ServicePrepView: View {
             }
 
             songSection(service)
+            responseSection(service)
             roleSection(service)
             upcomingSection
 
@@ -417,6 +426,65 @@ struct ServicePrepView: View {
         }
     }
 
+    // MARK: - Who has answered
+
+    /// The leader's actual question is who has said nothing.
+    ///
+    /// A list of volunteers tells you who is coming. It does not tell you
+    /// who still has to be asked, and that is the list that turns into
+    /// messages on a Thursday night.
+    @ViewBuilder
+    private func responseSection(_ service: TeamService) -> some View {
+        let answers = team.responses(for: service)
+        let silent = team.unanswered(for: service)
+        if !answers.isEmpty || !silent.isEmpty {
+            Section {
+                ForEach(answers) { answer in
+                    HStack {
+                        Text(answer.name.isEmpty ? answer.email : answer.name)
+                            .font(.subheadline)
+                        Spacer()
+                        Text(answer.status.label)
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(tint(answer.status).opacity(0.18), in: Capsule())
+                            .foregroundStyle(tint(answer.status))
+                    }
+                }
+                ForEach(silent, id: \.self) { email in
+                    HStack {
+                        Text(email).font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("미응답").font(.caption).foregroundStyle(.tertiary)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("응답")
+                    Spacer()
+                    if !silent.isEmpty {
+                        Text("\(silent.count)명 미응답")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.orange)
+                    }
+                }
+            } footer: {
+                if team.memberEmails.isEmpty {
+                    Text("시트에 Members 탭을 두면 아직 답하지 않은 사람까지 보입니다.")
+                }
+            }
+        }
+    }
+
+    private func tint(_ status: SignupStatus) -> Color {
+        switch status {
+        case .available: return .green
+        case .declined:  return .red
+        case .away:      return .orange
+        }
+    }
+
     // MARK: - Weeks ahead
 
     /// Who is serving over the coming Sundays.
@@ -528,28 +596,19 @@ struct ServicePrepView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            let away = team.signupsAll(for: service, role: role.name)
+                .filter { $0.status == .away }
+            if !away.isEmpty {
+                Text("자리비움: " + away.map(\.name).joined(separator: ", "))
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
 
             if !email.isEmpty, !service.isPast, !team.isReadOnly {
                 HStack(spacing: 8) {
-                    Button {
-                        Task { await setAvailability(true, service, role) }
-                    } label: {
-                        Label("가능", systemImage: mine?.isAvailable == true
-                              ? "checkmark.circle.fill" : "circle")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(mine?.isAvailable == true ? .green : .accentColor)
-
-                    Button {
-                        Task { await setAvailability(false, service, role) }
-                    } label: {
-                        Label("어려움", systemImage: mine?.isAvailable == false
-                              ? "xmark.circle.fill" : "circle")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(mine?.isAvailable == false ? .red : .secondary)
+                    statusButton("가능", .available, mine, service, role, .green)
+                    statusButton("어려움", .declined, mine, service, role, .red)
+                    statusButton("자리비움", .away, mine, service, role, .orange)
                 }
                 .controlSize(.small)
             }
@@ -557,7 +616,26 @@ struct ServicePrepView: View {
         .padding(.vertical, 3)
     }
 
-    private func setAvailability(_ value: Bool, _ service: TeamService, _ role: TeamRole) async {
+    private func statusButton(
+        _ title: String,
+        _ status: SignupStatus,
+        _ mine: TeamSignup?,
+        _ service: TeamService,
+        _ role: TeamRole,
+        _ tint: Color
+    ) -> some View {
+        let selected = mine?.status == status
+        return Button {
+            Task { await setAvailability(status, service, role) }
+        } label: {
+            Label(title, systemImage: selected ? "largecircle.fill.circle" : "circle")
+                .font(.caption)
+        }
+        .buttonStyle(.bordered)
+        .tint(selected ? tint : .secondary)
+    }
+
+    private func setAvailability(_ value: SignupStatus, _ service: TeamService, _ role: TeamRole) async {
         guard let sheetId, let email = auth.email else { return }
         await team.setAvailability(
             value,

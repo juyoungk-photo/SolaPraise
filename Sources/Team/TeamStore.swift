@@ -99,11 +99,37 @@ struct PlanItem: Identifiable, Hashable {
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
 }
 
+/// What a member said about one service.
+///
+/// 자리비움 is deliberately separate from 어려움. "I cannot do this Sunday"
+/// and "I am away for a month" need different responses from a leader, and
+/// collapsing them into one word loses the distinction that decides whether
+/// to ask again next week.
+enum SignupStatus: String {
+    case available, declined, away
+
+    init(raw: String) {
+        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "declined", "불가", "어려움": self = .declined
+        case "away", "자리비움", "부재":    self = .away
+        default:                          self = .available
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .available: return "가능"
+        case .declined:  return "어려움"
+        case .away:      return "자리비움"
+        }
+    }
+}
+
 struct TeamSignup: Identifiable, Hashable {
     let role: String
     let email: String
     let name: String
-    let isAvailable: Bool
+    let statusRaw: String
     /// 1-based row on the Signups tab, so an update rewrites in place rather
     /// than appending a second opinion.
     ///
@@ -114,6 +140,9 @@ struct TeamSignup: Identifiable, Hashable {
     /// tap.
     let row: Int?
     var id: String { "\(role)|\(email)" }
+
+    var status: SignupStatus { SignupStatus(raw: statusRaw) }
+    var isAvailable: Bool { status == .available }
 }
 
 struct TeamService: Identifiable, Hashable {
@@ -136,6 +165,12 @@ final class TeamStore: ObservableObject {
     @Published private(set) var roles: [TeamRole] = []
     @Published private(set) var songs: [Date: [TeamSong]] = [:]
     @Published private(set) var plans: [Date: [PlanItem]] = [:]
+
+    /// Where each service currently is, and who last said so.
+    @Published private(set) var liveOrder: [Date: Int] = [:]
+    @Published private(set) var liveUpdatedBy: [Date: String] = [:]
+    /// The sheet row holding that, so advancing rewrites rather than appends.
+    private var liveRows: [Date: Int] = [:]
     @Published private(set) var signups: [Date: [TeamSignup]] = [:]
     @Published private(set) var memberEmails: Set<String> = []
 
@@ -218,6 +253,12 @@ final class TeamStore: ObservableObject {
             .filter { $0.role == role && $0.isAvailable }
     }
 
+    /// Every response for a role, whatever it said.
+    func signupsAll(for service: TeamService, role: String) -> [TeamSignup] {
+        (signups[Calendar.current.startOfDay(for: service.date)] ?? [])
+            .filter { $0.role == role }
+    }
+
     func mySignup(for service: TeamService, role: String, email: String) -> TeamSignup? {
         (signups[Calendar.current.startOfDay(for: service.date)] ?? [])
             .first { $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame }
@@ -286,8 +327,30 @@ final class TeamStore: ObservableObject {
 
     /// Records availability, rewriting the member's existing row when they
     /// already answered — otherwise saying yes then no would leave both.
+    /// Everyone on the roster who has not answered for this service.
+    ///
+    /// The leader's real question is not who said yes — it is who has said
+    /// nothing, because that is the list to go and ask. Members who are away
+    /// have answered and are not chased.
+    func unanswered(for service: TeamService) -> [String] {
+        guard !memberEmails.isEmpty else { return [] }
+        let day = Calendar.current.startOfDay(for: service.date)
+        let answered = Set((signups[day] ?? []).map { $0.email.lowercased() })
+        return memberEmails.subtracting(answered).sorted()
+    }
+
+    func responses(for service: TeamService) -> [TeamSignup] {
+        let day = Calendar.current.startOfDay(for: service.date)
+        // One line per person, not per role, which is how a leader reads it.
+        var seen: [String: TeamSignup] = [:]
+        for signup in signups[day] ?? [] {
+            seen[signup.email.lowercased()] = signup
+        }
+        return seen.values.sorted { $0.name < $1.name }
+    }
+
     func setAvailability(
-        _ available: Bool,
+        _ status: SignupStatus,
         service: TeamService,
         role: String,
         email: String,
@@ -301,7 +364,7 @@ final class TeamStore: ObservableObject {
             role,
             email,
             name,
-            available ? "available" : "declined",
+            status.rawValue,
             ISO8601DateFormatter().string(from: Date())
         ]
 
@@ -329,7 +392,7 @@ final class TeamStore: ObservableObject {
             var list = signups[day] ?? []
             list.removeAll { $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame }
             list.append(TeamSignup(role: role, email: email, name: name,
-                                   isAvailable: available, row: writtenRow))
+                                   statusRaw: status.rawValue, row: writtenRow))
             signups[day] = list
         } catch SheetsClient.SheetsError.http(403, _) {
             // Reads work, so this is not the scope and not the sheet being
@@ -493,6 +556,65 @@ final class TeamStore: ObservableObject {
         return out
     }
 
+    // MARK: - Live
+
+    /// Reads only the Live tab — one request, so it can run on a short timer
+    /// without costing what a full reload would.
+    func pollLive(sheetId: String) async {
+        guard let client,
+              let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.liveTab)
+        else { return }
+
+        var order: [Date: Int] = [:]
+        var by: [Date: String] = [:]
+        var at: [Date: Int] = [:]
+        for (offset, row) in rows.enumerated() where offset > 0 {
+            guard row.count > TeamSheet.Live.order,
+                  let date = TeamSheet.day(row[TeamSheet.Live.date]),
+                  let value = Int(row[TeamSheet.Live.order].filter(\.isNumber))
+            else { continue }
+            let day = Calendar.current.startOfDay(for: date)
+            order[day] = value
+            at[day] = offset + 1
+            if row.count > TeamSheet.Live.by { by[day] = row[TeamSheet.Live.by] }
+        }
+        liveOrder = order
+        liveUpdatedBy = by
+        liveRows = at
+    }
+
+    /// Moves the service to an item, for everyone.
+    func setLive(order: Int, service: TeamService, by name: String, sheetId: String) async {
+        guard let client else { return }
+        let day = Calendar.current.startOfDay(for: service.date)
+        // Optimistic: the person tapping should not wait on a round trip to
+        // see the thing they just did.
+        liveOrder[day] = order
+        liveUpdatedBy[day] = name
+
+        let row = [
+            TeamSheet.dateFormatter.string(from: service.date),
+            String(order),
+            ISO8601DateFormatter().string(from: Date()),
+            name
+        ]
+        do {
+            if let existing = liveRows[day], existing >= 2 {
+                try await client.write(
+                    sheetId: sheetId,
+                    range: "\(TeamSheet.liveTab)!A\(existing):D\(existing)",
+                    row: row
+                )
+            } else {
+                liveRows[day] = try await client.append(
+                    sheetId: sheetId, tab: TeamSheet.liveTab, row: row
+                )
+            }
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     static func parsePlan(_ rows: [[String]]) -> [Date: [PlanItem]] {
         var out: [Date: [PlanItem]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
@@ -533,7 +655,7 @@ final class TeamStore: ObservableObject {
                     role: row[TeamSheet.Signups.role],
                     email: row[TeamSheet.Signups.email],
                     name: row.count > TeamSheet.Signups.name ? row[TeamSheet.Signups.name] : "",
-                    isAvailable: status != "declined",
+                    statusRaw: status,
                     row: offset + 1
                 )
             )
