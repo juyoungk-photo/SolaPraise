@@ -227,7 +227,13 @@ struct ServicePrepView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(service.date, format: .dateTime.year().month().day().weekday(.wide))
                         .font(.headline)
-                    Text(service.title).font(.subheadline).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(service.title)
+                        if let time = service.time { Text("· \(time)") }
+                        if let where_ = service.location { Text("· \(where_)") }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     if let notes = service.notes {
                         Text(notes)
                             .font(.footnote)
@@ -238,7 +244,7 @@ struct ServicePrepView: View {
                 .padding(.vertical, 2)
             }
 
-            songSection(service)
+            if !service.isRehearsal { songSection(service) }
             responseSection(service)
             roleSection(service)
             scheduleSection
@@ -324,26 +330,13 @@ struct ServicePrepView: View {
         }
     }
 
-    /// 11:00 unless the leader wrote a time into the service title or notes.
+    /// The time the sheet gives, which is the only reliable source.
     ///
-    /// Guessed rather than configured, because a second service time is one
-    /// more thing to set up and nearly every service in this church starts on
-    /// the hour. A time anywhere in the title or notes wins over the guess.
-    private func serviceStart(_ service: TeamService) -> Date {
-        let calendar = Calendar.current
-        let haystack = [service.title, service.notes ?? ""].joined(separator: " ")
-        if let match = haystack.range(of: "\\b([0-9]{1,2})[:시]([0-9]{2})\\b",
-                                      options: .regularExpression) {
-            let digits = haystack[match].split(whereSeparator: { !$0.isNumber })
-            if digits.count == 2, let h = Int(digits[0]), let m = Int(digits[1]),
-               (0...23).contains(h), (0...59).contains(m) {
-                return calendar.date(bySettingHour: h, minute: m, second: 0,
-                                     of: service.date) ?? service.date
-            }
-        }
-        return calendar.date(bySettingHour: 11, minute: 0, second: 0,
-                             of: service.date) ?? service.date
-    }
+    /// This used to guess 11:00 and look for a time in the title. The team's
+    /// own planner has a Time column and uses four different ones — 주일예배
+    /// at 11:30, 금요 Worship at 7:30 PM, 팀연습 at 9:30 AM — so the guess
+    /// was wrong for almost every row.
+    private func serviceStart(_ service: TeamService) -> Date { service.start() }
 
     static let clockFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -578,7 +571,9 @@ struct ServicePrepView: View {
                             ))
                         HStack(spacing: 6) {
                             Text(upcoming.title)
-                            if team.roles.count > 0 {
+                            if let time = upcoming.time { Text("· \(time)") }
+                            if let where_ = upcoming.location { Text("· \(where_)") }
+                            if team.roles.count > 0, !upcoming.isRehearsal {
                                 Text("· \(filled)/\(team.roles.count)").monospacedDigit()
                             }
                         }
@@ -618,7 +613,7 @@ struct ServicePrepView: View {
                 .disabled(team.isReadOnly)
             }
 
-            if !coreGap.isEmpty {
+            if !coreGap.isEmpty, !upcoming.isRehearsal {
                 // The gap that decides whether the service can happen.
                 Text("미정: " + coreGap.map(\.name).joined(separator: ", "))
                     .font(.caption2.weight(.medium))

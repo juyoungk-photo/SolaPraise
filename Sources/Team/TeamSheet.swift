@@ -94,6 +94,14 @@ enum TeamSheet {
         return f
     }()
 
+    /// Clock times as a planner writes them: "11:30 AM", "7:30 PM".
+    static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+
     static func day(_ raw: String) -> Date? {
         dateFormatter.date(from: String(raw.prefix(10)))
     }

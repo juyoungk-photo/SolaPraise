@@ -28,6 +28,7 @@ struct TeamRole: Identifiable, Hashable {
     /// does not have to be maintained for that to stay true.
     var isCore: Bool {
         let key = name.replacingOccurrences(of: " ", with: "")
+        if key.lowercased().contains("lead") { return true }
         return ["인도", "인도자", "반주", "반주자", "건반", "리더"]
             .contains { key.contains($0) }
     }
@@ -159,12 +160,39 @@ struct TeamSignup: Identifiable, Hashable {
 struct TeamService: Identifiable, Hashable {
     let date: Date
     let title: String
+    /// As written on the sheet: "11:30 AM", "7:30 PM". Guessing this was
+    /// wrong — 주일예배 is 11:30, 금요 Worship is 7:30 PM, 팀연습 is 9:30 AM,
+    /// and a single assumed hour was right for almost none of them.
+    let time: String?
+    let location: String?
     let notes: String?
     /// Role name → assigned member, as filled in on the Schedule tab.
     let assignments: [String: String]
-    var id: Date { date }
+    /// Several services can fall on one day — 주일예배 and a 팀연습 the
+    /// evening before a 금요 Worship — so the date alone is not an identity.
+    var id: String { "\(date.timeIntervalSince1970)-\(title)" }
 
     var isPast: Bool { date < Calendar.current.startOfDay(for: Date()) }
+
+    /// A rehearsal is scheduled and staffed like a service but has no order
+    /// of service, so the tab should not offer one.
+    var isRehearsal: Bool {
+        let key = title.replacingOccurrences(of: " ", with: "")
+        return key.contains("연습") || key.lowercased().contains("rehearsal")
+    }
+
+    /// Clock time from the sheet, falling back to the morning only when the
+    /// sheet says nothing.
+    func start(on calendar: Calendar = .current) -> Date {
+        guard let time, let parsed = TeamSheet.timeFormatter.date(from: time.trimmingCharacters(in: .whitespaces))
+        else {
+            return calendar.date(bySettingHour: 11, minute: 0, second: 0, of: date) ?? date
+        }
+        let parts = calendar.dateComponents([.hour, .minute], from: parsed)
+        return calendar.date(bySettingHour: parts.hour ?? 11,
+                             minute: parts.minute ?? 0,
+                             second: 0, of: date) ?? date
+    }
 }
 
 // MARK: - Store
@@ -538,31 +566,55 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Columns are found by their header, not by position.
+    ///
+    /// A real planner does not have the columns in the order this app
+    /// imagined. The team's existing one runs 구분 | Date | Time | Location |
+    /// NOTE | 찬양 lead | 반주자 | 찬양 2…, which fixed indices would have
+    /// read as gibberish. Anything not recognised as one of the known
+    /// columns is a role, which is also how a team adds a part.
     static func parseSchedule(_ rows: [[String]], roles: [TeamRole]) -> [TeamService] {
         guard let header = rows.first else { return [] }
-        // Role columns are whatever the leader put after the fixed three, so
-        // read their names from the header rather than assuming the Roles tab
-        // and the Schedule tab agree.
-        let roleColumns = header.enumerated()
-            .filter { $0.offset >= TeamSheet.Schedule.fixedColumns }
-            .map { ($0.offset, $0.element.trimmingCharacters(in: .whitespaces)) }
 
-        return rows.dropFirst().compactMap { row in
-            guard row.count > TeamSheet.Schedule.date,
-                  let date = TeamSheet.day(row[TeamSheet.Schedule.date]) else { return nil }
+        func column(_ names: [String]) -> Int? {
+            header.firstIndex {
+                let key = $0.trimmingCharacters(in: .whitespaces).lowercased()
+                return names.contains(key)
+            }
+        }
+        let dateCol = column(["date", "날짜"]) ?? TeamSheet.Schedule.date
+        let titleCol = column(["title", "구분", "type", "예배", "행사"])
+        let timeCol = column(["time", "시간"])
+        let locationCol = column(["location", "장소"])
+        let notesCol = column(["note", "notes", "비고", "메모"])
+
+        let reserved = Set([dateCol, titleCol, timeCol, locationCol, notesCol].compactMap { $0 })
+        let roleColumns = header.enumerated()
+            .filter { !reserved.contains($0.offset) }
+            .map { ($0.offset, $0.element.trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.1.isEmpty }
+
+        return rows.dropFirst().compactMap { row -> TeamService? in
+            guard row.count > dateCol, let date = TeamSheet.day(row[dateCol]) else { return nil }
+
+            func cell(_ index: Int?) -> String? {
+                guard let index, row.count > index else { return nil }
+                let value = row[index].trimmingCharacters(in: .whitespaces)
+                return value.isEmpty ? nil : value
+            }
+
             var assignments: [String: String] = [:]
             for (index, name) in roleColumns where row.count > index {
                 let who = row[index].trimmingCharacters(in: .whitespaces)
-                if !who.isEmpty, !name.isEmpty { assignments[name] = who }
+                if !who.isEmpty { assignments[name] = who }
             }
-            let title = row.count > TeamSheet.Schedule.title
-                ? row[TeamSheet.Schedule.title] : ""
-            let notes = row.count > TeamSheet.Schedule.notes
-                ? row[TeamSheet.Schedule.notes] : ""
+
             return TeamService(
                 date: date,
-                title: title.isEmpty ? "주일예배" : title,
-                notes: notes.isEmpty ? nil : notes,
+                title: cell(titleCol) ?? "주일예배",
+                time: cell(timeCol),
+                location: cell(locationCol),
+                notes: cell(notesCol),
                 assignments: assignments
             )
         }
