@@ -221,7 +221,11 @@ struct PlayerStage: View {
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
             }
-            .ignoresSafeArea(edges: host.mode == .mini ? [] : .top)
+            // The top safe area is respected in both modes. Ignoring it in
+            // full mode ran the video under the status bar, and the embed
+            // puts YouTube's own chrome up there — the channel name, share,
+            // CC and fullscreen all sat behind the clock and the status
+            // icons on an iPhone, half unreadable and half untappable.
             .transition(.opacity)
         }
     }
