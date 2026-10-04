@@ -20,6 +20,17 @@ struct TeamRole: Identifiable, Hashable {
     let name: String
     let order: Double
     var id: String { name }
+
+    /// 인도자 and 반주자 decide whether a service can happen at all.
+    ///
+    /// Every other part can be covered, moved or dropped; these two cannot.
+    /// So they sort to the top regardless of the Order column, and the sheet
+    /// does not have to be maintained for that to stay true.
+    var isCore: Bool {
+        let key = name.replacingOccurrences(of: " ", with: "")
+        return ["인도", "인도자", "반주", "반주자", "건반", "리더"]
+            .contains { key.contains($0) }
+    }
 }
 
 struct TeamSong: Identifiable, Hashable {
@@ -501,7 +512,11 @@ final class TeamStore: ObservableObject {
                 ? Double(row[TeamSheet.Roles.order]) ?? 0 : 0
             return TeamRole(name: name, order: order)
         }
-        .sorted { $0.order < $1.order }
+        .sorted {
+            // Core parts first, then the sheet's own order within each group.
+            ($0.isCore ? 0 : 1, $0.order, $0.name)
+                < ($1.isCore ? 0 : 1, $1.order, $1.name)
+        }
     }
 
     static func parseSchedule(_ rows: [[String]], roles: [TeamRole]) -> [TeamService] {
