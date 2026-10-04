@@ -133,6 +133,7 @@ final class FeedStore: ObservableObject {
         try? context.save()
         await fillMissingDurations(context: context, client: client)
         await refreshChannelPlaylists(channels: channels, context: context, client: client)
+        await fillMissingPlaylistDetails(context: context, client: client)
 
         let now = Date()
         lastRefreshedAt = now
@@ -141,6 +142,41 @@ final class FeedStore: ObservableObject {
         if !failures.isEmpty {
             errorMessage = "Couldn't refresh: \(failures.joined(separator: ", "))"
         }
+    }
+
+    /// Fills in what a playlist pinned from a link does not come with.
+    ///
+    /// Pinning from a URL gives the app an id and nothing else, so the row
+    /// read "재생목록 0" with no artwork until somebody opened it. One call
+    /// covers fifty of them for a single unit, so this is cheap enough to
+    /// run on an ordinary refresh.
+    private func fillMissingPlaylistDetails(
+        context: ModelContext, client: YouTubeAPIClient?
+    ) async {
+        guard let client else { return }
+        let cached = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        let incomplete = cached.filter { $0.itemCount == 0 || $0.thumbnailURLString == nil }
+        guard !incomplete.isEmpty else { return }
+
+        guard let fetched = try? await client.playlists(ids: incomplete.map(\.playlistId))
+        else { return }
+
+        let byId = Dictionary(fetched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for playlist in incomplete {
+            guard let detail = byId[playlist.playlistId] else { continue }
+            // A count of zero means "not known yet" here, so only a real
+            // count overwrites it — a genuinely empty playlist stays at 0
+            // either way.
+            if detail.itemCount > 0 { playlist.itemCount = detail.itemCount }
+            if playlist.thumbnailURLString == nil {
+                playlist.thumbnailURLString = detail.thumbnailURL?.absoluteString
+            }
+            // The placeholder title a pinned link starts with.
+            if playlist.title == "재생목록" || playlist.title.isEmpty, !detail.title.isEmpty {
+                playlist.title = detail.title
+            }
+        }
+        try? context.save()
     }
 
     /// A channel's own playlists, 1 unit each. Cheap, and for channels that

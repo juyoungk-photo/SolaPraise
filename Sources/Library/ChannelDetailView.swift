@@ -208,9 +208,14 @@ struct PlaylistBar: View {
 
             Spacer(minLength: 8)
 
-            Text("\(playlist.itemCount)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            // Zero means "not fetched yet", not "empty" — a pinned link
+            // starts that way — so it shows nothing rather than a 0 that
+            // reads as an empty playlist.
+            if playlist.itemCount > 0 {
+                Text("\(playlist.itemCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
 
             Image(systemName: "play.circle.fill")
                 .font(.body)

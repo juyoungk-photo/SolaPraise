@@ -225,6 +225,30 @@ final class YouTubeAPIClient {
     /// an unlisted one from a church channel, say — has to be asked for
     /// directly. Unlisted means "anyone with the link", and the API honours
     /// that: no ownership and no extra scope required.
+    /// Several playlists in one call — up to 50 ids, still one unit.
+    ///
+    /// Used to backfill the title, artwork and item count of playlists that
+    /// were pinned from a link, where all the app had to go on was the id.
+    func playlists(ids: [String]) async throws -> [YTPlaylist] {
+        guard !ids.isEmpty else { return [] }
+        var found: [YTPlaylist] = []
+        for chunk in stride(from: 0, to: ids.count, by: 50).map({
+            Array(ids[$0 ..< min($0 + 50, ids.count)])
+        }) {
+            let page: YTListResponse<YTPlaylist> = try await get(
+                "playlists",
+                query: [
+                    .init(name: "part", value: "snippet,contentDetails,status"),
+                    .init(name: "id", value: chunk.joined(separator: ",")),
+                    .init(name: "maxResults", value: "50")
+                ],
+                cost: .read
+            )
+            found.append(contentsOf: page.items ?? [])
+        }
+        return found
+    }
+
     func playlist(id: String) async throws -> YTPlaylist? {
         let page: YTListResponse<YTPlaylist> = try await get(
             "playlists",
