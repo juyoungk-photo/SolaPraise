@@ -66,6 +66,9 @@ enum DefaultChannels {
         SuggestedChannel(channelId: "UCn5qdSP9lz6BIl4bPwM41qg",
                          title: "YWAM Worship Korea", handle: "@ywamworshipkorea",
                          purpose: .worship, isPinned: false),
+        SuggestedChannel(channelId: "UCL_9gxbprEhZm8btBdGq3Yw",
+                         title: "더라이트 The Light", handle: "@TheLight_Worship",
+                         purpose: .worship, isPinned: false),
 
         // ── 교제 ──────────────────────────────────────────────
         // Id read off @c3sfbay-tv's own page. Its RSS feed 404s, which is the
