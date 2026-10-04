@@ -69,7 +69,7 @@ struct PsalmAudioSheet: View {
                 autoTask?.cancel()
                 autoTask = Task {
                     try? await Task.sleep(for: .milliseconds(500))
-                    guard !Task.isCancelled, match == nil, auth.isSignedIn, !isWorking
+                    guard !Task.isCancelled, match == nil, auth.canReadYouTube, !isWorking
                     else { return }
                     isWorking = true
                     defer { isWorking = false }
@@ -150,13 +150,13 @@ struct PsalmAudioSheet: View {
                     if isWorking { ProgressView().controlSize(.small) }
                 }
             }
-            .disabled(isWorking || !auth.isSignedIn)
+            .disabled(isWorking || !auth.canReadYouTube)
 
             if let note {
                 Text(note).font(.footnote).foregroundStyle(.secondary)
             }
         } footer: {
-            Text(auth.isSignedIn
+            Text(auth.canReadYouTube
                  ? "① 이 채널의 시편 재생목록을 먼저 확인합니다 (약 3 units). ② 없으면 이 채널만 대상으로 검색합니다 (100 units). 유튜브 전체 검색이 아닙니다. 남은 검색 \(quota.searchesRemaining)회."
                  : "Google 로그인이 필요합니다.")
         }

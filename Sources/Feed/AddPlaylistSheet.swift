@@ -63,7 +63,7 @@ struct AddPlaylistSheet: View {
                             if isWorking { ProgressView().controlSize(.small) }
                         }
                     }
-                    .disabled(playlistId == nil || isWorking || !auth.isSignedIn)
+                    .disabled(playlistId == nil || isWorking || !auth.canReadYouTube)
 
                     if let message {
                         Text(message)
@@ -71,7 +71,7 @@ struct AddPlaylistSheet: View {
                             .foregroundStyle(added == nil ? .orange : .green)
                     }
                 } footer: {
-                    if !auth.isSignedIn {
+                    if !auth.canReadYouTube {
                         Text("Google 로그인이 필요합니다.")
                     }
                 }

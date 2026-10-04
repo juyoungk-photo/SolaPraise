@@ -208,7 +208,7 @@ struct HomeSearchSheet: View {
     private func runRemoteSearch() async {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             errorMessage = "YouTube 전체 검색은 Google 로그인이 필요합니다."
             return
         }

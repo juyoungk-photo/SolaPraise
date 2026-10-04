@@ -70,6 +70,7 @@ struct WorshipFeedView: View {
     var body: some View {
         NavigationStack {
             content
+                .miniPlayerDock()
                 .navigationTitle("찬양")
             .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }
@@ -453,7 +454,7 @@ struct WorshipFeedView: View {
     }
 
     private func playPlaylist(_ playlist: CachedPlaylist) async {
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             searchError = "재생목록을 열려면 Google 로그인이 필요합니다."
             return
         }
@@ -541,8 +542,8 @@ struct WorshipFeedView: View {
 
     private func runRemoteSearch() async {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, auth.isSignedIn else {
-            searchError = auth.isSignedIn ? nil : "Sign in to search all of YouTube."
+        guard !query.isEmpty, auth.canReadYouTube else {
+            searchError = auth.canReadYouTube ? nil : "YouTube 전체 검색은 Google 로그인이 필요합니다."
             return
         }
         isSearching = true
@@ -573,7 +574,7 @@ struct WorshipFeedView: View {
     }
 
     private func refresh() async {
-        let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
+        let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: .worship, context: modelContext, client: client)
         await feed.refreshTopics(context: modelContext, client: client)
     }

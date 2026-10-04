@@ -50,6 +50,7 @@ struct PlaylistLibraryView: View {
                     list
                 }
             }
+            .miniPlayerDock()
             .navigationTitle("보관함")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

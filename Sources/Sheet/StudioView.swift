@@ -192,6 +192,7 @@ struct StudioView: View {
             // recorder hands back control here too.
             .onChange(of: analyzer.isAnalyzing) { _, _ in recordings = Recordings.all() }
             .onDisappear { stopPlayback() }
+            .miniPlayerDock()
             .navigationTitle("작업실")
             .navigationDestination(item: $openedSong) { song in
                 LeadSheetView(song: song)

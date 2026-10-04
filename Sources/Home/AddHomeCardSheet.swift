@@ -140,7 +140,7 @@ struct AddHomeCardSheet: View {
         Task {
             // Title comes from the API when signed in; the placeholder above
             // means the card is usable the instant it is added either way.
-            guard auth.isSignedIn else { return }
+            guard auth.canReadYouTube else { return }
             let client = AppServices.client(auth: auth, quota: quota)
             guard let video = try? await client.videos(ids: [id]).first,
                   let title = video.snippet?.title else { return }
@@ -167,7 +167,7 @@ struct AddHomeCardSheet: View {
         linkInput = ""
 
         Task {
-            guard auth.isSignedIn else { return }
+            guard auth.canReadYouTube else { return }
             let client = AppServices.client(auth: auth, quota: quota)
             guard let playlist = try? await client.playlist(id: id) else { return }
             cards.first { $0.dedupeKey == "playlist-\(id)" }?.title = playlist.title

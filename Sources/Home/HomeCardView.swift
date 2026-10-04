@@ -19,15 +19,26 @@ struct HomeCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let thumbnailURL {
+            // A grid card always gets a header, image or not. A row in the
+            // grid is as tall as its tallest card, so a card with no
+            // thumbnail next to one with a thumbnail was stretched into a
+            // tall empty box — which is what 시편 듣기 and a freshly added
+            // 재생목록 looked like before their artwork arrived. The
+            // placeholder fills that space with the card's own symbol.
+            // Wide cards span the row alone, so they size to their text.
+            if thumbnailURL != nil || !card.kind.isWide {
                 Color.clear
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .overlay {
-                        AsyncImage(url: thumbnailURL) { phase in
-                            switch phase {
-                            case .success(let image): image.resizable().scaledToFill()
-                            default: Rectangle().fill(.quaternary)
+                        if let thumbnailURL {
+                            AsyncImage(url: thumbnailURL) { phase in
+                                switch phase {
+                                case .success(let image): image.resizable().scaledToFill()
+                                default: placeholderArtwork
+                                }
                             }
+                        } else {
+                            placeholderArtwork
                         }
                     }
                     .clipped()
@@ -72,6 +83,19 @@ struct HomeCardView: View {
         .frame(minHeight: card.kind.isWide ? 0 : 132, alignment: .top)
         .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(Rectangle())
+    }
+
+    /// Stands in for missing artwork: the card's own symbol on a tinted wash,
+    /// so an imageless card still reads as a card rather than a blank panel.
+    private var placeholderArtwork: some View {
+        LinearGradient(colors: [Color.accentColor.opacity(0.25),
+                                Color.accentColor.opacity(0.08)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+            .overlay {
+                Image(systemName: card.kind.symbolName)
+                    .font(.title2)
+                    .foregroundStyle(.tint.opacity(0.8))
+            }
     }
 
     private func stepButton(_ symbol: String,

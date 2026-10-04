@@ -465,7 +465,7 @@ struct SettingsView: View {
 
     private func runRefresh() async {
         refreshNote = nil
-        let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
+        let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: nil, context: modelContext, client: client)
         let count = (try? modelContext.fetchCount(FetchDescriptor<CachedVideo>())) ?? 0
         refreshNote = "저장된 영상 \(count)개"

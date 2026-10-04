@@ -124,6 +124,15 @@ final class YouTubeAPIClient {
             comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "key", value: key)]
             guard let keyed = comps.url else { throw APIError.transport(URLError(.badURL)) }
             req.url = keyed
+            // The key is restricted to this bundle id in the Cloud Console,
+            // and that restriction is enforced on a header the client has to
+            // send itself. URLSession does not add it, so without this every
+            // keyed request came back "Requests from this iOS client
+            // application <empty> are blocked" — the restriction working
+            // exactly as configured, against us.
+            if let bundleId = Bundle.main.bundleIdentifier {
+                req.setValue(bundleId, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
+            }
             authorized = true
         }
         guard authorized else { throw APIError.notSignedIn }

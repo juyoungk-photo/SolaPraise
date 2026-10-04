@@ -150,7 +150,7 @@ struct ChannelDetailView: View {
     }
 
     private func play(_ playlist: CachedPlaylist) async {
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             errorMessage = "재생목록을 열려면 Google 로그인이 필요합니다."
             return
         }
@@ -176,7 +176,7 @@ struct ChannelDetailView: View {
     }
 
     private func refresh() async {
-        let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
+        let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: channel.purpose, context: modelContext, client: client)
     }
 }

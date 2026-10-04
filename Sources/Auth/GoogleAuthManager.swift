@@ -42,6 +42,15 @@ final class GoogleAuthManager: ObservableObject {
     /// so a sign-in wall in front of them is just a dead end.
     @Published var isBrowsingWithoutAccount: Bool = false
 
+    /// Can this device *read* YouTube right now?
+    ///
+    /// Reading takes an identity or the app's own key, and the key is the
+    /// normal case for a teammate who just installed the app. Gating a read
+    /// on `isSignedIn` alone puts a sign-in wall in front of playlists and
+    /// search that the key would have answered perfectly well. Writes still
+    /// check `isSignedIn`, because a key cannot touch someone's account.
+    var canReadYouTube: Bool { isSignedIn || AppSecrets.hasYouTubeAPIKey }
+
     /// Manage the user's own YouTube account: list/create/update playlists
     /// and playlist items. This is a *sensitive* scope — see the note above.
     static let scopes = [

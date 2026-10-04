@@ -151,6 +151,7 @@ struct ServicePrepView: View {
                     )
                 }
             }
+            .miniPlayerDock()
             .navigationTitle("예배 준비")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
@@ -525,10 +526,37 @@ struct ServicePrepView: View {
                 Text("예배표")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if let email = team.actingEmail(auth: auth, planning: planning) {
-                        // Whose answer this will be, since the app can hold
-                        // two accounts and the wrong one is easy to be in.
-                        (Text("응답 계정: ").foregroundStyle(.secondary) + Text(email))
+                    // Whose answer this will be, with the way to change it
+                    // right here. Burying that in Settings meant the wrong
+                    // account stayed the wrong account.
+                    HStack(spacing: 6) {
+                        if let email = team.actingEmail(auth: auth, planning: planning) {
+                            (Text("응답 계정: ").foregroundStyle(.secondary)
+                             + Text(email)
+                             + Text(planning.isSignedIn ? "" : " (YouTube 계정)")
+                                .foregroundStyle(.secondary))
+                        }
+                        Spacer(minLength: 4)
+                        if planning.isSignedIn {
+                            Button("계정 변경") {
+                                planning.signOut()
+                                team.configure(auth: auth, planning: planning)
+                            }
+                        } else {
+                            Button("교회 계정으로 전환") {
+                                Task {
+                                    await planning.signIn()
+                                    team.configure(auth: auth, planning: planning)
+                                    if let id = TeamSheetSource.current {
+                                        await team.load(sheetId: id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .font(.caption)
+                    if let message = planning.lastError {
+                        Text(message).foregroundStyle(.orange)
                     }
                     Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 맡을 파트를 고르세요. 응답한 사람이 먼저 나옵니다.")
                 }

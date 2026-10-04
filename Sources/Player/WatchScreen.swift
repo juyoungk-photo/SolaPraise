@@ -733,7 +733,7 @@ struct WatchScreen: View {
     /// something that fires automatically on every blocked video.
     private func findPlayableAlternate() async {
         guard let current else { return }
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             host.alternateError = "다른 영상을 찾으려면 Google 로그인이 필요합니다."
             return
         }

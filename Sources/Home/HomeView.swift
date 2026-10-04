@@ -187,6 +187,7 @@ struct HomeView: View {
             }
             .safeAreaInset(edge: .top) { pinnedReading }
             .safeAreaInset(edge: .bottom) { searchBar }
+            .miniPlayerDock()
             .navigationTitle("홈")
             // Inline: a large title collapses as you scroll, and with the
             // 시편 card pinned right under it the two moved against each
@@ -506,7 +507,7 @@ struct HomeView: View {
     /// Loads a playlist's items and starts playing, rather than dumping the
     /// user in the Library tab to find it themselves.
     private func playPlaylist(_ playlistId: String, title: String) async {
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             playlistError = "플레이리스트를 재생하려면 Google 로그인이 필요합니다."
             return
         }
@@ -551,7 +552,7 @@ struct HomeView: View {
     /// just produce a video: not caution about the playlist, caution about
     /// the search.
     private func autoFindPsalmVideo() async {
-        guard psalmAudioVideo == nil, auth.isSignedIn, !isFindingPsalm else { return }
+        guard psalmAudioVideo == nil, auth.canReadYouTube, !isFindingPsalm else { return }
         // The ingest refuses to repeat once the channel is cached, but a
         // channel with few readings would retry on every step otherwise.
         guard !attemptedPsalmChannels.contains(psalmChannelId) else { return }
@@ -575,7 +576,7 @@ struct HomeView: View {
         print("[SolaPraise] PSALM tap chapter=\(daily.chapter) signedIn=\(auth.isSignedIn) canSearch=\(quota.canSearch) finding=\(isFindingPsalm)")
         #endif
         guard !isFindingPsalm else { return }
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             report("시편 영상을 찾으려면 Google 로그인이 필요합니다.")
             return
         }
@@ -612,7 +613,7 @@ struct HomeView: View {
     }
 
     private func refreshFeeds() async {
-        let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
+        let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: nil, context: modelContext, client: client)
         // Independent of the purpose-scoped refreshes, so a Worship-tab
         // refresh claiming "already refreshed today" cannot starve it.

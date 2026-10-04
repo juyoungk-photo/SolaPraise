@@ -65,6 +65,7 @@ struct WordFeedView: View {
             .fullScreenCover(isPresented: $showReading) {
                 ReadingView { showReading = false }
             }
+            .miniPlayerDock()
             .navigationTitle("말씀")
             // Inline, because a large title plus the pinned channel bar leaves
             // a dead band roughly 200pt tall and pushes the chips off screen.
@@ -282,7 +283,7 @@ struct WordFeedView: View {
     }
 
     private func openPlaylist(_ playlist: CachedPlaylist) async {
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             playlistError = "재생목록을 열려면 Google 로그인이 필요합니다."
             return
         }
@@ -324,7 +325,7 @@ struct WordFeedView: View {
 
     /// Loads a channel playlist and starts playing it.
     private func playPlaylist(_ playlist: CachedPlaylist) async {
-        guard auth.isSignedIn else {
+        guard auth.canReadYouTube else {
             playlistError = "플레이리스트를 재생하려면 Google 로그인이 필요합니다."
             return
         }
@@ -358,7 +359,7 @@ struct WordFeedView: View {
     }
 
     private func refresh() async {
-        let client = auth.isSignedIn ? AppServices.client(auth: auth, quota: quota) : nil
+        let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: .word, context: modelContext, client: client)
     }
 }

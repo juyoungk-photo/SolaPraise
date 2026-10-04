@@ -428,3 +428,43 @@ struct PlayerErrorCard: View {
         }
     }
 }
+
+// MARK: - Reserving the dock's space
+
+/// Reserves the docked player's height at the bottom of a tab's content, and
+/// measures where that reservation ends.
+///
+/// This belongs *inside* each tab's `NavigationStack`, next to that screen's
+/// own bottom furniture. On the `TabView` it reserved space below the tab
+/// bar instead of above it, so the bar covered the tabs outright; wrapped
+/// around a tab it fared no better, because a NavigationStack does not pass
+/// an outer bottom inset down to the scroll view inside it — 홈's search
+/// field stayed exactly where it was and the docked player sat on top of it.
+/// Applied in here the inset is the innermost piece of bottom furniture, so
+/// the screen's own insets stack above it and its bottom edge is the line
+/// the docked player has to end on.
+struct MiniPlayerDock: ViewModifier {
+    @EnvironmentObject private var host: PlayerHost
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            if host.mode == .mini {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { host.dockAnchorY = proxy.frame(in: .global).maxY }
+                        .onChange(of: proxy.frame(in: .global).maxY) { _, new in
+                            host.dockAnchorY = new
+                        }
+                }
+                .frame(height: PlayerStage.miniBarHeight)
+                .allowsHitTesting(false)
+            }
+        }
+    }
+}
+
+extension View {
+    func miniPlayerDock() -> some View {
+        modifier(MiniPlayerDock())
+    }
+}
