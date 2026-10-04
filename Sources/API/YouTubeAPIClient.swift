@@ -99,6 +99,14 @@ final class YouTubeAPIClient {
 
         guard quota.canAfford(cost) else { throw APIError.quotaExhausted }
 
+        // `mine=true` names an account, so the app's own key cannot answer it
+        // however public the rest of the call looks. Detected here rather
+        // than declared per call, because the one time it was left to the
+        // caller 보관함 asked the key for "my playlists" and showed Google's
+        // raw complaint about the mine parameter in place of the sign-in
+        // prompt it keeps for exactly this case.
+        let namesAnAccount = query.contains { $0.name == "mine" && $0.value == "true" }
+
         guard var comps = URLComponents(
             url: Self.base.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -120,7 +128,7 @@ final class YouTubeAPIClient {
         if auth.isSignedIn, let token = try? await auth.accessToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             authorized = true
-        } else if cost != .write, let key = AppSecrets.youtubeAPIKey {
+        } else if cost != .write, !namesAnAccount, let key = AppSecrets.youtubeAPIKey {
             comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "key", value: key)]
             guard let keyed = comps.url else { throw APIError.transport(URLError(.badURL)) }
             req.url = keyed

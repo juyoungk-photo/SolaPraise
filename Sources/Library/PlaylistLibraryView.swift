@@ -42,6 +42,13 @@ struct PlaylistLibraryView: View {
                 if state.isLoading && state.value == nil {
                     ProgressView("Loading your playlists…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !auth.isSignedIn {
+                    // Not an error. 보관함 is the one tab that is genuinely
+                    // about *your* account — the app's key can read all of
+                    // YouTube but it cannot be asked whose playlists these
+                    // are — so a reader who chose 둘러보기 gets the offer
+                    // rather than a retry button that fails the same way.
+                    SignInPrompt()
                 } else if let message = state.errorMessage, state.value == nil {
                     ErrorState(message: message) { Task { await load() } }
                 } else if let playlists = state.value, playlists.isEmpty, shelfChannels.isEmpty {
@@ -276,6 +283,33 @@ private struct EmptyState: View {
             systemImage: "list.bullet.rectangle",
             description: Text("Playlists you create on YouTube — or here — will appear in this list.")
         )
+    }
+}
+
+/// What 보관함 shows a reader who is browsing without an account.
+private struct SignInPrompt: View {
+    @EnvironmentObject private var auth: GoogleAuthManager
+    @State private var isWorking = false
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("내 재생목록", systemImage: "list.bullet.rectangle")
+        } description: {
+            Text("내 YouTube 재생목록을 보고 편집하려면 Google 계정이 필요합니다.\n찬양·말씀과 검색은 로그인 없이 그대로 쓸 수 있습니다.")
+        } actions: {
+            Button {
+                isWorking = true
+                Task { await auth.signIn(); isWorking = false }
+            } label: {
+                if isWorking {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Google 로그인", systemImage: "person.crop.circle")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isWorking)
+        }
     }
 }
 
