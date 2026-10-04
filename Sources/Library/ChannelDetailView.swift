@@ -96,9 +96,12 @@ struct ChannelDetailView: View {
     private var playlistSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             NavigationLink {
-                ChannelPlaylistsView(channel: channel, playlists: playlists) { playlist in
-                    Task { await play(playlist) }
-                }
+                ChannelPlaylistsView(
+                    channel: channel,
+                    playlists: playlists,
+                    onSelect: { playlist in Task { await play(playlist) } },
+                    onPinChanged: { try? modelContext.save() }
+                )
             } label: {
                 HStack(spacing: 6) {
                     Text("재생목록")
@@ -123,6 +126,11 @@ struct ChannelDetailView: View {
                         PlaylistBar(playlist: playlist)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
+                            try? modelContext.save()
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -262,6 +270,7 @@ struct ChannelPlaylistsView: View {
     let channel: Channel
     let playlists: [CachedPlaylist]
     let onSelect: (CachedPlaylist) -> Void
+    var onPinChanged: (() -> Void)? = nil
 
     @State private var searchText = ""
 
@@ -277,6 +286,11 @@ struct ChannelPlaylistsView: View {
                 ForEach(shown) { playlist in
                     Button { onSelect(playlist) } label: { ChannelPlaylistRow(playlist: playlist) }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
+                                onPinChanged?()
+                            }
+                        }
                 }
             } footer: {
                 if shown.isEmpty {

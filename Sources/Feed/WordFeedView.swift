@@ -138,7 +138,8 @@ struct WordFeedView: View {
                             onSelect: { video in play(video, in: videos) },
                             onSelectPlaylist: { playlist in
                                 Task { await playPlaylist(playlist) }
-                            }
+                            },
+                            onPinChanged: { try? modelContext.save() }
                         )
                         .id(channel.youtubeChannelId)
                     }
@@ -370,6 +371,7 @@ struct ChannelSection: View {
     var playlists: [CachedPlaylist] = []
     let onSelect: (CachedVideo) -> Void
     var onSelectPlaylist: ((CachedPlaylist) -> Void)? = nil
+    var onPinChanged: (() -> Void)? = nil
 
     private var columns: [GridItem] { FeedGrid.columns }
 
@@ -444,6 +446,11 @@ struct ChannelSection: View {
                         PlaylistBar(playlist: playlist)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
+                            onPinChanged?()
+                        }
+                    }
                 }
             }
         }
