@@ -186,12 +186,13 @@ struct SettingsView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
 
-            Link("Get a free ESV key at api.esv.org", destination: URL(string: "https://api.esv.org/")!)
+            Link("api.esv.org에서 무료 키 만들기",
+                 destination: URL(string: "https://api.esv.org/account/create-application/")!)
                 .font(.footnote)
         } header: {
             Text("시편 읽기")
         } footer: {
-            Text("한글은 개역한글(저작권 만료)이 앱에 포함되어 오프라인에서도 열립니다. 영문 ESV는 Crossway API로 불러오며 무료 비상업용 키가 필요합니다.")
+            Text("한글은 개역한글(저작권 만료)이 앱에 포함되어 오프라인에서도 열립니다. 영문 ESV는 Crossway API로 불러오며 무료 키가 필요합니다. 비상업용 — 유료도 광고도 없는 앱에만 허용되며, 이 앱은 해당됩니다. 한 번에 500절, 저장도 500절까지이고, 본문을 보여주는 화면마다 저작권 표기와 esv.org 링크가 함께 나옵니다.")
         }
 
         extraTranslationSection

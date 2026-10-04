@@ -158,9 +158,7 @@ struct ReadingView: View {
     }
 
     private var attribution: some View {
-        Text(daily.translation.attribution)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
+        ScriptureAttribution(translation: daily.translation)
             .padding(.top, 10)
     }
 

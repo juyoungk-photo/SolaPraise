@@ -45,6 +45,10 @@ struct ScripturePanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } else if let data {
                     verses(data)
+                    // Required wherever the text appears, not only on the
+                    // reading screen.
+                    ScriptureAttribution(translation: data.translation)
+                        .padding(.top, 2)
                 }
             }
         }
