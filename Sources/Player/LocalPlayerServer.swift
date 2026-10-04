@@ -188,8 +188,8 @@ final class LocalPlayerServer {
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            guard let self, let data, let request = String(data: data, encoding: .utf8) else {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
+            guard let data, let request = String(data: data, encoding: .utf8) else {
                 connection.cancel(); return
             }
             // Only the path matters; the page reads the video id from its query.

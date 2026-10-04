@@ -50,7 +50,7 @@ final class AudioFileAnalyzer: ObservableObject {
     /// window per 8192 frames with no overlap, eight times coarser in time
     /// than live detection and measuring something the test harness never
     /// checked. Short chords fell between windows entirely.
-    private static let hop: AVAudioFrameCount = 1024
+    nonisolated private static let hop: AVAudioFrameCount = 1024
 
     var isBusy: Bool { isAnalyzing }
 

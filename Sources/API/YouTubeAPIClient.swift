@@ -533,23 +533,31 @@ final class YouTubeAPIClient {
     // MARK: - Decoding
 
     /// YouTube emits RFC-3339, sometimes with fractional seconds.
-    static let decoder: JSONDecoder = {
+    /// Built per response, not shared.
+    ///
+    /// This was a `static let`, and its date strategy captured two
+    /// ISO8601DateFormatters. Formatters are not safe to use from several
+    /// threads at once, and two screens refreshing together decode at the
+    /// same time — a race whose symptoms are a wrong date or a crash, both
+    /// intermittent and neither traceable to the decoder. Making one per
+    /// response costs nothing next to the network call that produced it.
+    static var decoder: JSONDecoder {
         let d = JSONDecoder()
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-
         d.dateDecodingStrategy = .custom { decoder in
             let raw = try decoder.singleValueContainer().decode(String.self)
-            if let date = withFraction.date(from: raw) ?? plain.date(from: raw) {
-                return date
-            }
+            // Built here rather than captured, so the formatter cannot
+            // outlive one date or be touched by two threads at once.
+            // YouTube sends both spellings, with and without fractions.
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: raw) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: raw) { return date }
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath,
                       debugDescription: "Unrecognised date: \(raw)")
             )
         }
         return d
-    }()
+    }
 }

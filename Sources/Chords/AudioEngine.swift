@@ -23,7 +23,17 @@ final class AudioEngine: ObservableObject {
     /// later. Guarding stop() on it meant a cancel arriving right after a
     /// start saw false and returned without stopping anything, leaving the
     /// microphone live with nothing reading it.
-    private var engineStarted = false
+    private var _engineStarted = false
+    private let stateLock = NSLock()
+
+    /// Guarded: start() runs on a background queue while stop() can come
+    /// from the main thread, and both read and write this. An unsynchronised
+    /// Bool between two threads is how a cancel misses a running engine and
+    /// leaves the microphone live.
+    private var engineStarted: Bool {
+        get { stateLock.withLock { _engineStarted } }
+        set { stateLock.withLock { _engineStarted = newValue } }
+    }
     @Published private(set) var permissionGranted: Bool = false
     @Published private(set) var currentLevelDB: Float = -80  // for a mic meter
 

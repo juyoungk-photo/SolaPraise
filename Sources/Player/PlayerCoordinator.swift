@@ -54,7 +54,7 @@ enum YTPlayerState: Int {
 @MainActor
 final class PlayerCoordinator: NSObject, ObservableObject {
 
-    static let messageName = "focusTubePlayer"
+    nonisolated static let messageName = "focusTubePlayer"
 
     @Published private(set) var state: YTPlayerState = .unstarted
     @Published private(set) var isReady = false
@@ -293,10 +293,13 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        guard let body = message.body as? [String: Any],
-              let event = body["event"] as? String else { return }
-
-        Task { @MainActor in
+        // WebKit delivers these on the main thread, so read them there
+        // rather than hopping — a Task defers every player event by a turn,
+        // including ENDED, which is the one that has to paint before
+        // YouTube's suggestion grid can.
+        MainActor.assumeIsolated {
+            guard let body = message.body as? [String: Any],
+                  let event = body["event"] as? String else { return }
             self.handle(event: event, body: body)
         }
     }

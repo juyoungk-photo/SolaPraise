@@ -169,7 +169,9 @@ final class FeedStore: ObservableObject {
             }
         }
         try? context.save()
-        await ingestPsalmPlaylist(context: context, client: client)
+        // Best effort: a psalm playlist that is not there yet is not a
+        // reason to fail the refresh that found the channels.
+        _ = await ingestPsalmPlaylist(context: context, client: client)
     }
 
     /// Pulls 공동체성경읽기's psalm playlist into the cache.

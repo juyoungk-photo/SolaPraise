@@ -43,11 +43,11 @@ final class QuotaLedger: ObservableObject {
     // MARK: - Limits
 
     /// Google's default per-project allocation.
-    static let dailyUnitLimit = 10_000
+    nonisolated static let dailyUnitLimit = 10_000
 
     /// Self-imposed ceiling on general searches per day. Deliberately visible
     /// in the UI: seeing the number fall is the discipline mechanism.
-    static let dailySearchLimit = 100
+    nonisolated static let dailySearchLimit = 100
 
     // MARK: - Published state
 
