@@ -195,6 +195,11 @@ struct WorshipFeedView: View {
                                         Label("음원 찾기",
                                               systemImage: "waveform.badge.magnifyingglass")
                                     }
+                                    AddToServiceMenu(title: video.title,
+                                                     videoId: video.videoId) {
+                                        Label("콘티에 추가",
+                                              systemImage: "calendar.badge.plus")
+                                    }
                                 }
                             }
                         }

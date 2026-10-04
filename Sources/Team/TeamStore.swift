@@ -583,6 +583,54 @@ final class TeamStore: ObservableObject {
         return PushResult(written: incoming.count, replaced: targets.count)
     }
 
+    /// Adds one song to a service's 콘티.
+    ///
+    /// The path from "this is the one" to "it is on Sunday's list" ran
+    /// through a playlist: add it there, pin the playlist, push the whole
+    /// thing — which also overwrote whatever was already planned. Deciding
+    /// on a single song is the common case and now takes one action.
+    func appendSong(
+        title: String,
+        videoId: String,
+        key: String?,
+        to service: TeamService,
+        sheetId: String
+    ) async -> Bool {
+        guard let client else { return false }
+        do {
+            let existing = try await rawSongRows(sheetId: sheetId)
+            let layout = SongLayout(header: existing.first ?? [])
+            let day = Calendar.current.startOfDay(for: service.date)
+            // Appended after whatever is already planned, not over it.
+            let next = (songs[day]?.map(\.order).max() ?? 0) + 1
+
+            try await client.append(
+                sheetId: sheetId,
+                tab: TeamSheet.songsTab,
+                row: layout.row(
+                    date: TeamSheet.dateFormatter.string(from: service.date),
+                    order: String(next),
+                    title: title,
+                    url: YouTubeID.watchURL(videoId)?.absoluteString ?? "",
+                    key: key ?? "",
+                    transpose: "",
+                    notes: "",
+                    existing: nil
+                )
+            )
+            songs[day, default: []].append(
+                TeamSong(order: next, title: title,
+                         url: YouTubeID.watchURL(videoId),
+                         key: key, transpose: 0, notes: nil)
+            )
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
+
     /// The Songs tab exactly as it stands, so a push knows which rows to
     /// rewrite rather than guessing from the parsed view.
     func rawSongRows(sheetId: String) async throws -> [[String]] {

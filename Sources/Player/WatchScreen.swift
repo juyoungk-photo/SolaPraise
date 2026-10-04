@@ -419,6 +419,19 @@ struct WatchScreen: View {
                 .tint(detection.audio.isWritingFile ? .red : .accentColor)
             }
 
+            // Deciding a song belongs on Sunday happens while listening
+            // to it, so the action lives next to the player.
+            if showsChordButton, let current {
+                AddToServiceMenu(
+                    title: current.title,
+                    videoId: current.id,
+                    key: existingSheet(forVideo: current.id)?.keyLabel
+                ) {
+                    Label("콘티에", systemImage: "calendar.badge.plus")
+                }
+                .buttonStyle(.bordered)
+            }
+
             // 코드 is for 찬양. A QT or a psalm reading has nothing to
             // detect, and the button only invited a pointless wait there.
             if showsChordButton {
@@ -750,6 +763,10 @@ struct WatchScreen: View {
         } catch {
             host.alternateError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    private func existingSheet(forVideo id: String) -> SavedSong? {
+        allSongs.first { $0.videoId == id }
     }
 
     // MARK: - Recording alongside playback
