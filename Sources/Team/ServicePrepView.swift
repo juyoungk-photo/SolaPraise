@@ -17,6 +17,7 @@ struct ServicePrepView: View {
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var host: PlayerHost
     @EnvironmentObject private var team: TeamStore
+    @EnvironmentObject private var planning: PlanningAuth
 
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
     private var sheets: [SavedSong]
@@ -38,6 +39,7 @@ struct ServicePrepView: View {
     @State private var pushNote: String?
     @State private var live: TeamService?
     @State private var chosenRole: TeamRole?
+    @State private var responding: TeamService?
 
     @EnvironmentObject private var quota: QuotaLedger
 
@@ -155,7 +157,7 @@ struct ServicePrepView: View {
             .toolbar { toolbar }
             .refreshable { if let sheetId { await team.load(sheetId: sheetId) } }
             .task {
-                team.configure(auth: auth)
+                team.configure(auth: auth, planning: planning)
                 guard auth.canUseSheets else { return }
                 if team.services.isEmpty, let sheetId {
                     await team.load(sheetId: sheetId)
@@ -163,6 +165,7 @@ struct ServicePrepView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
+            .sheet(item: $responding) { ResponseSheet(service: $0) }
             // An alert, not a confirmationDialog. On iPad the latter is a
             // popover anchored to whatever presented it, and anchored to a
             // row inside a List it was drawn clipped — the buttons were
@@ -238,7 +241,7 @@ struct ServicePrepView: View {
             songSection(service)
             responseSection(service)
             roleSection(service)
-            upcomingSection
+            scheduleSection
 
             if let message = team.errorMessage {
                 Section { Text(message).font(.caption).foregroundStyle(.orange) }
@@ -534,56 +537,119 @@ struct ServicePrepView: View {
         }
     }
 
-    // MARK: - Weeks ahead
+    // MARK: - The schedule
 
-    /// Who is serving over the coming Sundays.
+    /// Every upcoming service as a row you can answer on.
     ///
-    /// The question a leader asks is never only about this week — it is
-    /// "who have I asked too often" and "what is still unfilled in three
-    /// weeks". One service at a time cannot answer either.
+    /// A leader plans one Sunday at a time; a member answers for several at
+    /// once, usually in one sitting when the month's schedule goes up. The
+    /// tab used to make that a date picker — tap a week, scroll to the
+    /// parts, answer, tap the next week — when it is really one list.
     @ViewBuilder
-    private var upcomingSection: some View {
-        let future = team.services.filter { !$0.isPast }.prefix(6)
-        if future.count > 1 {
+    private var scheduleSection: some View {
+        let future = team.services.filter { !$0.isPast }
+        if !future.isEmpty {
             Section {
-                ForEach(Array(future)) { upcoming in
-                    Button { selected = upcoming } label: {
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(upcoming.date, format: .dateTime.month().day().weekday())
-                                    .font(.subheadline.weight(
-                                        upcoming.id == service?.id ? .semibold : .regular
-                                    ))
-                                Text(upcoming.title)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 8)
-                            filledSummary(upcoming)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                ForEach(future) { upcoming in
+                    scheduleRow(upcoming)
                 }
             } header: {
-                Text("다음 예배")
+                Text("예배 일정")
             } footer: {
-                Text("비어 있는 파트가 몇 개인지 먼저 보입니다. 날짜를 누르면 그 예배로 바뀝니다.")
+                Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 참여 여부를 답하세요. 같은 줄에 팀 전체의 응답이 함께 나옵니다.")
             }
         }
     }
 
-    private func filledSummary(_ upcoming: TeamService) -> some View {
+    private func scheduleRow(_ upcoming: TeamService) -> some View {
+        let email = team.actingEmail(auth: auth, planning: planning) ?? ""
+        let answers = team.responses(for: upcoming)
+        let mine = answers.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
         let filled = team.roles.filter { upcoming.assignments[$0.name] != nil }.count
-        let total = team.roles.count
-        let complete = total > 0 && filled == total
-        return HStack(spacing: 4) {
-            Image(systemName: complete ? "checkmark.circle.fill" : "person.badge.clock")
-                .font(.caption2)
-            Text(total > 0 ? "\(filled)/\(total)" : "—")
-                .font(.caption.monospacedDigit())
+        let coreGap = team.roles.filter { $0.isCore && upcoming.assignments[$0.name] == nil }
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Button { selected = upcoming } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(upcoming.date, format: .dateTime.month().day().weekday())
+                            .font(.subheadline.weight(
+                                upcoming.id == service?.id ? .semibold : .regular
+                            ))
+                        HStack(spacing: 6) {
+                            Text(upcoming.title)
+                            if team.roles.count > 0 {
+                                Text("· \(filled)/\(team.roles.count)").monospacedDigit()
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 4)
+
+                // Answering happens here, on the week it is about.
+                Button { responding = upcoming } label: {
+                    HStack(spacing: 4) {
+                        if let mine {
+                            Circle().fill(tint(mine.status)).frame(width: 7, height: 7)
+                            Text(mine.status.label)
+                            if !mine.role.isEmpty {
+                                Text("· \(mine.role)").foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Image(systemName: "hand.raised").font(.caption2)
+                            Text("응답하기")
+                        }
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
+                                       ?? Color(.secondarySystemBackground))
+                    )
+                    .foregroundStyle(mine.map { tint($0.status) } ?? Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(team.isReadOnly)
+            }
+
+            if !coreGap.isEmpty {
+                // The gap that decides whether the service can happen.
+                Text("미정: " + coreGap.map(\.name).joined(separator: ", "))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+            }
+
+            if answers.isEmpty {
+                Text("아직 응답 없음").font(.caption2).foregroundStyle(.tertiary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(answers) { answer in
+                            HStack(spacing: 4) {
+                                Circle().fill(tint(answer.status)).frame(width: 6, height: 6)
+                                Text(answer.name.isEmpty ? answer.email : answer.name)
+                                if !answer.role.isEmpty {
+                                    Text(answer.role).foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.caption2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(tint(answer.status).opacity(0.14)))
+                            .foregroundStyle(tint(answer.status))
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                }
+            }
         }
-        .foregroundStyle(complete ? Color.green : .secondary)
+        .padding(.vertical, 4)
     }
 
     /// A chart the team has already made for this song, matched on title.

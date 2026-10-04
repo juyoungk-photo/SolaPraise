@@ -17,6 +17,7 @@ struct ContentView: View {
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var playerHost: PlayerHost
     @EnvironmentObject private var team: TeamStore
+    @EnvironmentObject private var planning: PlanningAuth
 
     /// Recomputed as the roster loads and as sign-in changes, so the tab
     /// appears without a relaunch.
@@ -123,7 +124,7 @@ struct ContentView: View {
         // The roster has to be read before the tab can be decided, and the
         // sheet is the only place it lives.
         .task {
-            team.configure(auth: auth)
+            team.configure(auth: auth, planning: planning)
             // Without the scope the roster cannot be read, and hammering the
             // API for 403s would only hide the real problem.
             guard auth.canUseSheets,

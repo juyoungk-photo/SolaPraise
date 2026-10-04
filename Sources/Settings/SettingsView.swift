@@ -29,6 +29,7 @@ struct SettingsView: View {
     @State private var versionsError: String?
     @State private var teamSheetInput = ReadingSettings.teamSheetId ?? ""
     @EnvironmentObject private var team: TeamStore
+    @EnvironmentObject private var planning: PlanningAuth
     @StateObject private var feed = FeedStore()
     @State private var refreshNote: String?
     @State private var notifyTime: Date = {
@@ -220,7 +221,7 @@ struct SettingsView: View {
                 Button("저장") {
                     ReadingSettings.teamSheetId = TeamAccess.sheetId(from: teamSheetInput)
                     Task {
-                        team.configure(auth: auth)
+                        team.configure(auth: auth, planning: planning)
                         if let id = ReadingSettings.teamSheetId {
                             await team.load(sheetId: id)
                         }
@@ -281,6 +282,36 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            // A second account, for the sheet alone.
+            if planning.isSignedIn, let address = planning.email {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(address).font(.caption)
+                        Text("플래닝 계정").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("연결 해제") {
+                        planning.signOut()
+                        team.configure(auth: auth, planning: planning)
+                    }
+                    .font(.caption)
+                }
+            } else {
+                Button {
+                    Task {
+                        await planning.signIn()
+                        team.configure(auth: auth, planning: planning)
+                        if let id = TeamSheetSource.current { await team.load(sheetId: id) }
+                    }
+                } label: {
+                    Label("다른 계정으로 시트 연결", systemImage: "person.2.badge.key")
+                }
+                .font(.caption)
+            }
+            if let message = planning.lastError {
+                Text(message).font(.caption2).foregroundStyle(.orange)
+            }
+
             if let message = team.errorMessage {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
@@ -296,14 +327,15 @@ struct SettingsView: View {
                 // and write the sheet, and the one that belongs on Members.
                 // Leaving it implicit meant sharing with the wrong address and
                 // wondering why nothing changed.
-                if let email = auth.email {
+                if let email = team.actingEmail(auth: auth, planning: planning) {
                     (Text("시트에 접근하는 계정: ").foregroundStyle(.secondary)
-                     + Text(email).bold())
+                     + Text(email).bold()
+                     + Text(planning.isSignedIn ? " (플래닝 계정)" : "").foregroundStyle(.secondary))
                         .font(.caption)
                 } else {
                     Text("로그인하지 않아 시트를 열 수 없습니다.").font(.caption)
                 }
-                Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다 — 링크 공유가 열려 있거나, 시트 주인이 위 주소를 편집자로 추가했으면 됩니다.")
+                Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다. 교회 계정으로 기록을 남기고 싶으면 「다른 계정으로 시트 연결」을 쓰세요 — YouTube 로그인은 그대로 둔 채 시트만 다른 계정으로 씁니다.")
                 Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에는 앱에 로그인하는 주소를 적습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 「예배」 탭이 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
             }
         }

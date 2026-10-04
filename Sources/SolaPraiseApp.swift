@@ -49,6 +49,7 @@ struct SolaPraiseApp: App {
     /// App level so a song survives leaving the screen that started it.
     @StateObject private var playerHost = PlayerHost()
     @StateObject private var team = TeamStore()
+    @StateObject private var planning = PlanningAuth()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -71,6 +72,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(analyzer)
                 .environmentObject(playerHost)
                 .environmentObject(team)
+                .environmentObject(planning)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)

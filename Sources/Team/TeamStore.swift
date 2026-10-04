@@ -208,9 +208,28 @@ final class TeamStore: ObservableObject {
 
     private var client: SheetsClient?
 
-    func configure(auth: GoogleAuthManager) {
-        guard client == nil else { return }
-        client = SheetsClient { try await auth.accessToken() }
+    /// Which account reaches the sheet.
+    ///
+    /// The planning account when one is connected, otherwise whichever
+    /// account is signed in for YouTube. Rebuilt whenever that changes, so
+    /// connecting a church account mid-session takes effect without a
+    /// relaunch.
+    private var usingPlanningAccount = false
+
+    func configure(auth: GoogleAuthManager, planning: PlanningAuth) {
+        let wantsPlanning = planning.isSignedIn
+        guard client == nil || wantsPlanning != usingPlanningAccount else { return }
+        usingPlanningAccount = wantsPlanning
+        client = SheetsClient {
+            wantsPlanning
+                ? try await planning.token()
+                : try await auth.accessToken()
+        }
+    }
+
+    /// The address writes will be attributed to.
+    func actingEmail(auth: GoogleAuthManager, planning: PlanningAuth) -> String? {
+        planning.isSignedIn ? planning.email : auth.email
     }
 
     /// The next service that has not happened yet, which is what anyone
