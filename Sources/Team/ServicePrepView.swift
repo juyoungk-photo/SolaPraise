@@ -45,6 +45,15 @@ struct ServicePrepView: View {
     }
 
     private var sheetId: String? { TeamSheetSource.current }
+
+    private var access: TeamAccess.State {
+        TeamAccess.evaluate(
+            sheetId: sheetId,
+            email: auth.email,
+            displayName: auth.displayName,
+            roster: team.memberEmails
+        )
+    }
     private var service: TeamService? { selected ?? team.upcoming }
 
     var body: some View {
@@ -55,6 +64,37 @@ struct ServicePrepView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let service {
                     content(service)
+                } else if case .notAMember(let email) = access {
+                    ContentUnavailableView {
+                        Label("명단에 없는 계정입니다", systemImage: "person.crop.circle.badge.questionmark")
+                    } description: {
+                        Text("\(email) 은 팀 시트의 Members 탭에 없습니다. 앱에 로그인한 주소와 명단에 적힌 주소가 다른 경우가 대부분입니다.")
+                    } actions: {
+                        VStack(spacing: 10) {
+                            Button("이 계정을 명단에 추가") {
+                                Task {
+                                    guard let sheetId else { return }
+                                    await team.addMember(
+                                        email: email,
+                                        name: auth.displayName ?? "",
+                                        sheetId: sheetId
+                                    )
+                                    await team.load(sheetId: sheetId)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            NavigationLink("팀원 명단 보기") { MembersView() }
+                                .buttonStyle(.bordered)
+
+                            if let message = team.errorMessage {
+                                Text(message)
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .multilineTextAlignment(.center)
+                            }
+                        }
+                    }
                 } else if auth.isSignedIn, !auth.canUseSheets || team.needsAuthorization {
                     // The session predates the scope, so the sheet is fine
                     // and the token is not. Say which, and fix it here.

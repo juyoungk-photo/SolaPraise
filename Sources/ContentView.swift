@@ -77,9 +77,14 @@ struct ContentView: View {
                 .tabItem { Label("보관함", systemImage: "list.bullet.rectangle") }
                 .tag(Tab.library)
 
-            // Members only, and only once a sheet is configured. Appears
-            // when the signed-in address is on the Members tab.
-            if teamAccess.isMember {
+            // Shown whenever a sheet is configured and somebody is signed
+            // in — including when that person is NOT on the roster.
+            //
+            // Hiding it for a non-member was a dead end: the only way to get
+            // onto the roster is through this tab, so anyone left off it had
+            // no route back in, and the tab simply being absent explained
+            // nothing. It appears and says why instead.
+            if teamAccess != .unconfigured, teamAccess != .signInRequired {
                 ServicePrepView()
                     .tabItem { Label("예배", systemImage: "calendar.badge.clock") }
                     .tag(Tab.team)

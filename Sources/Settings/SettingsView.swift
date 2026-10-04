@@ -263,6 +263,24 @@ struct SettingsView: View {
                 .font(.caption)
             }
 
+            if TeamSheetSource.current != nil, auth.isSignedIn {
+                NavigationLink {
+                    MembersView()
+                } label: {
+                    Label("팀원 명단", systemImage: "person.2")
+                }
+            }
+
+            // The tab's absence used to be unexplained, and the thing that
+            // explains it lives behind the tab.
+            if TeamSheetSource.current == nil {
+                Text("「예배」 탭: 팀 시트를 연결하면 나타납니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !auth.isSignedIn {
+                Text("「예배」 탭: Google 로그인이 필요합니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             if let message = team.errorMessage {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
