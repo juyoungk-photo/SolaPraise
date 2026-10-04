@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ESVAPIKey</key>
+	<string>$(ESV_API_KEY)</string>
 	<key>TeamSheetId</key>
 	<string>$(TEAM_SHEET_ID)</string>
 	<key>YouTubeAPIKey</key>

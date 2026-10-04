@@ -16,7 +16,7 @@ final class BibleStore: ObservableObject {
     private let esv: ESVClient
     private let apiBible: APIBibleClient
 
-    init(esvKeyProvider: @escaping @Sendable () -> String? = { ReadingSettings.esvAPIKey }) {
+    init(esvKeyProvider: @escaping @Sendable () -> String? = { AppSecrets.esvAPIKey }) {
         self.esv = ESVClient(keyProvider: esvKeyProvider)
         self.apiBible = APIBibleClient()
     }

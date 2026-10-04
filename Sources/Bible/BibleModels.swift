@@ -69,7 +69,7 @@ enum BibleTranslation: String, CaseIterable, Identifiable, Codable {
     var isAvailable: Bool {
         switch self {
         case .krv:   return true
-        case .esv:   return ReadingSettings.esvAPIKey?.isEmpty == false
+        case .esv:   return AppSecrets.esvAPIKey?.isEmpty == false
         case .extra:
             return ReadingSettings.extraVersion != nil
                 && ReadingSettings.apiBibleKey?.isEmpty == false

@@ -125,6 +125,10 @@ struct LeadSheetView: View {
                     Label("공식 악보 찾기", systemImage: "doc.text.magnifyingglass")
                 }
 
+                AudioSourceMenu(title: song.title) {
+                    Label("음원 찾기", systemImage: "waveform.badge.magnifyingglass")
+                }
+
                 Menu("가사 찾기") {
                     Button("네이버에서 검색") { search(on: .naver) }
                     Button("구글에서 검색") { search(on: .google) }

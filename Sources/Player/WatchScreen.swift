@@ -266,7 +266,16 @@ struct WatchScreen: View {
                                 Image(systemName: "doc.text.magnifyingglass")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 40, height: 40)
+                                    .frame(width: 36, height: 40)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            AudioSourceMenu(title: item.title) {
+                                Image(systemName: "waveform.badge.magnifyingglass")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, height: 40)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -470,6 +479,27 @@ struct WatchScreen: View {
             // official chart — which usually exists and is sold by the team
             // that wrote the song — was invisible almost every time.
             if showsChordButton, let current {
+                AudioSourceMenu(title: current.title) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "waveform.badge.magnifyingglass")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("음원 찾기").font(.subheadline)
+                            // Says why, because the reason is not obvious:
+                            // the app cannot analyse what it is playing.
+                            Text("파일을 받으면 작업실에서 코드 분석이 됩니다")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(.secondarySystemBackground),
+                                in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+
                 SheetMusicMenu(title: current.title, published: sheetLinks) {
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text.magnifyingglass")

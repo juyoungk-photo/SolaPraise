@@ -191,6 +191,10 @@ struct WorshipFeedView: View {
                                         Label("공식 악보 찾기",
                                               systemImage: "doc.text.magnifyingglass")
                                     }
+                                    AudioSourceMenu(title: video.title) {
+                                        Label("음원 찾기",
+                                              systemImage: "waveform.badge.magnifyingglass")
+                                    }
                                 }
                             }
                         }

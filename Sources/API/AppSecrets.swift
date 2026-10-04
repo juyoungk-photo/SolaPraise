@@ -40,6 +40,20 @@ enum AppSecrets {
 
     static var hasYouTubeAPIKey: Bool { youtubeAPIKey != nil }
 
+    /// The ESV key, shipped so a teammate does not have to get their own.
+    ///
+    /// Crossway licenses per application, not per reader, so one key for the
+    /// app is the right shape — and the alternative is every member
+    /// registering at api.esv.org before they can read a verse in English.
+    static var esvAPIKey: String? {
+        if let stored = ReadingSettings.esvAPIKey, !stored.isEmpty { return stored }
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ESVAPIKey") as? String
+        else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return nil }
+        return trimmed
+    }
+
     /// The team's sheet, shipped with the build.
     ///
     /// Without this every teammate would paste the same URL into the same
