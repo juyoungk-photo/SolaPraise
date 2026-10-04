@@ -114,22 +114,48 @@ enum TeamSheet {
         "MMM d yyyy", "MMM d, yyyy", "d MMM yyyy"
     ]
 
+    /// A planner writes "Oct 4 Sun" — month, day, weekday, no year.
+    private static let yearlessFormats = ["MMM d", "M/d", "d MMM"]
+
     static func day(_ raw: String) -> Date? {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
+
+        // Strip a weekday wherever it sits: "Oct 4 Sun", "2026-09-27 (일)".
+        if let cut = text.firstIndex(of: "(") {
+            text = String(text[..<cut]).trimmingCharacters(in: .whitespaces)
+        }
+        for weekday in ["Sun","Mon","Tue","Wed","Thu","Fri","Sat",
+                        "일","월","화","수","목","금","토"] {
+            if text.hasSuffix(" " + weekday) {
+                text = String(text.dropLast(weekday.count + 1))
+                    .trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
 
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
+
         for format in dateFormats {
             formatter.dateFormat = format
             if let date = formatter.date(from: text) { return date }
-            // A trailing weekday is common — "Jan 4 Sun", "2026-09-27 (일)".
-            if let cut = text.firstIndex(where: { $0 == "(" }),
-               let date = formatter.date(
-                   from: String(text[..<cut]).trimmingCharacters(in: .whitespaces)
-               ) { return date }
+        }
+
+        // No year given. A schedule is about the months ahead, so take the
+        // reading that lands nearest to now rather than defaulting to this
+        // year and putting next January ten months in the past.
+        let calendar = Calendar(identifier: .gregorian)
+        let thisYear = calendar.component(.year, from: Date())
+        for format in yearlessFormats {
+            formatter.dateFormat = format + " yyyy"
+            for year in [thisYear, thisYear + 1, thisYear - 1] {
+                guard let date = formatter.date(from: "\(text) \(year)") else { continue }
+                let days = calendar.dateComponents([.day], from: Date(), to: date).day ?? 0
+                if days > -90, days < 300 { return date }
+            }
         }
         return nil
     }

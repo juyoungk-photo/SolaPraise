@@ -628,7 +628,10 @@ final class TeamStore: ObservableObject {
             }
         }
         let dateCol = column(["date", "날짜"]) ?? TeamSheet.Schedule.date
-        let titleCol = column(["title", "구분", "type", "예배", "행사"])
+        // "Service" is what a planner calls this column at least as often
+        // as "Title". Missing it meant the column was treated as a part, so
+        // the roster grew a phantom named Service.
+        let titleCol = column(["title", "service", "구분", "type", "예배", "행사", "예배명"])
         let timeCol = column(["time", "시간"])
         let locationCol = column(["location", "장소"])
         let notesCol = column(["note", "notes", "비고", "메모"])
