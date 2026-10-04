@@ -102,8 +102,47 @@ enum TeamSheet {
         return f
     }()
 
+    /// Dates as people actually type them.
+    ///
+    /// The sheet is edited by hand, and Sheets reformats what it is given, so
+    /// "9/27/2026" and "2026-09-27" both turn up in the same document. Only
+    /// the ISO form was accepted, which silently dropped every row of a
+    /// schedule typed the ordinary American way — the tab looked empty and
+    /// nothing said why.
+    private static let dateFormats = [
+        "yyyy-MM-dd", "M/d/yyyy", "yyyy/M/d", "M-d-yyyy",
+        "MMM d yyyy", "MMM d, yyyy", "d MMM yyyy"
+    ]
+
     static func day(_ raw: String) -> Date? {
-        dateFormatter.date(from: String(raw.prefix(10)))
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        for format in dateFormats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: text) { return date }
+            // A trailing weekday is common — "Jan 4 Sun", "2026-09-27 (일)".
+            if let cut = text.firstIndex(where: { $0 == "(" }),
+               let date = formatter.date(
+                   from: String(text[..<cut]).trimmingCharacters(in: .whitespaces)
+               ) { return date }
+        }
+        return nil
+    }
+
+    /// Finds a column by any of its accepted names, case-insensitively.
+    ///
+    /// Every tab is read this way now. A person adds a column, renames one,
+    /// or builds a tab by duplicating another — all of which move the
+    /// positions this used to count on.
+    static func column(_ header: [String], _ names: [String]) -> Int? {
+        header.firstIndex {
+            names.contains($0.trimmingCharacters(in: .whitespaces).lowercased())
+        }
     }
 }
 

@@ -350,6 +350,7 @@ final class TeamStore: ObservableObject {
             services = Self.parseSchedule(schedule, roles: roles)
             songs = Self.parseSongs(songData)
             signups = Self.parseSignups(signupData)
+            signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             lastLoaded = Date()
             needsAuthorization = false
@@ -368,17 +369,23 @@ final class TeamStore: ObservableObject {
         guard let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.membersTab),
               rows.count > 1 else { members = []; return [] }
 
+        let header = rows[0]
+        // Name before Email is just as natural to write, and reading by
+        // position turned the name into the address.
+        let emailCol = TeamSheet.column(header, ["email", "이메일", "메일"]) ?? 0
+        let nameCol = TeamSheet.column(header, ["name", "이름"]) ?? 1
+        let activeCol = TeamSheet.column(header, ["active", "사용", "활성"])
+
         var emails: Set<String> = []
         var list: [Member] = []
         for (offset, row) in rows.enumerated() where offset > 0 {
-            guard row.count > TeamSheet.Members.email else { continue }
-            let email = row[TeamSheet.Members.email].trimmingCharacters(in: .whitespaces)
+            guard row.count > emailCol else { continue }
+            let email = row[emailCol].trimmingCharacters(in: .whitespaces)
             guard !email.isEmpty, email.contains("@") else { continue }
-            let activeCell = row.count > TeamSheet.Members.active
-                ? row[TeamSheet.Members.active].lowercased()
-                : "true"
+            let activeCell = activeCol.flatMap { row.count > $0 ? row[$0].lowercased() : nil }
+                ?? "true"
             let active = !["false", "no", "n", "0"].contains(activeCell)
-            let name = row.count > TeamSheet.Members.name ? row[TeamSheet.Members.name] : ""
+            let name = row.count > nameCol ? row[nameCol] : ""
             list.append(Member(email: email, name: name, isActive: active, row: offset + 1))
             if active { emails.insert(email.lowercased()) }
         }
@@ -445,14 +452,14 @@ final class TeamStore: ObservableObject {
     ) async {
         guard let client else { return }
         let day = Calendar.current.startOfDay(for: service.date)
-        let row = [
-            TeamSheet.dateFormatter.string(from: service.date),
-            role,
-            email,
-            name,
-            status.rawValue,
-            ISO8601DateFormatter().string(from: Date())
-        ]
+        let row = signupLayout.row(
+            date: TeamSheet.dateFormatter.string(from: service.date),
+            role: role,
+            email: email,
+            name: name,
+            status: status.rawValue,
+            updatedAt: ISO8601DateFormatter().string(from: Date())
+        )
 
         do {
             isReadOnly = false
@@ -464,7 +471,7 @@ final class TeamStore: ObservableObject {
             if let target = existing?.row, target >= 2 {
                 try await client.write(
                     sheetId: sheetId,
-                    range: "\(TeamSheet.signupsTab)!A\(target):F\(target)",
+                    range: "\(TeamSheet.signupsTab)!A\(target):\(signupLayout.lastColumnLetter)\(target)",
                     row: row
                 )
             } else {
@@ -516,37 +523,52 @@ final class TeamStore: ObservableObject {
         guard let client else { throw SheetsClient.SheetsError.noSheet }
         let day = TeamSheet.dateFormatter.string(from: service.date)
 
+        // Written in the tab's own column order. This sheet has a Service
+        // column the app never knew about, and a fixed order would have put
+        // the title where the order goes and the link where the title goes —
+        // right values, wrong cells, which is worse than refusing.
+        let header = existingRows.first ?? []
+        let layout = SongLayout(header: header)
+
         // 1-based sheet rows already holding this date.
         var targets: [Int] = []
         for (offset, row) in existingRows.enumerated() where offset > 0 {
-            guard row.count > TeamSheet.Songs.date,
-                  let date = TeamSheet.day(row[TeamSheet.Songs.date]),
+            guard row.count > layout.date,
+                  let date = TeamSheet.day(row[layout.date]),
                   Calendar.current.isDate(date, inSameDayAs: service.date) else { continue }
             targets.append(offset + 1)
         }
 
         func cells(_ song: TeamSong) -> [String] {
-            [
-                day,
-                String(song.order),
-                song.title,
-                song.url?.absoluteString ?? "",
-                song.key ?? "",
-                song.transpose == 0 ? "" : String(song.transpose),
-                song.notes ?? ""
-            ]
+            layout.row(
+                date: day,
+                order: String(song.order),
+                title: song.title,
+                url: song.url?.absoluteString ?? "",
+                key: song.key ?? "",
+                transpose: song.transpose == 0 ? "" : String(song.transpose),
+                notes: song.notes ?? "",
+                // Columns the app does not own are left exactly as they were,
+                // so a leader's own notes survive a push.
+                existing: targets.isEmpty ? nil : nil
+            )
         }
 
         var updates: [(range: String, rows: [[String]])] = []
         for (index, song) in incoming.enumerated() where index < targets.count {
             let row = targets[index]
-            updates.append(("\(TeamSheet.songsTab)!A\(row):G\(row)", [cells(song)]))
+            updates.append((
+                "\(TeamSheet.songsTab)!A\(row):\(layout.lastColumnLetter)\(row)",
+                [cells(song)]
+            ))
         }
         // Rows the old 콘티 used and the new one does not: blanked, not left
         // behind claiming to be part of this Sunday.
         for row in targets.dropFirst(incoming.count) {
-            updates.append(("\(TeamSheet.songsTab)!A\(row):G\(row)",
-                            [Array(repeating: "", count: 7)]))
+            updates.append((
+                "\(TeamSheet.songsTab)!A\(row):\(layout.lastColumnLetter)\(row)",
+                [Array(repeating: "", count: layout.width)]
+            ))
         }
         if !updates.isEmpty {
             try await client.batchWrite(sheetId: sheetId, updates: updates)
@@ -645,25 +667,40 @@ final class TeamStore: ObservableObject {
     }
 
     static func parseSongs(_ rows: [[String]]) -> [Date: [TeamSong]] {
+        guard let header = rows.first else { return [:] }
+        let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? 0
+        let orderCol = TeamSheet.column(header, ["order", "순서", "#"])
+        let titleCol = TeamSheet.column(header, ["title", "곡", "곡명", "찬양"]) ?? 2
+        let urlCol = TeamSheet.column(header, ["youtubeurl", "url", "link", "링크", "영상"])
+        let keyCol = TeamSheet.column(header, ["key", "키", "원키"])
+        let transposeCol = TeamSheet.column(header, ["transpose", "연주키", "조옮김"])
+        let notesCol = TeamSheet.column(header, ["notes", "note", "비고", "메모"])
+
         var out: [Date: [TeamSong]] = [:]
-        for row in rows.dropFirst() {
-            guard row.count > TeamSheet.Songs.title,
-                  let date = TeamSheet.day(row[TeamSheet.Songs.date]) else { continue }
-            let title = row[TeamSheet.Songs.title].trimmingCharacters(in: .whitespaces)
-            guard !title.isEmpty else { continue }
-            func cell(_ i: Int) -> String? {
-                guard row.count > i else { return nil }
+        for (offset, row) in rows.enumerated() where offset > 0 {
+            guard row.count > dateCol, let date = TeamSheet.day(row[dateCol]) else { continue }
+            func cell(_ i: Int?) -> String? {
+                guard let i, row.count > i else { return nil }
                 let v = row[i].trimmingCharacters(in: .whitespaces)
                 return v.isEmpty ? nil : v
             }
+            guard let title = cell(titleCol) else { continue }
+
+            // Transpose holds either a number of semitones or the key the
+            // team actually plays in — "Ab" against an original of G. A key
+            // written there is the more useful of the two, so it wins.
+            let rawTranspose = cell(transposeCol)
+            let semitones = rawTranspose.flatMap { Int($0) } ?? 0
+            let playedKey = (rawTranspose.flatMap { Int($0) } == nil) ? rawTranspose : nil
+
             out[Calendar.current.startOfDay(for: date), default: []].append(
                 TeamSong(
-                    order: Int(cell(TeamSheet.Songs.order) ?? "") ?? 0,
+                    order: Int(cell(orderCol) ?? "") ?? (out[Calendar.current.startOfDay(for: date)]?.count ?? 0) + 1,
                     title: title,
-                    url: cell(TeamSheet.Songs.url).flatMap(URL.init(string:)),
-                    key: cell(TeamSheet.Songs.key),
-                    transpose: Int(cell(TeamSheet.Songs.transpose) ?? "") ?? 0,
-                    notes: cell(TeamSheet.Songs.notes)
+                    url: cell(urlCol).flatMap(URL.init(string:)),
+                    key: playedKey ?? cell(keyCol),
+                    transpose: semitones,
+                    notes: cell(notesCol)
                 )
             )
         }
@@ -741,18 +778,24 @@ final class TeamStore: ObservableObject {
               let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.liveTab)
         else { return }
 
+        guard let header = rows.first,
+              let orderCol = TeamSheet.column(header, ["currentorder", "order", "현재순서"])
+        else { return }
+        let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? 0
+        let byCol = TeamSheet.column(header, ["updatedby", "by", "진행"])
+
         var order: [Date: Int] = [:]
         var by: [Date: String] = [:]
         var at: [Date: Int] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
-            guard row.count > TeamSheet.Live.order,
-                  let date = TeamSheet.day(row[TeamSheet.Live.date]),
-                  let value = Int(row[TeamSheet.Live.order].filter(\.isNumber))
+            guard row.count > orderCol,
+                  let date = TeamSheet.day(row[dateCol]),
+                  let value = Int(row[orderCol].filter(\.isNumber))
             else { continue }
             let day = Calendar.current.startOfDay(for: date)
             order[day] = value
             at[day] = offset + 1
-            if row.count > TeamSheet.Live.by { by[day] = row[TeamSheet.Live.by] }
+            if let byCol, row.count > byCol { by[day] = row[byCol] }
         }
         liveOrder = order
         liveUpdatedBy = by
@@ -792,26 +835,42 @@ final class TeamStore: ObservableObject {
     }
 
     static func parsePlan(_ rows: [[String]]) -> [Date: [PlanItem]] {
+        guard let header = rows.first else { return [:] }
+        // A Plan tab is often made by duplicating Schedule and then editing
+        // it, so insist on its own columns rather than reading a Schedule
+        // as a garbled order of service.
+        guard let typeCol = TeamSheet.column(header, ["type", "구분", "순서종류"]),
+              let titleCol = TeamSheet.column(header, ["title", "내용", "순서"])
+        else { return [:] }
+
+        let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? 0
+        let orderCol = TeamSheet.column(header, ["order", "#"])
+        let minutesCol = TeamSheet.column(header, ["minutes", "분", "길이"])
+        let personCol = TeamSheet.column(header, ["person", "담당", "맡은이"])
+        let keyCol = TeamSheet.column(header, ["key", "키"])
+        let urlCol = TeamSheet.column(header, ["youtubeurl", "url", "링크"])
+        let notesCol = TeamSheet.column(header, ["notes", "note", "비고", "메모"])
+
         var out: [Date: [PlanItem]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
-            guard row.count > TeamSheet.Plan.title,
-                  let date = TeamSheet.day(row[TeamSheet.Plan.date]) else { continue }
-            func cell(_ i: Int) -> String? {
-                guard row.count > i else { return nil }
+            guard row.count > dateCol, let date = TeamSheet.day(row[dateCol]) else { continue }
+            func cell(_ i: Int?) -> String? {
+                guard let i, row.count > i else { return nil }
                 let v = row[i].trimmingCharacters(in: .whitespaces)
                 return v.isEmpty ? nil : v
             }
-            guard let title = cell(TeamSheet.Plan.title) else { continue }
-            out[Calendar.current.startOfDay(for: date), default: []].append(
+            guard let title = cell(titleCol) else { continue }
+            let day = Calendar.current.startOfDay(for: date)
+            out[day, default: []].append(
                 PlanItem(
-                    order: Int(cell(TeamSheet.Plan.order) ?? "") ?? 0,
-                    kind: PlanItem.Kind(raw: cell(TeamSheet.Plan.type) ?? ""),
+                    order: Int(cell(orderCol) ?? "") ?? (out[day]?.count ?? 0) + 1,
+                    kind: PlanItem.Kind(raw: cell(typeCol) ?? ""),
                     title: title,
-                    minutes: cell(TeamSheet.Plan.minutes).flatMap { Int($0.filter(\.isNumber)) },
-                    person: cell(TeamSheet.Plan.person),
-                    key: cell(TeamSheet.Plan.key),
-                    url: cell(TeamSheet.Plan.url).flatMap(URL.init(string:)),
-                    notes: cell(TeamSheet.Plan.notes),
+                    minutes: cell(minutesCol).flatMap { Int($0.filter(\.isNumber)) },
+                    person: cell(personCol),
+                    key: cell(keyCol),
+                    url: cell(urlCol).flatMap(URL.init(string:)),
+                    notes: cell(notesCol),
                     row: offset + 1
                 )
             )
@@ -819,19 +878,99 @@ final class TeamStore: ObservableObject {
         return out
     }
 
+    /// Column letters for the Signups tab, in the order that tab actually
+    /// has them.
+    ///
+    /// Writes were the last place still counting columns. The row was built
+    /// as Date, Role, Email, Name, Status, UpdatedAt and pushed at A:F — so
+    /// a tab with its columns in any other order would have been filled with
+    /// the right values in the wrong cells, which is worse than failing.
+    struct SignupLayout {
+        var date = 0, role = 1, email = 2, name = 3, status = 4, updatedAt = 5
+        var width = 6
+
+        init(header: [String]) {
+            guard !header.isEmpty else { return }
+            width = max(header.count, 6)
+            date = TeamSheet.column(header, ["date", "날짜"]) ?? 0
+            role = TeamSheet.column(header, ["role", "파트", "역할"]) ?? 1
+            email = TeamSheet.column(header, ["memberemail", "email", "이메일"]) ?? 2
+            name = TeamSheet.column(header, ["membername", "name", "이름"]) ?? 3
+            status = TeamSheet.column(header, ["status", "상태", "응답"]) ?? 4
+            updatedAt = TeamSheet.column(header, ["updatedat", "updated", "시각"]) ?? 5
+        }
+
+        /// A row laid out for this tab, padded so every column is addressed.
+        func row(date: String, role: String, email: String,
+                 name: String, status: String, updatedAt: String) -> [String] {
+            var cells = [String](repeating: "", count: width)
+            func put(_ index: Int, _ value: String) {
+                if cells.indices.contains(index) { cells[index] = value }
+            }
+            put(self.date, date); put(self.role, role); put(self.email, email)
+            put(self.name, name); put(self.status, status); put(self.updatedAt, updatedAt)
+            return cells
+        }
+
+        /// "A" … "Z", for the write range.
+        var lastColumnLetter: String {
+            String(UnicodeScalar(UInt8(65 + min(max(width - 1, 0), 25))))
+        }
+    }
+
+    private(set) var signupLayout = SignupLayout(header: [])
+
+    /// The Songs tab's own column order, for the same reason.
+    struct SongLayout {
+        var date = 0, order = 1, title = 2, url = 3, key = 4, transpose = 5, notes = 6
+        var width = 7
+
+        init(header: [String]) {
+            guard !header.isEmpty else { return }
+            width = max(header.count, 7)
+            date = TeamSheet.column(header, ["date", "날짜"]) ?? 0
+            order = TeamSheet.column(header, ["order", "순서", "#"]) ?? 1
+            title = TeamSheet.column(header, ["title", "곡", "곡명", "찬양"]) ?? 2
+            url = TeamSheet.column(header, ["youtubeurl", "url", "link", "링크", "영상"]) ?? 3
+            key = TeamSheet.column(header, ["key", "키", "원키"]) ?? 4
+            transpose = TeamSheet.column(header, ["transpose", "연주키", "조옮김"]) ?? 5
+            notes = TeamSheet.column(header, ["notes", "note", "비고", "메모"]) ?? 6
+        }
+
+        func row(date: String, order: String, title: String, url: String,
+                 key: String, transpose: String, notes: String,
+                 existing: [String]?) -> [String] {
+            var cells = existing ?? [String](repeating: "", count: width)
+            while cells.count < width { cells.append("") }
+            func put(_ index: Int, _ value: String) {
+                if cells.indices.contains(index) { cells[index] = value }
+            }
+            put(self.date, date); put(self.order, order); put(self.title, title)
+            put(self.url, url); put(self.key, key)
+            put(self.transpose, transpose); put(self.notes, notes)
+            return cells
+        }
+
+        var lastColumnLetter: String {
+            String(UnicodeScalar(UInt8(65 + min(max(width - 1, 0), 25))))
+        }
+    }
+
     static func parseSignups(_ rows: [[String]]) -> [Date: [TeamSignup]] {
+        guard let header = rows.first else { return [:] }
+        let layout = SignupLayout(header: header)
+
         var out: [Date: [TeamSignup]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
-            guard row.count > TeamSheet.Signups.email,
-                  let date = TeamSheet.day(row[TeamSheet.Signups.date]) else { continue }
-            let status = row.count > TeamSheet.Signups.status
-                ? row[TeamSheet.Signups.status].lowercased() : "available"
+            guard row.count > layout.email,
+                  let date = TeamSheet.day(row[layout.date]) else { continue }
+            func cell(_ i: Int) -> String { row.count > i ? row[i] : "" }
             out[Calendar.current.startOfDay(for: date), default: []].append(
                 TeamSignup(
-                    role: row[TeamSheet.Signups.role],
-                    email: row[TeamSheet.Signups.email],
-                    name: row.count > TeamSheet.Signups.name ? row[TeamSheet.Signups.name] : "",
-                    statusRaw: status,
+                    role: cell(layout.role),
+                    email: cell(layout.email),
+                    name: cell(layout.name),
+                    statusRaw: cell(layout.status).isEmpty ? "available" : cell(layout.status),
                     row: offset + 1
                 )
             )
