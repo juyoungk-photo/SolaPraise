@@ -45,11 +45,11 @@ struct MembersView: View {
                         if isWorking { ProgressView().controlSize(.small) }
                     }
                 }
-                .disabled(!email.contains("@") || isWorking)
+                .disabled((!email.contains("@") && name.isEmpty) || isWorking)
             } header: {
                 Text("추가")
             } footer: {
-                Text("앱에 로그인할 때 쓰는 주소를 넣으세요. 시트를 소유한 교회 계정이 아니라 각자의 개인 계정입니다. 그 주소가 시트를 편집할 수 있어야 사인업이 저장됩니다.")
+                Text("이름만 넣어 두었다가 나중에 주소를 채워도 됩니다. 주소가 없는 사람은 앱에서 응답할 수 없고 「미응답」으로 보입니다. 앱에 로그인할 때 쓰는 주소를 넣으세요. 시트를 소유한 교회 계정이 아니라 각자의 개인 계정입니다. 그 주소가 시트를 편집할 수 있어야 사인업이 저장됩니다.")
             }
 
             Section {
@@ -112,6 +112,8 @@ struct MembersView: View {
 
     private func add() async {
         guard let sheetId else { return }
+        // A name alone is a valid row — the address can follow.
+        guard email.contains("@") || !name.isEmpty else { return }
         isWorking = true
         defer { isWorking = false }
         await team.addMember(

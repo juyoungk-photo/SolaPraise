@@ -38,7 +38,6 @@ struct ServicePrepView: View {
     @State private var isPushing = false
     @State private var pushNote: String?
     @State private var live: TeamService?
-    @State private var chosenRole: TeamRole?
     @State private var responding: TeamService?
 
     @EnvironmentObject private var quota: QuotaLedger
@@ -245,8 +244,6 @@ struct ServicePrepView: View {
             }
 
             if !service.isRehearsal { songSection(service) }
-            responseSection(service)
-            roleSection(service)
             scheduleSection
 
             if let message = team.errorMessage {
@@ -463,65 +460,17 @@ struct ServicePrepView: View {
         }
     }
 
-    // MARK: - Who has answered
+    // MARK: - Response chips
 
-    /// The leader's actual question is who has said nothing.
-    ///
-    /// A list of volunteers tells you who is coming. It does not tell you
-    /// who still has to be asked, and that is the list that turns into
-    /// messages on a Thursday night.
-    @ViewBuilder
-    private func responseSection(_ service: TeamService) -> some View {
-        let answers = team.responses(for: service)
-        let silent = team.unanswered(for: service)
-        Group {
-            Section {
-                ForEach(answers) { answer in
-                    HStack {
-                        Text(answer.name.isEmpty ? answer.email : answer.name)
-                            .font(.subheadline)
-                        Spacer()
-                        Text(answer.status.label)
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(tint(answer.status).opacity(0.18), in: Capsule())
-                            .foregroundStyle(tint(answer.status))
-                    }
-                }
-                ForEach(silent, id: \.self) { email in
-                    HStack {
-                        Text(email).font(.subheadline).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("미응답").font(.caption).foregroundStyle(.tertiary)
-                    }
-                }
-
-                NavigationLink {
-                    MembersView()
-                } label: {
-                    Label(team.memberEmails.isEmpty ? "팀원 명단 만들기" : "팀원 명단",
-                          systemImage: "person.2")
-                        .font(.subheadline)
-                }
-            } header: {
-                HStack {
-                    Text("응답")
-                    Spacer()
-                    if !silent.isEmpty {
-                        Text("\(silent.count)명 미응답")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.orange)
-                    }
-                }
-            } footer: {
-                if team.memberEmails.isEmpty {
-                    Text("명단이 없으면 누가 답했는지는 알아도 누가 아직 답하지 않았는지는 알 수 없습니다.")
-                }
-            }
+    private func tint(_ status: SignupStatus) -> Color {
+        switch status {
+        case .available: return .green
+        case .declined:  return .red
+        case .away:      return .orange
         }
     }
 
+    /// "주영 인도" — a person and what they are doing.
     private func chip(
         _ name: String,
         detail: String?,
@@ -537,21 +486,15 @@ struct ServicePrepView: View {
                 Circle().fill(color).frame(width: 6, height: 6)
             }
             Text(name)
-            if let detail { Text(detail).foregroundStyle(.secondary) }
+            if let detail {
+                Text(detail).foregroundStyle(color.opacity(0.75))
+            }
         }
         .font(.caption2)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Capsule().fill(color.opacity(dashed ? 0.06 : 0.14)))
         .foregroundStyle(color)
-    }
-
-    private func tint(_ status: SignupStatus) -> Color {
-        switch status {
-        case .available: return .green
-        case .declined:  return .red
-        case .away:      return .orange
-        }
     }
 
     // MARK: - The schedule
@@ -579,9 +522,16 @@ struct ServicePrepView: View {
                     scheduleRow(upcoming)
                 }
             } header: {
-                Text("예배 일정")
+                Text("예배표")
             } footer: {
-                Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 참여 여부를 답하세요. 같은 줄에 팀 전체의 응답이 함께 나옵니다.")
+                VStack(alignment: .leading, spacing: 4) {
+                    if let email = team.actingEmail(auth: auth, planning: planning) {
+                        // Whose answer this will be, since the app can hold
+                        // two accounts and the wrong one is easy to be in.
+                        (Text("응답 계정: ").foregroundStyle(.secondary) + Text(email))
+                    }
+                    Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 맡을 파트를 고르세요. 응답한 사람이 먼저 나옵니다.")
+                }
             }
         }
     }
@@ -630,9 +580,13 @@ struct ServicePrepView: View {
                     HStack(spacing: 4) {
                         if let mine {
                             Circle().fill(tint(mine.status)).frame(width: 7, height: 7)
-                            Text(mine.status.label)
-                            if !mine.role.isEmpty {
-                                Text("· \(mine.role)").foregroundStyle(.secondary)
+                            // The part, when there is one — that is the
+                            // answer. The status word only carries weight
+                            // when the answer is no.
+                            if mine.status == .available, !mine.role.isEmpty {
+                                Text(mine.role)
+                            } else {
+                                Text(mine.status.label)
                             }
                         } else {
                             Image(systemName: "hand.raised").font(.caption2)
@@ -669,9 +623,13 @@ struct ServicePrepView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(answers) { answer in
+                            // "주영 인도" reads as a fact about Sunday.
+                            // "주영 가능" reads as a form someone filled in.
                             chip(
                                 answer.name.isEmpty ? answer.email : answer.name,
-                                detail: answer.role.isEmpty ? nil : answer.role,
+                                detail: answer.status == .available
+                                    ? (answer.role.isEmpty ? nil : answer.role)
+                                    : answer.status.label,
                                 color: tint(answer.status)
                             )
                         }
@@ -691,171 +649,6 @@ struct ServicePrepView: View {
         let needle = title.trimmingCharacters(in: .whitespaces)
         guard needle.count >= 2 else { return nil }
         return sheets.first { $0.title.contains(needle) || needle.contains($0.title) }
-    }
-
-    // MARK: - Roles
-
-    @ViewBuilder
-    private func roleSection(_ service: TeamService) -> some View {
-        Section {
-            if team.roles.isEmpty {
-                Text("시트의 Roles 탭에 파트를 추가하면 여기에서 사인업할 수 있습니다.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                if !service.isPast, !(auth.email ?? "").isEmpty, !team.isReadOnly {
-                    myResponse(service)
-                }
-                ForEach(team.roles) { role in
-                    roleRow(service, role)
-                }
-            }
-        } header: {
-            Text("파트")
-        } footer: {
-            if team.isReadOnly {
-                Text("\(auth.email ?? "이 계정")은 시트를 볼 수만 있어 사인업을 저장할 수 없습니다. 시트 주인에게 이 주소를 편집자로 추가해 달라고 하세요.")
-            } else {
-                Text("파트를 고르고 상태를 누르면 저장됩니다. 확정은 리더가 시트에서 이름을 넣어 정합니다. 인도자와 반주자가 먼저 나옵니다.")
-            }
-        }
-    }
-
-    /// Pick a position, then say whether you can do it.
-    ///
-    /// Previously every role carried its own three buttons, so a six-part
-    /// team showed eighteen of them and the one you needed was wherever your
-    /// part happened to sort. One control, one answer.
-    @ViewBuilder
-    private func myResponse(_ service: TeamService) -> some View {
-        let email = auth.email ?? ""
-        let mine = chosenRole ?? team.roles.first { role in
-            team.mySignup(for: service, role: role.name, email: email) != nil
-        } ?? team.roles.first
-        let current = mine.flatMap { team.mySignup(for: service, role: $0.name, email: email) }
-
-        VStack(alignment: .leading, spacing: 10) {
-            Text("내 응답").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-
-            // Horizontal, so a long roster scrolls sideways instead of
-            // pushing the status control off the screen.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(team.roles) { role in
-                        let selected = role.id == mine?.id
-                        Button { chosenRole = role } label: {
-                            HStack(spacing: 4) {
-                                if role.isCore {
-                                    Image(systemName: "star.fill").font(.system(size: 8))
-                                }
-                                Text(role.name)
-                            }
-                            .font(.caption.weight(selected ? .semibold : .regular))
-                            .foregroundStyle(selected ? Color.white : Color.primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(
-                                Capsule().fill(selected
-                                               ? Color.accentColor
-                                               : Color(.secondarySystemBackground))
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 1)
-            }
-
-            if let mine {
-                HStack(spacing: 8) {
-                    statusButton("가능", .available, current, service, mine, .green)
-                    statusButton("어려움", .declined, current, service, mine, .red)
-                    statusButton("자리비움", .away, current, service, mine, .orange)
-                }
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func statusButton(
-        _ title: String,
-        _ status: SignupStatus,
-        _ mine: TeamSignup?,
-        _ service: TeamService,
-        _ role: TeamRole,
-        _ tint: Color
-    ) -> some View {
-        let selected = mine?.status == status
-        return Button {
-            Task { await setAvailability(status, service, role) }
-        } label: {
-            Label(title, systemImage: selected ? "largecircle.fill.circle" : "circle")
-                .font(.caption)
-        }
-        .buttonStyle(.bordered)
-        .tint(selected ? tint : .secondary)
-    }
-
-    /// One part, with every answer to it shown inline as chips.
-    private func roleRow(_ service: TeamService, _ role: TeamRole) -> some View {
-        let assigned = service.assignments[role.name]
-        let answers = team.signupsAll(for: service, role: role.name)
-
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if role.isCore {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.yellow)
-                }
-                Text(role.name)
-                    .font(.subheadline.weight(role.isCore ? .semibold : .medium))
-                Spacer()
-                if let assigned {
-                    Text(assigned)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.green.opacity(0.18), in: Capsule())
-                        .foregroundStyle(.green)
-                } else if role.isCore {
-                    // The one gap worth shouting about.
-                    Text("미정")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.orange.opacity(0.18), in: Capsule())
-                        .foregroundStyle(.orange)
-                } else {
-                    Text("미정").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-
-            if answers.isEmpty {
-                Text("응답 없음").font(.caption2).foregroundStyle(.tertiary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(answers) { answer in
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(tint(answer.status))
-                                    .frame(width: 6, height: 6)
-                                Text(answer.name.isEmpty ? answer.email : answer.name)
-                            }
-                            .font(.caption2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(tint(answer.status).opacity(0.14)))
-                            .foregroundStyle(tint(answer.status))
-                        }
-                    }
-                    .padding(.horizontal, 1)
-                }
-            }
-        }
-        .padding(.vertical, 3)
     }
 
     private func setAvailability(_ value: SignupStatus, _ service: TeamService, _ role: TeamRole) async {

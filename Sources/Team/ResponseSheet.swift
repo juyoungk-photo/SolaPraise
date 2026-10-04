@@ -49,64 +49,69 @@ struct ResponseSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    // Horizontal, so a long roster scrolls sideways rather
-                    // than turning the sheet into a list of parts.
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(team.roles) { option in
-                                let selected = option.id == chosen?.id
-                                Button { role = option } label: {
-                                    HStack(spacing: 4) {
-                                        if option.isCore {
-                                            Image(systemName: "star.fill")
-                                                .font(.system(size: 8))
-                                        }
-                                        Text(option.name)
-                                    }
-                                    .font(.subheadline.weight(selected ? .semibold : .regular))
-                                    .foregroundStyle(selected ? Color.white : Color.primary)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 9)
-                                    .background(
-                                        Capsule().fill(selected
-                                                       ? Color.accentColor
-                                                       : Color(.secondarySystemBackground))
-                                    )
+                    // Choosing a part IS the answer. Asking for a part and
+                    // then separately for 가능 made people say the same
+                    // thing twice, and the pair could disagree.
+                    ForEach(team.roles) { option in
+                        Button {
+                            Task { await save(.available, role: option) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if option.isCore {
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.yellow)
                                 }
-                                .buttonStyle(.plain)
+                                Text(option.name).foregroundStyle(Color.primary)
+                                Spacer()
+                                if taken(option).isEmpty == false {
+                                    Text(taken(option).joined(separator: ", "))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if current?.role == option.name,
+                                   current?.status == .available {
+                                    Image(systemName: "checkmark").foregroundStyle(.green)
+                                }
                             }
                         }
-                        .padding(.vertical, 2)
+                        .disabled(isSaving)
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 } header: {
-                    Text("파트")
+                    Text("맡을 파트")
                 } footer: {
-                    Text("별표는 인도자와 반주자입니다. 이 두 파트가 비면 예배가 성립하지 않으므로 먼저 나옵니다.")
+                    Text("파트를 누르면 그대로 저장됩니다. 별표는 인도자와 반주자입니다. 옆의 이름은 이미 그 파트를 맡겠다고 한 사람입니다.")
                 }
 
                 Section {
-                    ForEach([SignupStatus.available, .declined, .away], id: \.rawValue) { status in
-                        Button {
-                            Task { await save(status) }
-                        } label: {
-                            HStack {
-                                Circle().fill(tint(status)).frame(width: 10, height: 10)
-                                Text(status.label).foregroundStyle(Color.primary)
-                                Spacer()
-                                if current?.status == status {
-                                    Image(systemName: "checkmark").foregroundStyle(tint(status))
-                                }
+                    Button {
+                        Task { await save(.declined, role: chosen) }
+                    } label: {
+                        HStack {
+                            Circle().fill(Color.red).frame(width: 10, height: 10)
+                            Text("이번 주는 어려움").foregroundStyle(Color.primary)
+                            Spacer()
+                            if current?.status == .declined {
+                                Image(systemName: "checkmark").foregroundStyle(.red)
                             }
                         }
-                        .disabled(isSaving || chosen == nil)
                     }
-                } header: {
-                    Text("응답")
+                    Button {
+                        Task { await save(.away, role: chosen) }
+                    } label: {
+                        HStack {
+                            Circle().fill(Color.orange).frame(width: 10, height: 10)
+                            Text("자리비움").foregroundStyle(Color.primary)
+                            Spacer()
+                            if current?.status == .away {
+                                Image(systemName: "checkmark").foregroundStyle(.orange)
+                            }
+                        }
+                    }
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\\(email) 으로 기록됩니다.")
-                        Text("「가능」은 리더에게 알리는 것이고, 확정은 리더가 정합니다. 「자리비움」은 그 주에 아예 없다는 뜻이라 다시 묻지 않습니다.")
+                        Text("\(email) 으로 기록됩니다.")
+                        Text("「자리비움」은 그 주에 아예 없다는 뜻이라 다시 묻지 않습니다.")
                     }
                 }
 
@@ -123,27 +128,28 @@ struct ResponseSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
-    private func save(_ status: SignupStatus) async {
-        guard let chosen, let sheetId = TeamSheetSource.current else { return }
+    /// Who has already said they will take this part.
+    private func taken(_ role: TeamRole) -> [String] {
+        team.signupsAll(for: service, role: role.name)
+            .filter { $0.status == .available }
+            .filter { $0.email.caseInsensitiveCompare(email) != .orderedSame }
+            .map { $0.name.isEmpty ? $0.email : $0.name }
+    }
+
+    private func save(_ status: SignupStatus, role: TeamRole?) async {
+        guard let role, let sheetId = TeamSheetSource.current else { return }
         isSaving = true
         defer { isSaving = false }
         // Remembered for next time, since it is almost always the same.
-        usualRole = chosen.name
+        if status == .available { usualRole = role.name }
         await team.setAvailability(
-            status, service: service, role: chosen.name,
+            status, service: service, role: role.name,
             email: email, name: name, sheetId: sheetId
         )
         if team.errorMessage == nil { dismiss() }
     }
 
-    private func tint(_ status: SignupStatus) -> Color {
-        switch status {
-        case .available: return .green
-        case .declined:  return .red
-        case .away:      return .orange
-        }
-    }
 }

@@ -379,15 +379,22 @@ final class TeamStore: ObservableObject {
         var emails: Set<String> = []
         var list: [Member] = []
         for (offset, row) in rows.enumerated() where offset > 0 {
-            guard row.count > emailCol else { continue }
-            let email = row[emailCol].trimmingCharacters(in: .whitespaces)
-            guard !email.isEmpty, email.contains("@") else { continue }
-            let activeCell = activeCol.flatMap { row.count > $0 ? row[$0].lowercased() : nil }
-                ?? "true"
+            func cell(_ i: Int) -> String {
+                row.count > i ? row[i].trimmingCharacters(in: .whitespaces) : ""
+            }
+            let email = cell(emailCol)
+            let name = cell(nameCol)
+            // A member with no address yet is still on the team.
+            //
+            // Requiring one dropped eight of nine people from this roster,
+            // so the leader saw a team of one and nobody listed as still to
+            // answer. They cannot respond in the app until they have an
+            // address, which is exactly what showing them as pending says.
+            guard !name.isEmpty || email.contains("@") else { continue }
+            let activeCell = activeCol.map { cell($0).lowercased() } ?? "true"
             let active = !["false", "no", "n", "0"].contains(activeCell)
-            let name = row.count > nameCol ? row[nameCol] : ""
             list.append(Member(email: email, name: name, isActive: active, row: offset + 1))
-            if active { emails.insert(email.lowercased()) }
+            if active, email.contains("@") { emails.insert(email.lowercased()) }
         }
         members = list
         return emails
@@ -409,16 +416,18 @@ final class TeamStore: ObservableObject {
         return memberEmails.subtracting(answered).sorted()
     }
 
-    /// Roster members who have not answered, by name where one is known.
+    /// Everyone on the roster who has not answered, named.
+    ///
+    /// Includes members with no address: they cannot answer at all, which
+    /// makes them more pending rather than less.
     func pendingNames(for service: TeamService) -> [String] {
-        let silent = Set(unanswered(for: service))
-        guard !silent.isEmpty else { return [] }
-        return silent.map { email in
-            members.first { $0.email.lowercased() == email }
-                .map { $0.name.isEmpty ? $0.email : $0.name }
-                ?? email
-        }
-        .sorted()
+        let day = Calendar.current.startOfDay(for: service.date)
+        let answered = Set((signups[day] ?? []).map { $0.email.lowercased() })
+        return members
+            .filter { $0.isActive }
+            .filter { $0.email.isEmpty || !answered.contains($0.email.lowercased()) }
+            .map { $0.name.isEmpty ? $0.email : $0.name }
+            .sorted()
     }
 
     func responses(for service: TeamService) -> [TeamSignup] {
@@ -774,11 +783,13 @@ final class TeamStore: ObservableObject {
     func addMember(email: String, name: String, sheetId: String) async {
         guard let client else { return }
         let address = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard address.contains("@") else {
+        guard address.isEmpty || address.contains("@") else {
             errorMessage = "이메일 주소가 아닙니다."
             return
         }
-        guard !members.contains(where: { $0.email.lowercased() == address }) else {
+        guard address.isEmpty || !members.contains(where: {
+            $0.email.lowercased() == address
+        }) else {
             errorMessage = "이미 명단에 있습니다."
             return
         }
@@ -788,7 +799,7 @@ final class TeamStore: ObservableObject {
                 row: [address, name, "TRUE"]
             )
             members.append(Member(email: address, name: name, isActive: true, row: row ?? 0))
-            memberEmails.insert(address)
+            if !address.isEmpty { memberEmails.insert(address) }
             errorMessage = nil
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
