@@ -27,12 +27,20 @@ struct ResponseSheet: View {
     private var name: String { planning.isSignedIn ? (planning.email ?? email)
                                                    : (auth.displayName ?? email) }
 
-    /// The part already answered for, or the first core part, or the first.
+    /// The part already answered for, then the one usually played, then
+    /// whatever is first.
+    ///
+    /// Most people serve the same part every time. Making them pick it again
+    /// each week is the sort of friction that turns answering into something
+    /// done later and then not at all.
     private var chosen: TeamRole? {
         role
             ?? team.roles.first { team.mySignup(for: service, role: $0.name, email: email) != nil }
+            ?? team.roles.first { $0.name == usualRole }
             ?? team.roles.first
     }
+
+    @AppStorage("team.usualRole") private var usualRole = ""
     private var current: TeamSignup? {
         chosen.flatMap { team.mySignup(for: service, role: $0.name, email: email) }
     }
@@ -122,6 +130,8 @@ struct ResponseSheet: View {
         guard let chosen, let sheetId = TeamSheetSource.current else { return }
         isSaving = true
         defer { isSaving = false }
+        // Remembered for next time, since it is almost always the same.
+        usualRole = chosen.name
         await team.setAvailability(
             status, service: service, role: chosen.name,
             email: email, name: name, sheetId: sheetId

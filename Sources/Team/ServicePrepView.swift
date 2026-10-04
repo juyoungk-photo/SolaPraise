@@ -522,6 +522,30 @@ struct ServicePrepView: View {
         }
     }
 
+    private func chip(
+        _ name: String,
+        detail: String?,
+        color: Color,
+        dashed: Bool = false
+    ) -> some View {
+        HStack(spacing: 4) {
+            if dashed {
+                Circle()
+                    .strokeBorder(color.opacity(0.6), lineWidth: 1)
+                    .frame(width: 6, height: 6)
+            } else {
+                Circle().fill(color).frame(width: 6, height: 6)
+            }
+            Text(name)
+            if let detail { Text(detail).foregroundStyle(.secondary) }
+        }
+        .font(.caption2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(color.opacity(dashed ? 0.06 : 0.14)))
+        .foregroundStyle(color)
+    }
+
     private func tint(_ status: SignupStatus) -> Color {
         switch status {
         case .available: return .green
@@ -544,6 +568,14 @@ struct ServicePrepView: View {
         if !future.isEmpty {
             Section {
                 ForEach(future) { upcoming in
+                    // A month label where the month turns, so scrolling
+                    // through a quarter does not become undifferentiated.
+                    if isFirstOfMonth(upcoming, in: future) {
+                        Text(upcoming.date, format: .dateTime.year().month(.wide))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
                     scheduleRow(upcoming)
                 }
             } header: {
@@ -552,6 +584,13 @@ struct ServicePrepView: View {
                 Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 참여 여부를 답하세요. 같은 줄에 팀 전체의 응답이 함께 나옵니다.")
             }
         }
+    }
+
+    private func isFirstOfMonth(_ service: TeamService, in list: [TeamService]) -> Bool {
+        guard let index = list.firstIndex(where: { $0.id == service.id }) else { return false }
+        guard index > 0 else { return true }
+        return !Calendar.current.isDate(list[index - 1].date,
+                                        equalTo: service.date, toGranularity: .month)
     }
 
     private func scheduleRow(_ upcoming: TeamService) -> some View {
@@ -620,24 +659,24 @@ struct ServicePrepView: View {
                     .foregroundStyle(.orange)
             }
 
-            if answers.isEmpty {
+            // Who is coming, then who is not, then who has not said.
+            // Pending is the actionable one, so it is shown rather than
+            // being the absence of a chip.
+            let pending = team.pendingNames(for: upcoming)
+            if answers.isEmpty, pending.isEmpty {
                 Text("아직 응답 없음").font(.caption2).foregroundStyle(.tertiary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(answers) { answer in
-                            HStack(spacing: 4) {
-                                Circle().fill(tint(answer.status)).frame(width: 6, height: 6)
-                                Text(answer.name.isEmpty ? answer.email : answer.name)
-                                if !answer.role.isEmpty {
-                                    Text(answer.role).foregroundStyle(.secondary)
-                                }
-                            }
-                            .font(.caption2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(tint(answer.status).opacity(0.14)))
-                            .foregroundStyle(tint(answer.status))
+                            chip(
+                                answer.name.isEmpty ? answer.email : answer.name,
+                                detail: answer.role.isEmpty ? nil : answer.role,
+                                color: tint(answer.status)
+                            )
+                        }
+                        ForEach(pending, id: \.self) { who in
+                            chip(who, detail: "미응답", color: .secondary, dashed: true)
                         }
                     }
                     .padding(.horizontal, 1)

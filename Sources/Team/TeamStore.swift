@@ -402,6 +402,18 @@ final class TeamStore: ObservableObject {
         return memberEmails.subtracting(answered).sorted()
     }
 
+    /// Roster members who have not answered, by name where one is known.
+    func pendingNames(for service: TeamService) -> [String] {
+        let silent = Set(unanswered(for: service))
+        guard !silent.isEmpty else { return [] }
+        return silent.map { email in
+            members.first { $0.email.lowercased() == email }
+                .map { $0.name.isEmpty ? $0.email : $0.name }
+                ?? email
+        }
+        .sorted()
+    }
+
     func responses(for service: TeamService) -> [TeamSignup] {
         let day = Calendar.current.startOfDay(for: service.date)
         // One line per person, not per role, which is how a leader reads it.
@@ -409,7 +421,18 @@ final class TeamStore: ObservableObject {
         for signup in signups[day] ?? [] {
             seen[signup.email.lowercased()] = signup
         }
-        return seen.values.sorted { $0.name < $1.name }
+        // Who is coming first. That is the question being asked; declines
+        // and absences are the answer to a different one.
+        func rank(_ status: SignupStatus) -> Int {
+            switch status {
+            case .available: return 0
+            case .declined:  return 1
+            case .away:      return 2
+            }
+        }
+        return seen.values.sorted {
+            (rank($0.status), $0.name) < (rank($1.status), $1.name)
+        }
     }
 
     func setAvailability(
