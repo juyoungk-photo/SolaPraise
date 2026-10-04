@@ -40,7 +40,19 @@ final class GoogleAuthManager: ObservableObject {
     /// Set when the user chooses to carry on without Google. 시편 and the
     /// 말씀 feed need no auth — the psalms are bundled and the feeds are RSS —
     /// so a sign-in wall in front of them is just a dead end.
-    @Published var isBrowsingWithoutAccount: Bool = false
+    @Published var isBrowsingWithoutAccount: Bool = UserDefaults.standard
+        .bool(forKey: GoogleAuthManager.browsingKey) {
+        didSet {
+            UserDefaults.standard.set(isBrowsingWithoutAccount,
+                                      forKey: Self.browsingKey)
+        }
+    }
+
+    /// Remembered across launches. Without this a teammate who chose
+    /// 둘러보기 met the sign-in wall again on every cold start — the same
+    /// answer asked of them every morning, in front of a screen that works
+    /// perfectly well without an account.
+    fileprivate static let browsingKey = "auth.browsingWithoutAccount"
 
     /// Can this device *read* YouTube right now?
     ///
