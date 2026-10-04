@@ -35,33 +35,68 @@ final class LocalPlayerServer {
     private var _port: UInt16?
     private var _isReady = false
 
+    /// Which listener the published state belongs to.
+    ///
+    /// Two starts could overlap — one from the player, one from the
+    /// foreground re-arm on a background queue. Both saw no live listener,
+    /// both tore down, both built one, and whichever assigned last won while
+    /// the loser's port was still handed out. Worse, the loser's `.cancelled`
+    /// then arrived AFTER the winner was ready and cleared its port, so a
+    /// perfectly good server was marked dead. Both faults were timing, which
+    /// is why this failed intermittently and why relaunching fixed it.
+    private var generation = 0
+
+    /// Callers waiting for a start already in flight, so a dozen taps make
+    /// one server rather than a dozen competing ones.
+    private var waiters: [CheckedContinuation<UInt16?, Never>] = []
+    private var isStarting = false
+
     var port: UInt16? { lock.withLock { _isReady ? _port : nil } }
 
     private init() {
         // iOS reclaims network resources while the app is suspended, so an
         // overnight background leaves a listener that is gone while the port
-        // it was assigned is still cached. Re-arm on the way back in, off the
-        // main thread, so the first tap does not pay for it.
+        // it was assigned is still cached.
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            DispatchQueue.global(qos: .utility).async { self?.restartIfDead() }
+            Task { await self?.ensureStarted() }
         }
     }
 
-    /// Starts on an OS-assigned free port. Safe to call repeatedly.
+    /// The port of a running server, starting one if needed.
+    ///
+    /// Async rather than blocking. The old version slept on the calling
+    /// thread for up to two seconds waiting for the port — on the main
+    /// thread, during view construction, which is its own way to make the
+    /// screen go black.
     @discardableResult
-    func start() -> UInt16? {
-        // The old version returned the cached port whenever it had one, with
-        // no check that the listener still existed. After a suspension that
-        // handed the player a dead port: the page never loaded and the screen
-        // stayed black until the app was killed and relaunched, which is
-        // exactly what "works again after restarting" was.
+    func ensureStarted() async -> UInt16? {
         if let live = liveListenerPort() { return live }
 
-        teardown()
+        return await withCheckedContinuation { continuation in
+            lock.lock()
+            if let port = _port, _isReady, listener != nil {
+                lock.unlock()
+                continuation.resume(returning: port)
+                return
+            }
+            waiters.append(continuation)
+            guard !isStarting else { lock.unlock(); return }
+            isStarting = true
+            generation += 1
+            let mine = generation
+            lock.unlock()
+
+            queue.async { [weak self] in self?.launch(generation: mine) }
+        }
+    }
+
+    private func launch(generation mine: Int) {
+        listener?.cancel()
+        listener = nil
 
         do {
             let params = NWParameters.tcp
@@ -77,16 +112,9 @@ final class LocalPlayerServer {
                 guard let self else { return }
                 switch state {
                 case .ready:
-                    self.lock.withLock {
-                        self._port = listener.port?.rawValue
-                        self._isReady = true
-                    }
+                    self.finishStart(generation: mine, port: listener.port?.rawValue)
                 case .failed, .cancelled:
-                    // Without this the port outlived the listener serving it.
-                    self.lock.withLock {
-                        self._port = nil
-                        self._isReady = false
-                    }
+                    self.markDead(generation: mine)
                 default:
                     break
                 }
@@ -94,38 +122,67 @@ final class LocalPlayerServer {
             listener.start(queue: queue)
             self.listener = listener
 
-            // The port is assigned asynchronously; wait briefly for it.
-            let deadline = Date().addingTimeInterval(2)
-            while port == nil && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
+            // A listener that never reports anything must not strand callers.
+            queue.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.finishStart(generation: mine, port: nil, onlyIfPending: true)
             }
-            return port
         } catch {
-            return nil
+            finishStart(generation: mine, port: nil)
         }
+    }
+
+    private func finishStart(generation mine: Int, port: UInt16?, onlyIfPending: Bool = false) {
+        lock.lock()
+        // A superseded listener must not publish over the live one.
+        guard mine == generation else { lock.unlock(); return }
+        if onlyIfPending, !isStarting { lock.unlock(); return }
+        if let port {
+            _port = port
+            _isReady = true
+        }
+        isStarting = false
+        let pending = waiters
+        waiters.removeAll()
+        let result = _isReady ? _port : nil
+        lock.unlock()
+
+        for continuation in pending { continuation.resume(returning: result) }
+    }
+
+    private func markDead(generation mine: Int) {
+        lock.lock()
+        guard mine == generation else { lock.unlock(); return }
+        _port = nil
+        _isReady = false
+        lock.unlock()
     }
 
     /// The cached port, but only while the listener that owns it is ready.
     private func liveListenerPort() -> UInt16? {
-        guard let listener, case .ready = listener.state else { return nil }
+        lock.lock()
+        let ready = _isReady
+        let port = _port
+        let live = listener
+        lock.unlock()
+        guard ready, let live, case .ready = live.state else { return nil }
         return port
     }
 
-    private func restartIfDead() {
-        guard liveListenerPort() == nil else { return }
-        _ = start()
-    }
-
-    private func teardown() {
-        listener?.cancel()
+    func stop() {
+        lock.lock()
+        generation += 1
+        isStarting = false
+        _port = nil
+        _isReady = false
+        let pending = waiters
+        waiters.removeAll()
+        let old = listener
         listener = nil
-        lock.withLock {
-            _port = nil
-            _isReady = false
-        }
-    }
+        lock.unlock()
 
-    func stop() { teardown() }
+        old?.cancel()
+        for continuation in pending { continuation.resume(returning: nil) }
+    }
 
     // MARK: - Connection handling
 

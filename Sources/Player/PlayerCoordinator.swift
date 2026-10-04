@@ -165,15 +165,24 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     }
 
     private func serve(videoId: String) {
-        guard let webView else { return }
-        // Serve over loopback HTTP so the frame has a real origin AND sends a
-        // Referer. See LocalPlayerServer for why neither
-        // loadHTMLString(baseURL:) nor loadSimulatedRequest is enough.
-        if let port = LocalPlayerServer.shared.start(),
-           let url = URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(pendingAutoplay ? 1 : 0)") {
-            webView.load(URLRequest(url: url))
-        } else {
-            loadFallback(videoId: videoId)
+        guard webView != nil else { return }
+        // Awaited, not blocked on. Starting the server used to sleep the
+        // calling thread for up to two seconds — on the main thread, during
+        // view construction, which is its own way to produce a black screen.
+        Task { @MainActor in
+            let port = await LocalPlayerServer.shared.ensureStarted()
+            // The user may have moved on while that was starting.
+            guard self.loadedVideoId == videoId, let webView = self.webView else { return }
+
+            // Serve over loopback HTTP so the frame has a real origin AND
+            // sends a Referer. See LocalPlayerServer for why neither
+            // loadHTMLString(baseURL:) nor loadSimulatedRequest is enough.
+            if let port,
+               let url = URL(string: "http://localhost:\(port)/player.html?v=\(videoId)&autoplay=\(self.pendingAutoplay ? 1 : 0)") {
+                webView.load(URLRequest(url: url))
+            } else {
+                self.loadFallback(videoId: videoId)
+            }
         }
     }
 
