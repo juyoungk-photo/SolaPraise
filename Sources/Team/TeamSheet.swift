@@ -181,6 +181,7 @@ actor SheetsClient {
     enum SheetsError: LocalizedError {
         case notSignedIn
         case noSheet
+        case badRange(String)
         case http(Int, String?)
         case transport(Error)
 
@@ -188,6 +189,8 @@ actor SheetsClient {
             switch self {
             case .notSignedIn: return "팀 시트를 열려면 Google 로그인이 필요합니다."
             case .noSheet:     return "팀 시트가 설정되지 않았습니다. 설정에서 시트 주소를 넣어 주세요."
+            case .badRange(let range):
+                return "시트 범위를 만들 수 없습니다: \(range)"
             case .http(404, _):
                 return "시트를 찾을 수 없습니다. 주소와 공유 설정을 확인해 주세요."
             case .http(403, let message):
@@ -223,12 +226,30 @@ actor SheetsClient {
         self.tokenProvider = tokenProvider
     }
 
+    /// Builds a values URL without letting Foundation encode the range twice.
+    ///
+    /// `URL.appendingPathComponent` percent-encodes what it is handed, and it
+    /// encodes a colon as %3A inside a path segment. A Sheets range is
+    /// "Signups!A9:F9" — so every WRITE went out as `Signups!A9%3AF9` and came
+    /// back "unable to parse range". Reads were fine because a read asks for a
+    /// whole tab, "Signups", which has no colon in it: the sheet loaded
+    /// perfectly and nothing could ever be saved, which is exactly how it
+    /// looked — a switch that moved and sprang back.
+    ///
+    /// Setting `path` on URLComponents encodes only what actually needs it and
+    /// leaves `:` and `!` alone, which is what the API wants.
+    private func valuesURL(sheetId: String, suffix: String) -> URL? {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { return nil }
+        let root = comps.path
+        comps.path = root + "/\(sheetId)/values/\(suffix)"
+        return comps.url
+    }
+
     func read(sheetId: String, range: String) async throws -> [[String]] {
-        let encoded = range.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? range
-        var comps = URLComponents(
-            url: base.appendingPathComponent("\(sheetId)/values/\(encoded)"),
-            resolvingAgainstBaseURL: false
-        )!
+        guard let url = valuesURL(sheetId: sheetId, suffix: range),
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange(range) }
         // Formatted, so a date the leader typed comes back as they typed it
         // rather than as a serial number.
         comps.queryItems = [.init(name: "valueRenderOption", value: "FORMATTED_VALUE")]
@@ -245,11 +266,9 @@ actor SheetsClient {
     /// a no-op. Google returns it in `updates.updatedRange`.
     @discardableResult
     func append(sheetId: String, tab: String, row: [String]) async throws -> Int? {
-        let encoded = tab.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tab
-        var comps = URLComponents(
-            url: base.appendingPathComponent("\(sheetId)/values/\(encoded):append"),
-            resolvingAgainstBaseURL: false
-        )!
+        guard let url = valuesURL(sheetId: sheetId, suffix: "\(tab):append"),
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange(tab) }
         comps.queryItems = [
             .init(name: "valueInputOption", value: "USER_ENTERED"),
             .init(name: "insertDataOption", value: "INSERT_ROWS")
@@ -265,11 +284,9 @@ actor SheetsClient {
     }
 
     func write(sheetId: String, range: String, row: [String]) async throws {
-        let encoded = range.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? range
-        var comps = URLComponents(
-            url: base.appendingPathComponent("\(sheetId)/values/\(encoded)"),
-            resolvingAgainstBaseURL: false
-        )!
+        guard let url = valuesURL(sheetId: sheetId, suffix: range),
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange(range) }
         comps.queryItems = [.init(name: "valueInputOption", value: "USER_ENTERED")]
         struct Body: Encodable { let values: [[String]] }
         _ = try await send(url: comps.url!, method: "PUT", body: Body(values: [row]))
@@ -287,7 +304,15 @@ actor SheetsClient {
             let valueInputOption: String
             let data: [ValueRange]
         }
-        let url = base.appendingPathComponent("\(sheetId)/values:batchUpdate")
+        // Built the same way as the others for consistency. This one was
+        // never broken: it never ran its path through addingPercentEncoding
+        // first, and that double pass — encode the colon to %3A, then encode
+        // that percent sign to %25 — is what produced %253A on the writes.
+        // The ranges here travel in the JSON body and need no encoding.
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("batchUpdate") }
+        comps.path = comps.path + "/\(sheetId)/values:batchUpdate"
+        guard let url = comps.url else { throw SheetsError.badRange("batchUpdate") }
         _ = try await send(
             url: url,
             method: "POST",
