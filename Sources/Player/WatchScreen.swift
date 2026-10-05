@@ -238,9 +238,9 @@ struct WatchScreen: View {
                     .padding(.top, 12)
 
                 ForEach(Array(queue.enumerated()), id: \.element.id) { position, item in
-                    Button {
-                        jump(to: position)
-                    } label: {
+                    SwipeToRemoveRow {
+                        removeFromQueue(position)
+                    } content: {
                         HStack(spacing: 10) {
                             Group {
                                 if position == index {
@@ -282,13 +282,21 @@ struct WatchScreen: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 5)
+                        // Opaque, so the row slides over the delete button
+                        // behind it instead of letting it show through.
                         .background(
                             position == index
                                 ? Color.accentColor.opacity(0.12)
-                                : Color.clear
+                                : Color(.systemBackground)
                         )
+                        // A tap gesture rather than a Button wrapping the
+                        // row: a Button takes the drag before the swipe can
+                        // see it, which is why nothing moved when a queue row
+                        // was pulled sideways. The same trap the playlist
+                        // rows fell into.
+                        .contentShape(Rectangle())
+                        .onTapGesture { jump(to: position) }
                     }
-                    .buttonStyle(.plain)
                     .id(position)
                 }
             }
@@ -301,6 +309,12 @@ struct WatchScreen: View {
 
     /// Jumping counts as finishing the current video for watch stats, the same
     /// as pressing Next — otherwise a skipped song is silently unrecorded.
+    private func removeFromQueue(_ position: Int) {
+        let nowPlayingChanged = host.remove(at: position)
+        guard nowPlayingChanged, host.queue.indices.contains(host.index) else { return }
+        player.load(videoId: host.queue[host.index].id)
+    }
+
     private func jump(to position: Int) {
         guard queue.indices.contains(position), position != index else { return }
         logWatch(completed: false)

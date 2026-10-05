@@ -354,19 +354,28 @@ struct ServicePrepView: View {
                     // fact rather than a plan. Not `isPast`, which excludes
                     // today: the moment this is wanted is Sunday afternoon.
                     if hasHappened(service) {
+                    let archived = archiveStore.hasArchived(service)
                     Button {
                         Task { await archive(service, songs: songs) }
                     } label: {
                         HStack {
-                            Label("CCC_예배찬양곡_모음에 보관",
-                                  systemImage: "tray.and.arrow.down")
+                            Label(archived
+                                  ? "CCC_예배찬양곡_모음에 보관됨"
+                                  : "CCC_예배찬양곡_모음에 보관",
+                                  systemImage: archived
+                                  ? "checkmark.circle.fill" : "tray.and.arrow.down")
+                            .foregroundStyle(archived ? Color.green : Color.accentColor)
                             Spacer()
                             if archiveStore.isWorking {
                                 ProgressView().controlSize(.small)
                             }
                         }
                     }
-                    .disabled(archiveStore.isWorking || !auth.isSignedIn)
+                    // Once filed, the button stops being a button. Pressing
+                    // it again could only add duplicates or discover there
+                    // are none, and neither is worth a round trip or the
+                    // doubt about which one just happened.
+                    .disabled(archived || archiveStore.isWorking || !auth.isSignedIn)
 
                     if let note = archiveStore.note {
                         Text(note)
@@ -697,6 +706,7 @@ struct ServicePrepView: View {
         }
         _ = await archiveStore.archive(
             entries,
+            of: service,
             using: AppServices.client(auth: auth, quota: quota)
         )
     }

@@ -41,7 +41,40 @@ final class ServiceArchive: ObservableObject {
     @Published private(set) var isWorking = false
     @Published var note: String?
 
-    func archive(_ songs: [Song], using client: YouTubeAPIClient) async -> Outcome? {
+    /// Services already filed, by date.
+    ///
+    /// Content-level dedupe alone is not enough to stop a second run: it
+    /// stops duplicate VIDEOS, but it still spends a read and a round trip
+    /// per song to discover there is nothing to do, and it leaves the button
+    /// looking like it was never pressed. Remembering the service makes the
+    /// screen say so, and makes the second press free.
+    @Published private(set) var archivedDays: Set<Date> = ServiceArchive.loadArchived()
+
+    private static let archivedKey = "team.archivedServiceDays"
+
+    private static func loadArchived() -> Set<Date> {
+        let stamps = UserDefaults.standard.array(forKey: archivedKey) as? [Double] ?? []
+        return Set(stamps.map { Date(timeIntervalSince1970: $0) })
+    }
+
+    private func persistArchived() {
+        UserDefaults.standard.set(
+            archivedDays.map(\.timeIntervalSince1970),
+            forKey: Self.archivedKey
+        )
+    }
+
+    static func day(of service: TeamService) -> Date {
+        Calendar.current.startOfDay(for: service.date)
+    }
+
+    func hasArchived(_ service: TeamService) -> Bool {
+        archivedDays.contains(Self.day(of: service))
+    }
+
+    func archive(_ songs: [Song],
+                 of service: TeamService,
+                 using client: YouTubeAPIClient) async -> Outcome? {
         let wanted = songs.reduce(into: [Song]()) { list, song in
             // The same song twice in one service — a reprise — is one entry.
             if !list.contains(where: { $0.videoId == song.videoId }) { list.append(song) }
@@ -74,6 +107,8 @@ final class ServiceArchive: ObservableObject {
                 alreadyThere: wanted.count - added,
                 playlistId: playlistId
             )
+            archivedDays.insert(Self.day(of: service))
+            persistArchived()
             note = describe(outcome)
             return outcome
         } catch {

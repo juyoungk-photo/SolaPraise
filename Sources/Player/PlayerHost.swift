@@ -99,6 +99,34 @@ final class PlayerHost: ObservableObject {
         return promotionalMarkers.contains { lower.contains($0) }
     }
 
+    /// Drops a song from the queue.
+    ///
+    /// The queue, not the playlist it came from: this is "not this one, not
+    /// now", which is what a set list needs mid-rehearsal. Removing it from
+    /// YouTube is a different decision, and it lives in the playlist screen.
+    ///
+    /// Removing the song that is playing moves to the next one, or closes the
+    /// player when there is no next one — leaving a player sitting on a song
+    /// that is no longer in the queue is a state nothing else knows how to
+    /// describe.
+    /// Returns true when the song that was playing changed, so the caller
+    /// knows to load the new one — loading lives in the view that owns the
+    /// web view, not in here.
+    @discardableResult
+    func remove(at position: Int) -> Bool {
+        guard queue.indices.contains(position) else { return false }
+        let wasCurrent = position == index
+        queue.remove(at: position)
+
+        if queue.isEmpty { close(); return false }
+        if wasCurrent {
+            index = min(position, queue.count - 1)
+            return true
+        }
+        if position < index { index -= 1 }
+        return false
+    }
+
     func minimize() {
         guard mode == .full else { return }
         mode = .mini
