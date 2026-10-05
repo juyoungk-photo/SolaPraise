@@ -57,7 +57,7 @@ struct PlaylistLibraryView: View {
                     list
                 }
             }
-            .miniPlayerDock()
+            .bottomChrome()
             .navigationTitle("보관함")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

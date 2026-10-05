@@ -65,7 +65,7 @@ struct WordFeedView: View {
             .fullScreenCover(isPresented: $showReading) {
                 ReadingView { showReading = false }
             }
-            .miniPlayerDock()
+            .bottomChrome()
             .navigationTitle("말씀")
             // Inline, because a large title plus the pinned channel bar leaves
             // a dead band roughly 200pt tall and pushes the chips off screen.

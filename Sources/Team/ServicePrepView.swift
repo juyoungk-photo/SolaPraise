@@ -151,7 +151,7 @@ struct ServicePrepView: View {
                     )
                 }
             }
-            .miniPlayerDock()
+            .bottomChrome()
             .navigationTitle("예배 준비")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }

@@ -70,7 +70,7 @@ struct WorshipFeedView: View {
     var body: some View {
         NavigationStack {
             content
-                .miniPlayerDock()
+                .bottomChrome()
                 .navigationTitle("찬양")
             .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }

@@ -43,6 +43,27 @@ struct ContentView: View {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+    /// The tabs that exist right now, in order. The `TabView` and the
+    /// iPad's own bar both read this, so the two cannot drift apart —
+    /// a bar listing a tab that is not there would select nothing.
+    private var tabItems: [TabItem] {
+        var items: [TabItem] = [
+            TabItem(tag: .home, title: "홈", symbol: "square.grid.2x2"),
+            TabItem(tag: .worship, title: "찬양", symbol: "music.note"),
+            TabItem(tag: .word, title: "말씀", symbol: "book.closed"),
+            TabItem(tag: .library, title: "보관함", symbol: "list.bullet.rectangle")
+        ]
+        if teamAccess != .unconfigured, teamAccess != .signInRequired {
+            items.append(TabItem(tag: .team, title: "예배",
+                                 symbol: "calendar.badge.clock"))
+        }
+        if showsStudioTab {
+            items.append(TabItem(tag: .studio, title: "작업실",
+                                 symbol: "recordingtape"))
+        }
+        return items
+    }
+
     enum Tab: Hashable {
         case home, worship, word, library, studio, team
 
@@ -100,6 +121,14 @@ struct ContentView: View {
         // The player lives here, above the tabs and in one place in the view
         // tree, so a song keeps playing while you move between them and the
         // web view is never re-parented.
+        // Beneath the player on purpose: the expanded player covers the
+        // whole stage, bar included, and the docked one ends exactly where
+        // this bar begins.
+        .overlay(alignment: .bottom) {
+            if AppLayout.usesCustomTabBar {
+                BottomTabBar(selection: $selection, items: tabItems)
+            }
+        }
         .overlay { PlayerStage(host: playerHost) }
         // The roster has to be read before the tab can be decided, and the
         // sheet is the only place it lives.
@@ -124,6 +153,13 @@ struct ContentView: View {
             DefaultChannels.seedIfEmpty(context: modelContext)
             daily.advanceIfNewDay()
             if daily.isGateOwed { showDailyGate = true }
+            #if DEBUG
+            if let id = DebugHarness.dockVideoId {
+                playerHost.play(queue: [PlayableVideo(id: id, title: "Debug playback",
+                                                      channelTitle: "Debug")])
+                playerHost.minimize()
+            }
+            #endif
         }
     }
 }

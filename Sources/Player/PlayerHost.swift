@@ -157,17 +157,37 @@ struct PlayerStage: View {
                 // first measurement arrives.
                 let anchor = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
                 let dockBottom = mini ? (anchor ?? geo.size.height) : geo.size.height
-                let width = mini ? PlayerStage.miniWidth : fullWidth
-                let height = width * 9 / 16
+
+                // Full width, until that makes the video too tall — which is
+                // what landscape on an iPad does: 16:9 of a 1194pt width is
+                // 672pt of an 834pt screen, leaving the title, the buttons
+                // and the queue about 160pt to share. Past half the height
+                // the video stops growing and sits narrower instead, centred,
+                // so the screen stays readable in both orientations.
+                let videoHeight = min(fullWidth * 9 / 16, geo.size.height * 0.5)
+                let videoWidth = videoHeight * 16 / 9
+
+                let width = mini ? PlayerStage.miniWidth : videoWidth
+                let height = mini ? width * 9 / 16 : videoHeight
 
                 ZStack(alignment: .topLeading) {
                     // The full screen behind the player. Faded rather than
                     // removed so the player's own frame is the thing moving.
                     WatchScreen()
-                        .padding(.top, fullWidth * 9 / 16)
+                        .padding(.top, videoHeight)
                         .background(Color(.systemBackground))
                         .opacity(mini ? 0 : 1)
                         .allowsHitTesting(!mini)
+
+                    // The band the video sits in, full width even when the
+                    // video is narrower than the screen. Without it the
+                    // letterboxing beside a capped video showed the page
+                    // background — white in light mode, beside a black video.
+                    if !mini {
+                        Color.black
+                            .frame(width: fullWidth, height: videoHeight)
+                            .allowsHitTesting(false)
+                    }
 
                     if mini {
                         // One bar, laid out across the full width, with a
@@ -213,7 +233,8 @@ struct PlayerStage: View {
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0, style: .continuous))
                     .offset(
-                        x: mini ? PlayerStage.miniPadding : 0,
+                        x: mini ? PlayerStage.miniPadding
+                                : (fullWidth - videoWidth) / 2,
                         y: mini ? dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding : 0
                     )
                     .allowsHitTesting(!mini)
@@ -433,42 +454,63 @@ struct PlayerErrorCard: View {
     }
 }
 
-// MARK: - Reserving the dock's space
+// MARK: - Reserving the bottom chrome
 
-/// Reserves the docked player's height at the bottom of a tab's content, and
-/// measures where that reservation ends.
+/// Reserves the bottom furniture a tab sits above — the docked player, and
+/// on iPad the app's own tab bar — and measures where the player's share of
+/// it ends.
 ///
 /// This belongs *inside* each tab's `NavigationStack`, next to that screen's
-/// own bottom furniture. On the `TabView` it reserved space below the tab
-/// bar instead of above it, so the bar covered the tabs outright; wrapped
-/// around a tab it fared no better, because a NavigationStack does not pass
-/// an outer bottom inset down to the scroll view inside it — 홈's search
-/// field stayed exactly where it was and the docked player sat on top of it.
+/// own bottom furniture. On the `TabView` it reserved space below the system
+/// tab bar instead of above it, so the docked bar covered the tabs outright;
+/// wrapped around a tab it fared no better, because a NavigationStack does
+/// not pass an outer bottom inset down to the scroll view inside it — 홈's
+/// search field stayed exactly where it was and the player sat on top of it.
 /// Applied in here the inset is the innermost piece of bottom furniture, so
-/// the screen's own insets stack above it and its bottom edge is the line
-/// the docked player has to end on.
-struct MiniPlayerDock: ViewModifier {
+/// the screen's own insets stack above it.
+///
+/// The two pieces are reserved together because they stack: the player docks
+/// directly on top of the tab bar, and the gap between "what the content
+/// must clear" and "where the player's bottom edge is" is exactly the tab
+/// bar's height. Measuring the boundary between them is what keeps the two
+/// from overlapping on iPad, where the bar is ours and the system does not
+/// inset anything for it.
+struct BottomChrome: ViewModifier {
     @EnvironmentObject private var host: PlayerHost
 
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .bottom, spacing: 0) {
-            if host.mode == .mini {
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { host.dockAnchorY = proxy.frame(in: .global).maxY }
-                        .onChange(of: proxy.frame(in: .global).maxY) { _, new in
-                            host.dockAnchorY = new
+        content
+            // iPad draws its own bar at the bottom, so the system's — which
+            // iPadOS 26 puts at the top — has to go. Applied to the tab's
+            // content, which is where this modifier takes effect; on the
+            // TabView it would hide an enclosing bar instead of this one.
+            .toolbar(AppLayout.usesCustomTabBar ? .hidden : .automatic,
+                     for: .tabBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    if host.mode == .mini {
+                        GeometryReader { proxy in
+                            Color.clear
+                                .onAppear {
+                                    host.dockAnchorY = proxy.frame(in: .global).maxY
+                                }
+                                .onChange(of: proxy.frame(in: .global).maxY) { _, new in
+                                    host.dockAnchorY = new
+                                }
                         }
+                        .frame(height: PlayerStage.miniBarHeight)
+                    }
+                    if AppLayout.usesCustomTabBar {
+                        Color.clear.frame(height: AppLayout.tabBarHeight)
+                    }
                 }
-                .frame(height: PlayerStage.miniBarHeight)
                 .allowsHitTesting(false)
             }
-        }
     }
 }
 
 extension View {
-    func miniPlayerDock() -> some View {
-        modifier(MiniPlayerDock())
+    func bottomChrome() -> some View {
+        modifier(BottomChrome())
     }
 }

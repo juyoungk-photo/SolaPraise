@@ -100,6 +100,17 @@ enum DebugHarness {
     }
 
     /// Force the initial tab: -uiTestTab word | worship | library
+    /// Start with a video already docked in the mini player:
+    ///   -uiTestDock dQw4w9WgXcQ
+    /// Layout review needs the docked state, and reaching it by hand means
+    /// play, then minimise — two taps a screenshot-only harness cannot make.
+    static var dockVideoId: String? {
+        guard let i = args.firstIndex(of: "-uiTestDock"), i + 1 < args.count
+        else { return nil }
+        let value = args[i + 1]
+        return value.hasPrefix("-") ? nil : value
+    }
+
     static var initialTab: String? {
         guard let i = args.firstIndex(of: "-uiTestTab"), i + 1 < args.count else { return nil }
         return args[i + 1]

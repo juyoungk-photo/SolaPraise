@@ -187,7 +187,7 @@ struct HomeView: View {
             }
             .safeAreaInset(edge: .top) { pinnedReading }
             .safeAreaInset(edge: .bottom) { searchBar }
-            .miniPlayerDock()
+            .bottomChrome()
             .navigationTitle("홈")
             // Inline: a large title collapses as you scroll, and with the
             // 시편 card pinned right under it the two moved against each
