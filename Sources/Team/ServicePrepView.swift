@@ -111,6 +111,11 @@ struct ServicePrepView: View {
     @State private var inFlight: [String: Bool] = [:]
     @State private var addingItemTo: TeamService?
 
+    /// iPad has room for the chips beside the service; a phone does not, and
+    /// on a phone they stay on a second line.
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var isWide: Bool { sizeClass == .regular }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -746,14 +751,14 @@ struct ServicePrepView: View {
     private func dateTile(_ date: Date, isSelected: Bool) -> some View {
         VStack(spacing: 0) {
             Text(date, format: .dateTime.month(.abbreviated))
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: isWide ? 11 : 10, weight: .bold))
                 .textCase(.uppercase)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 2)
                 .background(isSelected ? Color.accentColor : Color.secondary)
             Text(date, format: .dateTime.day())
-                .font(.system(size: 19, weight: .semibold))
+                .font(.system(size: isWide ? 23 : 19, weight: .semibold))
                 .monospacedDigit()
             // The weekday, where a calendar icon puts it. It used to sit in
             // the detail line beside the time, which is where you look for
@@ -761,11 +766,11 @@ struct ServicePrepView: View {
             // Coloured when it is not a Sunday, which is the exception worth
             // catching.
             Text(date, format: .dateTime.weekday(.abbreviated))
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: isWide ? 10 : 9, weight: .medium))
                 .foregroundStyle(isSunday(date) ? Color.secondary : Color.orange)
                 .padding(.bottom, 2)
         }
-        .frame(width: 44)
+        .frame(width: isWide ? 52 : 44)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
@@ -936,20 +941,32 @@ struct ServicePrepView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // Fixed on iPad so the chips beside it start at
+                            // the same x on every row; elastic on a phone,
+                            // where it is the only thing on the line.
+                            .frame(maxWidth: isWide ? 230 : .infinity,
+                                   alignment: .leading)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .fixedSize(horizontal: isWide, vertical: false)
+
+                    if isWide {
+                        chipsLine(upcoming, answers: answers)
+                        Spacer(minLength: 8)
+                    }
 
                     answerControl(upcoming, mine: mine)
                 }
 
-                chipsLine(upcoming, answers: answers)
-                    .padding(.leading, 54)
+                if !isWide {
+                    chipsLine(upcoming, answers: answers)
+                        .padding(.leading, 54)
+                }
 
                 if open {
-                    serviceDetail(upcoming).padding(.leading, 54)
+                    serviceDetail(upcoming).padding(.leading, isWide ? 62 : 54)
                 }
             }
         }
