@@ -22,7 +22,6 @@ struct ServicePrepView: View {
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
     private var sheets: [SavedSong]
 
-    @State private var selected: TeamService?
     @State private var showSettings = false
 
     @Query(sort: [SortDescriptor(\CachedPlaylist.title)])
@@ -62,7 +61,31 @@ struct ServicePrepView: View {
             roster: team.memberEmails
         )
     }
-    private var service: TeamService? { selected ?? team.upcoming }
+    /// The open service — what the toolbar, the push and the archive act on.
+    private var service: TeamService? {
+        switch expansion {
+        case .auto:          return team.upcoming
+        case .none:          return nil
+        case .day(let day):  return team.services.first {
+            Calendar.current.isDate($0.date, inSameDayAs: day)
+        } ?? team.upcoming
+        }
+    }
+
+    private func isOpen(_ candidate: TeamService) -> Bool {
+        service.map { Calendar.current.isDate($0.date, inSameDayAs: candidate.date) } ?? false
+    }
+
+    private func toggle(_ candidate: TeamService) {
+        withAnimation(.snappy(duration: 0.22)) {
+            if isOpen(candidate) {
+                expansion = .none
+            } else {
+                expansion = .day(candidate.date)
+                scrollTo?(candidate.date)
+            }
+        }
+    }
 
     /// The part you usually take, remembered by ResponseSheet. Lets the
     /// switch answer on its own instead of making every yes a two-step.
@@ -70,9 +93,15 @@ struct ServicePrepView: View {
 
     @StateObject private var archiveStore = ServiceArchive()
 
-    /// Set by the List's ScrollViewReader so a row can send the screen back
-    /// to the 순서 it just selected.
-    @State private var scrollToTop: (() -> Void)?
+    /// Which service is open. `.auto` means "the next one", which is what
+    /// anyone opening this tab is here for; tapping a row pins it open and
+    /// tapping it again closes everything.
+    private enum Expansion: Equatable { case auto, none, day(Date) }
+    @State private var expansion: Expansion = .auto
+
+    /// Set by the List's ScrollViewReader so opening a row can bring it into
+    /// view — a row near the bottom would otherwise unfold off screen.
+    @State private var scrollTo: ((Date) -> Void)?
 
     var body: some View {
         NavigationStack {
@@ -80,8 +109,11 @@ struct ServicePrepView: View {
                 if team.isLoading && team.services.isEmpty {
                     ProgressView("팀 시트 불러오는 중…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let service {
-                    content(service)
+                } else if !team.services.isEmpty {
+                    // Not "if there is a selected service": closing every row
+                    // left nothing selected, and the screen then claimed
+                    // there were no services at all.
+                    content()
                 } else if case .notAMember(let email) = access {
                     ContentUnavailableView {
                         Label("명단에 없는 계정입니다", systemImage: "person.crop.circle.badge.questionmark")
@@ -255,7 +287,8 @@ struct ServicePrepView: View {
                 Menu {
                     ForEach(team.services) { option in
                         Button {
-                            selected = option
+                            expansion = .day(option.date)
+                            scrollTo?(option.date)
                         } label: {
                             Label(
                                 option.date.formatted(.dateTime.month().day()) + " " + option.title,
@@ -281,57 +314,53 @@ struct ServicePrepView: View {
 
     // MARK: - Content
 
-    private func content(_ service: TeamService) -> some View {
+    private func content() -> some View {
         ScrollViewReader { proxy in
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(service.date, format: .dateTime.year().month().day().weekday(.wide))
-                        .font(.headline)
-                    HStack(spacing: 6) {
-                        Text(service.title)
-                        if let time = service.time { Text("· \(time)") }
-                        if let where_ = service.location { Text("· \(where_)") }
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    if let notes = service.notes {
-                        Text(notes)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 4)
-                    }
+            List {
+                // One list, and nothing above it. The date and the 순서 used
+                // to sit in their own block at the top, describing whichever
+                // service was selected far below — so the schedule read as
+                // a second, unrelated screen and selecting a row changed
+                // something off screen. Every service is now a row that opens
+                // where it is, and the next one is open to begin with.
+                scheduleSection
+
+                if let message = team.errorMessage {
+                    Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
-                .padding(.vertical, 2)
-                .id(Self.topAnchor)
             }
-
-            if !service.isRehearsal { songSection(service) }
-            scheduleSection
-
-            if let message = team.errorMessage {
-                Section { Text(message).font(.caption).foregroundStyle(.orange) }
-            }
-        }
-        .onAppear {
-            scrollToTop = { proxy.scrollTo(Self.topAnchor, anchor: .top) }
-        }
+            .onAppear { scrollTo = { id in proxy.scrollTo(id, anchor: .top) } }
         }
     }
 
-    /// The header section, which is what "the 순서 of the selected service"
-    /// means in scroll terms.
-    private static let topAnchor = "service-top"
-
     // MARK: - Order of service
 
+    /// What a service row shows when it is open: the 순서, and the things
+    /// you do with it. A plain stack rather than a Section, because it now
+    /// lives inside a row instead of being a screen of its own.
     @ViewBuilder
-    private func songSection(_ service: TeamService) -> some View {
+    private func serviceDetail(_ service: TeamService) -> some View {
         let items = team.plan(for: service)
         let times = TeamStore.startTimes(for: items, from: serviceStart(service))
         let total = items.compactMap(\.minutes).reduce(0, +)
 
-        Section {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("순서").font(.caption.weight(.semibold))
+                Spacer()
+                if total > 0 {
+                    // The number a leader is actually watching.
+                    Text("\(total)분")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .foregroundStyle(.secondary)
+
+            if let notes = service.notes {
+                Text(notes).font(.footnote).foregroundStyle(.secondary)
+            }
+
             if items.isEmpty {
                 Text("이 예배의 순서가 비어 있습니다. 시트의 Plan 탭에 추가하거나, 아래에서 재생목록으로 찬양을 채우세요.")
                     .font(.footnote)
@@ -414,24 +443,18 @@ struct ServicePrepView: View {
             if let note = pushNote {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
-        } header: {
-            HStack {
-                Text("순서")
-                Spacer()
-                if total > 0 {
-                    // The number a leader is actually watching.
-                    Text("\(total)분")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+
+            Group {
+                if team.hasPlanTab {
+                    Text("시작 시각은 \(Self.clockFormatter.string(from: serviceStart(service)))을 기준으로 계산합니다. 길이를 적지 않은 순서는 시계를 넘기지 않으므로 그 뒤는 대략적인 값입니다.")
+                } else {
+                    Text("시트에 Plan 탭을 추가하면 기도·설교·광고까지 포함한 순서와 시간이 보입니다. 지금은 Songs 탭의 찬양만 보여 주고 있습니다.")
                 }
             }
-        } footer: {
-            if team.hasPlanTab {
-                Text("시작 시각은 \(Self.clockFormatter.string(from: serviceStart(service)))을 기준으로 계산합니다. 길이를 적지 않은 순서는 시계를 넘기지 않으므로 그 뒤는 대략적인 값입니다.")
-            } else {
-                Text("시트에 Plan 탭을 추가하면 기도·설교·광고까지 포함한 순서와 시간이 보입니다. 지금은 Songs 탭의 찬양만 보여 주고 있습니다.")
-            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
+        .padding(.top, 2)
     }
 
     /// The time the sheet gives, which is the only reliable source.
@@ -653,7 +676,7 @@ struct ServicePrepView: View {
                     if let message = planning.lastError {
                         Text(message).foregroundStyle(.orange)
                     }
-                    Text("줄을 누르면 위에서 그 예배의 순서가 열립니다. 오른쪽 스위치가 참여 여부이고, 옆의 칩으로 파트를 고릅니다.")
+                    Text("줄을 누르면 그 자리에서 예배 순서가 열립니다. 오른쪽 스위치가 참여 여부이고, 옆의 칩으로 파트를 고릅니다.")
                 }
                 // What a Section footer applies on its own, restated here
                 // because the block is no longer in one. The account line
@@ -773,14 +796,6 @@ struct ServicePrepView: View {
         }
     }
 
-    /// Selecting a service puts its 순서 at the top of this screen — which is
-    /// off-screen by the time you are reading the schedule, so the tap also
-    /// takes you there. Without it the tap looked like it did nothing.
-    private func open(_ upcoming: TeamService) {
-        selected = upcoming
-        withAnimation { scrollToTop?() }
-    }
-
     /// The two parts a service cannot happen without, in the order they are
     /// always shown. Fixed rather than read from the sheet's Order column,
     /// so the row does not reshuffle as the sheet is edited.
@@ -830,31 +845,35 @@ struct ServicePrepView: View {
                                         equalTo: service.date, toGranularity: .month)
     }
 
+    /// One service: the date on the left, the service and my answer on the
+    /// first line, who else is in on the second, and the 순서 below when it
+    /// is open.
+    ///
+    /// The date tile is the row's left gutter and nothing else sits in that
+    /// column, so the tiles line up straight down the list and the schedule
+    /// reads as one run of weeks. Previously the answer control shared the
+    /// first line with the tile and the chips hung below the whole row, so
+    /// every row was a different shape and the dates wandered.
     private func scheduleRow(_ upcoming: TeamService) -> some View {
         let email = team.actingEmail(auth: auth, planning: planning) ?? ""
         let answers = team.responses(for: upcoming)
         let mine = answers.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
         let filled = team.roles.filter { upcoming.assignments[$0.name] != nil }.count
+        let open = isOpen(upcoming)
 
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Button { open(upcoming) } label: {
-                    HStack(spacing: 10) {
-                        dateTile(upcoming.date,
-                                 isSelected: upcoming.id == service?.id)
+        return HStack(alignment: .top, spacing: 10) {
+            dateTile(upcoming.date, isSelected: open)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .top, spacing: 8) {
+                    Button { toggle(upcoming) } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 5) {
                                 Text(upcoming.title)
-                                    .font(.subheadline.weight(
-                                        upcoming.id == service?.id ? .semibold : .regular
-                                    ))
-                                // The one icon that says this row opens
-                                // something. It used to open the 순서
-                                // silently, at the top of a screen you were
-                                // scrolled well below, so nothing appeared to
-                                // happen at all.
-                                Image(systemName: "list.bullet.rectangle")
-                                    .font(.caption2)
+                                    .font(.subheadline.weight(open ? .semibold : .regular))
+                                    .lineLimit(1)
+                                Image(systemName: open ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 9, weight: .semibold))
                                     .foregroundStyle(.tint)
                             }
                             HStack(spacing: 6) {
@@ -874,99 +893,108 @@ struct ServicePrepView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 4)
-
-                // Answering happens here, on the week it is about — and it
-                // can be taken back here too. Plans change, and an answer you
-                // cannot withdraw is one people stop giving honestly.
-                //
-                // The chip picks the part, the switch is the answer itself.
-                // Keeping them apart is what lets the switch mean one thing:
-                // on, I am in; off, I have not answered.
-                HStack(spacing: 8) {
-                    Button { responding = upcoming } label: {
-                        HStack(spacing: 3) {
-                            if let mine {
-                                Circle().fill(tint(mine.status)).frame(width: 6, height: 6)
-                            }
-                            Text(answerLabel(mine))
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 8, weight: .semibold))
-                        }
-                        .font(.caption)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(
-                            Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
-                                           ?? Color(.secondarySystemBackground))
-                        )
-                        .foregroundStyle(mine.map { tint($0.status) } ?? Color.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(team.isReadOnly)
 
-                    Toggle("", isOn: Binding(
-                        get: { mine?.status == .available },
-                        set: { isOn in
-                            Task { await setAnswered(isOn, for: upcoming, mine: mine) }
-                        }
-                    ))
-                    .labelsHidden()
-                    .disabled(team.isReadOnly)
-                    .accessibilityLabel("이 예배에 참여")
+                    answerControl(upcoming, mine: mine)
                 }
-            }
 
-            // 인도 then 반주 then everyone else: the two parts that decide
-            // whether a service can happen lead the line, in that order,
-            // whether or not anyone has them. An empty 인도 is the most
-            // important thing on the row, and it cannot be the absence of a
-            // chip — that is what the old "미정: …" line was for, and it
-            // listed every core part from a column the sheet does not keep
-            // up to date. This reads the answers people actually gave.
-            let pending = team.pendingNames(for: upcoming)
-            let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
-            let spokenFor = Set(parts.compactMap(\.signupId))
-            let rest = answers.filter { !spokenFor.contains($0.id) }
+                chipsLine(upcoming, answers: answers)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(parts, id: \.role) { part in
-                        if let who = part.who {
-                            // Green when somebody answered for it, orange
-                            // when it is only the leader's plan and that
-                            // person has not said yes yet.
-                            chip(who, detail: part.role,
-                                 color: part.signupId == nil ? .orange : .green,
-                                 dashed: part.signupId == nil)
-                        } else {
-                            chip("\(part.role) 미지정", detail: nil, color: .red)
-                        }
-                    }
-                    ForEach(rest) { answer in
-                        // "주영 인도" reads as a fact about Sunday.
-                        // "주영 가능" reads as a form someone filled in.
-                        chip(
-                            answer.name.isEmpty ? answer.email : answer.name,
-                            detail: answer.status == .available
-                                ? (answer.role.isEmpty ? nil : answer.role)
-                                : answer.status.label,
-                            color: tint(answer.status)
-                        )
-                    }
-                    ForEach(pending, id: \.self) { who in
-                        chip(who, detail: "미응답", color: .secondary, dashed: true)
-                    }
-                }
-                .padding(.horizontal, 1)
+                if open { serviceDetail(upcoming) }
             }
         }
         .padding(.vertical, 4)
+        .id(Calendar.current.startOfDay(for: upcoming.date))
+    }
+
+    /// Answering happens on the week it is about — and can be taken back
+    /// there too. Plans change, and an answer you cannot withdraw is one
+    /// people stop giving honestly.
+    ///
+    /// The chip picks the part, the switch is the answer itself. Keeping
+    /// them apart is what lets the switch mean one thing: on, I am in; off,
+    /// I have not answered.
+    private func answerControl(_ upcoming: TeamService, mine: TeamSignup?) -> some View {
+        HStack(spacing: 8) {
+            Button { responding = upcoming } label: {
+                HStack(spacing: 3) {
+                    if let mine {
+                        Circle().fill(tint(mine.status)).frame(width: 6, height: 6)
+                    }
+                    Text(answerLabel(mine))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .font(.caption)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
+                                   ?? Color(.secondarySystemBackground))
+                )
+                .foregroundStyle(mine.map { tint($0.status) } ?? Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(team.isReadOnly)
+
+            Toggle("", isOn: Binding(
+                get: { mine?.status == .available },
+                set: { isOn in
+                    Task { await setAnswered(isOn, for: upcoming, mine: mine) }
+                }
+            ))
+            .labelsHidden()
+            .disabled(team.isReadOnly)
+            .accessibilityLabel("이 예배에 참여")
+        }
+        .fixedSize()
+    }
+
+    /// 인도 then 반주 then everyone else: the two parts that decide whether a
+    /// service can happen lead the line, in that order, whether or not anyone
+    /// has them. An empty 인도 is the most important thing on the row, and it
+    /// cannot be the absence of a chip.
+    private func chipsLine(_ upcoming: TeamService,
+                           answers: [TeamSignup]) -> some View {
+        let pending = team.pendingNames(for: upcoming)
+        let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
+        let spokenFor = Set(parts.compactMap(\.signupId))
+        let rest = answers.filter { !spokenFor.contains($0.id) }
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(parts, id: \.role) { part in
+                    if let who = part.who {
+                        // Green when somebody answered for it, orange when it
+                        // is only the leader's plan and that person has not
+                        // said yes yet.
+                        chip(who, detail: part.role,
+                             color: part.signupId == nil ? .orange : .green,
+                             dashed: part.signupId == nil)
+                    } else {
+                        chip("\(part.role) 미지정", detail: nil, color: .red)
+                    }
+                }
+                ForEach(rest) { answer in
+                    // "주영 인도" reads as a fact about Sunday.
+                    // "주영 가능" reads as a form someone filled in.
+                    chip(
+                        answer.name.isEmpty ? answer.email : answer.name,
+                        detail: answer.status == .available
+                            ? (answer.role.isEmpty ? nil : answer.role)
+                            : answer.status.label,
+                        color: tint(answer.status)
+                    )
+                }
+                ForEach(pending, id: \.self) { who in
+                    chip(who, detail: "미응답", color: .secondary, dashed: true)
+                }
+            }
+            .padding(.horizontal, 1)
+        }
     }
 
     /// A chart the team has already made for this song, matched on title.
