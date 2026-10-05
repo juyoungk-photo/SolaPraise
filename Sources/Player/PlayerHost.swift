@@ -145,7 +145,11 @@ struct PlayerStage: View {
     /// layout somewhere, and this is the number.
     static var miniBarHeight: CGFloat { miniWidth * 9 / 16 + miniPadding * 2 }
 
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// Live vertical travel of a drag in progress. State rather than
+    /// GestureState so releasing can animate it back to rest in the same
+    /// transaction that commits the mode — otherwise the two move apart and
+    /// the player jumps at the moment you let go.
+    @State private var drag: CGFloat = 0
 
     var body: some View {
         if host.isVisible, let current = host.current {
@@ -154,9 +158,17 @@ struct PlayerStage: View {
                 let fullWidth = geo.size.width
                 // The measured top of the tab bar, converted into this
                 // view's space. Falls back to the full height only until the
-                // first measurement arrives.
-                let anchor = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
-                let dockBottom = mini ? (anchor ?? geo.size.height) : geo.size.height
+                // first measurement arrives. Known in both modes, which is
+                // what lets a drag show the dock it is heading for.
+                let dockBottom = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
+                    ?? geo.size.height
+
+                // 0 is the full player, 1 is docked, and a drag lives in
+                // between. Pulling the big player down used to do nothing at
+                // all until you let go — the gesture had only an onEnded —
+                // so there was no sense of dragging it anywhere, just a jump
+                // once you released.
+                let t = dockProgress(mini: mini)
 
                 // Full width, until that makes the video too tall — which is
                 // what landscape on an iPad does: 16:9 of a 1194pt width is
@@ -167,8 +179,19 @@ struct PlayerStage: View {
                 let videoHeight = min(fullWidth * 9 / 16, geo.size.height * 0.5)
                 let videoWidth = videoHeight * 16 / 9
 
-                let width = mini ? PlayerStage.miniWidth : videoWidth
-                let height = mini ? width * 9 / 16 : videoHeight
+                // The two resting shapes, and the point between them the
+                // finger is currently at.
+                let fullX = (fullWidth - videoWidth) / 2
+                let miniW = PlayerStage.miniWidth
+                let miniH = miniW * 9 / 16
+                let miniX = AppLayout.floatingInset + PlayerStage.miniPadding
+                let miniY = dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding
+
+                let width = videoWidth + (miniW - videoWidth) * t
+                let height = videoHeight + (miniH - videoHeight) * t
+                let originX = fullX + (miniX - fullX) * t
+                let originY = miniY * t
+                let corner = (AppLayout.usesCustomTabBar ? 16 : 6) * t
 
                 ZStack(alignment: .topLeading) {
                     // The full screen behind the player. Faded rather than
@@ -176,8 +199,8 @@ struct PlayerStage: View {
                     WatchScreen()
                         .padding(.top, videoHeight)
                         .background(Color(.systemBackground))
-                        .opacity(mini ? 0 : 1)
-                        .allowsHitTesting(!mini)
+                        .opacity(1 - t)
+                        .allowsHitTesting(t < 0.5)
 
                     // The band the video sits in, full width even when the
                     // video is narrower than the screen. Without it the
@@ -191,10 +214,10 @@ struct PlayerStage: View {
                     // backdrop going.
                     Color.black
                         .frame(width: fullWidth, height: videoHeight)
-                        .opacity(mini ? 0 : 1)
+                        .opacity(1 - t)
                         .allowsHitTesting(false)
 
-                    if mini {
+                    if t > 0 {
                         // One bar, laid out across the full width, with a
                         // gap where the player sits on top of it. The first
                         // version positioned the chrome with padding and an
@@ -228,6 +251,10 @@ struct PlayerStage: View {
                                 radius: 12, y: 4)
                         .offset(x: AppLayout.floatingInset,
                                 y: dockBottom - PlayerStage.miniBarHeight)
+                        // Fades in as the player is pulled down, so the bar
+                        // it is heading for is visible the whole way.
+                        .opacity(t)
+                        .allowsHitTesting(t > 0.5)
                         // No tap gesture on the bar itself: a container tap
                         // competes with the buttons inside it, which is the
                         // other half of why close was unreliable. Expanding
@@ -245,21 +272,17 @@ struct PlayerStage: View {
                         // arrives so YouTube's suggestion grid never gets a
                         // frame.
                         if host.coordinator.didEnd,
-                           SolaPraiseConfig.endBehavior == .overlay, !mini {
+                           SolaPraiseConfig.endBehavior == .overlay, t < 0.5 {
                             PlayerEndCard(host: host)
                         }
-                        if let message = host.coordinator.errorMessage, !mini {
+                        if let message = host.coordinator.errorMessage, t < 0.5 {
                             PlayerErrorCard(host: host, message: message)
                         }
                     }
                     .frame(width: width, height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0, style: .continuous))
-                    .offset(
-                        x: mini ? AppLayout.floatingInset + PlayerStage.miniPadding
-                                : (fullWidth - videoWidth) / 2,
-                        y: mini ? dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding : 0
-                    )
-                    .allowsHitTesting(!mini)
+                    .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                    .offset(x: originX, y: originY)
+                    .allowsHitTesting(t < 0.5)
                     .gesture(dragGesture(mini: mini))
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
@@ -275,14 +298,47 @@ struct PlayerStage: View {
 
     /// Down docks it, up restores it. The threshold is generous because this
     /// competes with the scroll view underneath.
+    /// How far between full and docked the player currently sits.
+    ///
+    /// The resting value is whichever mode it is in; a drag in progress moves
+    /// it continuously between the two, which is the whole point — the player
+    /// should shrink under the finger rather than wait for it to let go.
+    private func dockProgress(mini: Bool) -> CGFloat {
+        let base: CGFloat = mini ? 1 : 0
+        guard drag != 0 else { return base }
+        if mini {
+            // Dragging up re-opens it, so upward travel takes t back to 0.
+            return max(0, min(1, base - max(0, -drag) / Self.expandTravel))
+        }
+        return max(0, min(1, base + max(0, drag) / Self.shrinkTravel))
+    }
+
+    /// Far enough to be a decision, short enough that the player is visibly
+    /// most of the way there before the commit point.
+    private static let shrinkTravel: CGFloat = 220
+    private static let expandTravel: CGFloat = 160
+
     private func dragGesture(mini: Bool) -> some Gesture {
-        DragGesture(minimumDistance: 24)
-            .onEnded { value in
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                // Sideways swipes belong to whatever is underneath.
                 guard abs(value.translation.width) < 120 else { return }
-                if !mini, value.translation.height > 60 {
-                    withAnimation(WatchScreen.stageAnimation) { host.minimize() }
-                } else if mini, value.translation.height < -40 {
-                    withAnimation(WatchScreen.stageAnimation) { host.expand() }
+                drag = value.translation.height
+            }
+            .onEnded { value in
+                let travelled = value.translation.height
+                let sideways = abs(value.translation.width) >= 120
+                withAnimation(WatchScreen.stageAnimation) {
+                    drag = 0
+                    guard !sideways else { return }
+                    // Past halfway, or thrown hard enough to mean it.
+                    if !mini, travelled > Self.shrinkTravel / 2
+                        || (!mini && value.predictedEndTranslation.height > Self.shrinkTravel) {
+                        host.minimize()
+                    } else if mini, travelled < -Self.expandTravel / 2
+                        || (mini && value.predictedEndTranslation.height < -Self.expandTravel) {
+                        host.expand()
+                    }
                 }
             }
     }

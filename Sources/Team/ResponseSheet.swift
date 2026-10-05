@@ -121,7 +121,7 @@ struct ResponseSheet: View {
                 if let current {
                     Section {
                         Button(role: .destructive) {
-                            Task { await clear(role: current.role) }
+                            Task { await clear() }
                         } label: {
                             HStack {
                                 Image(systemName: "arrow.uturn.backward")
@@ -171,12 +171,12 @@ struct ResponseSheet: View {
         if team.errorMessage == nil { dismiss() }
     }
 
-    private func clear(role: String) async {
+    private func clear() async {
         guard let sheetId = TeamSheetSource.current else { return }
         isSaving = true
         defer { isSaving = false }
         await team.clearAvailability(
-            service: service, role: role, email: email, sheetId: sheetId
+            service: service, email: email, sheetId: sheetId
         )
         if team.errorMessage == nil { dismiss() }
     }

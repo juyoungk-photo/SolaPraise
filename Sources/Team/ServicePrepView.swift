@@ -749,10 +749,8 @@ struct ServicePrepView: View {
                 sheetId: sheetId
             )
         } else {
-            guard let mine else { return }
             await team.clearAvailability(
                 service: upcoming,
-                role: mine.role,
                 email: email,
                 sheetId: sheetId
             )

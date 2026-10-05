@@ -506,46 +506,60 @@ final class TeamStore: ObservableObject {
         }
     }
 
-    /// Takes an answer back, so the row reads as unanswered again.
+    /// Takes back every answer this person has given for a service.
     ///
-    /// Plans change, and an answer you cannot withdraw is one people stop
-    /// giving honestly. The sheet keeps one row per person per part, and the
-    /// truthful way to say "I have not answered" is for that row to stop
-    /// counting. Deleting it outright needs the tab's numeric id and a
-    /// batchUpdate; blanking it does the same job, because parseSignups skips
-    /// any row without a readable date. The empty row is read by nothing.
+    /// Not one role's row — all of them. The sheet keeps a row per person
+    /// PER PART, so somebody who answered 인도 one week and 반주 the next has
+    /// two, and clearing only the one the row happened to be showing left
+    /// the other behind still saying "available". The switch went off and
+    /// came straight back on, which is exactly what it looked like.
+    ///
+    /// Blanked rather than deleted: parseSignups skips any row without a
+    /// readable date, and deleting outright needs the tab's numeric id and a
+    /// batchUpdate. The empty row is read by nothing.
+    @discardableResult
     func clearAvailability(
         service: TeamService,
-        role: String,
         email: String,
         sheetId: String
-    ) async {
+    ) async -> Bool {
         let day = Calendar.current.startOfDay(for: service.date)
+        let mine = (signups[day] ?? []).filter {
+            $0.email.caseInsensitiveCompare(email) == .orderedSame
+        }
         func forget() {
             signups[day]?.removeAll {
-                $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame
+                $0.email.caseInsensitiveCompare(email) == .orderedSame
             }
         }
-        guard let client,
-              let existing = mySignup(for: service, role: role, email: email),
-              let target = existing.row, target >= 2 else {
+        guard let client else { forget(); return true }
+
+        let rows = mine.compactMap(\.row).filter { $0 >= 2 }
+        guard !rows.isEmpty else {
             // Never reached the sheet, so there is nothing to blank.
             forget()
-            return
+            return true
         }
         do {
             isReadOnly = false
-            try await client.write(
-                sheetId: sheetId,
-                range: "\(TeamSheet.signupsTab)!A\(target):\(signupLayout.lastColumnLetter)\(target)",
-                row: [String](repeating: "", count: signupLayout.width)
-            )
+            let blank = [String](repeating: "", count: signupLayout.width)
+            for target in rows {
+                try await client.write(
+                    sheetId: sheetId,
+                    range: "\(TeamSheet.signupsTab)!A\(target):\(signupLayout.lastColumnLetter)\(target)",
+                    row: blank
+                )
+            }
             forget()
+            errorMessage = nil
+            return true
         } catch SheetsClient.SheetsError.http(403, _) {
             isReadOnly = true
             errorMessage = "이 시트에 편집 권한이 없어 응답을 취소하지 못했습니다."
+            return false
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
         }
     }
 
