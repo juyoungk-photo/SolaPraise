@@ -46,14 +46,19 @@ def draw() -> Image.Image:
                fill=col + (255,), width=int(SS * 0.052))
 
     # A small Latin cross, crossbar at the upper third as it is drawn.
+    #
+    # Square corners, not rounded. Rounding a stroke this short eats most of
+    # its length into the curve, and at 120px the arms stopped meeting at a
+    # right angle — the one thing that makes a cross a cross. Slightly
+    # heavier too, so it holds its own against the three arcs below.
     ccx, ccy = SS // 2, int(SS * 0.215)
-    h, w = int(SS * 0.165), int(SS * 0.042)
-    bar = int(h * 0.58)
-    ld.rounded_rectangle([ccx - w // 2, ccy - h // 2, ccx + w // 2, ccy + h // 2],
-                         radius=w // 2, fill=GOLD + (255,))
-    by = ccy - h // 2 + int(h * 0.30)
-    ld.rounded_rectangle([ccx - bar // 2, by - w // 2, ccx + bar // 2, by + w // 2],
-                         radius=w // 2, fill=GOLD + (255,))
+    h, w = int(SS * 0.175), int(SS * 0.048)
+    bar = int(h * 0.62)
+    ld.rectangle([ccx - w // 2, ccy - h // 2, ccx + w // 2, ccy + h // 2],
+                 fill=GOLD + (255,))
+    by = ccy - h // 2 + int(h * 0.31)
+    ld.rectangle([ccx - bar // 2, by - w // 2, ccx + bar // 2, by + w // 2],
+                 fill=GOLD + (255,))
 
     layer = layer.resize((S, S), Image.LANCZOS)
     img.paste(layer, (0, 0), layer)
