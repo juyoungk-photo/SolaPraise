@@ -37,6 +37,8 @@ final class GoogleAuthManager: ObservableObject {
     @Published private(set) var avatarURL: URL?
     @Published private(set) var lastError: String?
     @Published private(set) var isRestoring: Bool = true
+    /// What the current token carries. nil until the token says.
+    @Published private(set) var grantedScopes: [String]?
     /// Set when the user chooses to carry on without Google. 시편 and the
     /// 말씀 feed need no auth — the psalms are bundled and the feeds are RSS —
     /// so a sign-in wall in front of them is just a dead end.
@@ -88,6 +90,15 @@ final class GoogleAuthManager: ObservableObject {
             Task { @MainActor in
                 self?.adopt(user: user)
                 self?.isRestoring = false
+                // Settles what the token actually carries. Until this lands
+                // grantedScopes is nil, and anything that asks about a scope
+                // is guessing — see hasGranted.
+                guard let user else { return }
+                user.refreshTokensIfNeeded { refreshed, _ in
+                    Task { @MainActor in
+                        if let refreshed { self?.adopt(user: refreshed) }
+                    }
+                }
             }
         }
         #else
@@ -145,7 +156,15 @@ final class GoogleAuthManager: ObservableObject {
     func hasGranted(_ scope: String) -> Bool {
         #if canImport(GoogleSignIn)
         guard let user = GIDSignIn.sharedInstance.currentUser else { return false }
-        return user.grantedScopes?.contains(scope) ?? false
+        // nil means the token has not said, NOT that the scope is missing.
+        // After `restorePreviousSignIn` grantedScopes is often nil until the
+        // tokens are refreshed, and reading that as "no scope" put a
+        // permissions wall in front of a session that had the permission —
+        // 예배 asking the signed-in account to re-grant access it already held, every
+        // time the app was reinstalled. When it is unknown, let the request
+        // go and let a real 403 be the one that decides.
+        guard let granted = user.grantedScopes else { return true }
+        return granted.contains(scope)
         #else
         return false
         #endif
@@ -216,8 +235,11 @@ final class GoogleAuthManager: ObservableObject {
 
     #if canImport(GoogleSignIn)
     private func adopt(user: GIDGoogleUser?) {
-        guard let user else { isSignedIn = false; return }
+        guard let user else { isSignedIn = false; grantedScopes = nil; return }
         isSignedIn = true
+        // Published so a view asking canUseSheets is re-rendered when the
+        // answer changes — a plain read of GIDSignIn tells SwiftUI nothing.
+        grantedScopes = user.grantedScopes
         email = user.profile?.email
         displayName = user.profile?.name
         userID = user.userID

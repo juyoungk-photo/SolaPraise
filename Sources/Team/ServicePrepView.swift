@@ -108,50 +108,7 @@ struct ServicePrepView: View {
                         }
                     }
                 } else if auth.isSignedIn, !auth.canUseSheets || team.needsAuthorization {
-                    // The session predates the scope, so the sheet is fine
-                    // and the token is not. Say which, and fix it here.
-                    ContentUnavailableView {
-                        Label("시트 접근 권한이 필요합니다", systemImage: "lock.rotation")
-                    } description: {
-                        Text("로그인할 때는 없던 권한입니다. 먼저 위 버튼으로 허용해 보고, 그래도 안 되면 다시 로그인하세요. 그래도 같은 문제라면 Cloud Console의 OAuth 동의 화면에 spreadsheets 범위가 등록되어 있는지 확인해야 합니다.")
-                    } actions: {
-                        VStack(spacing: 10) {
-                            Button("시트 권한 허용") {
-                                Task {
-                                    let ok = await auth.requestScopes(
-                                        ["https://www.googleapis.com/auth/spreadsheets"]
-                                    )
-                                    if ok, let sheetId { await team.load(sheetId: sheetId) }
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-
-                            // Incremental consent fails outright if the scope
-                            // is not listed on the OAuth consent screen, and
-                            // a full re-login is the only thing that then
-                            // picks it up.
-                            Button("로그아웃 후 다시 로그인") {
-                                Task {
-                                    auth.signOut()
-                                    await auth.signIn()
-                                    if let sheetId { await team.load(sheetId: sheetId) }
-                                }
-                            }
-                            .buttonStyle(.bordered)
-
-                            if let email = auth.email {
-                                Text("현재 계정: \(email)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let message = team.errorMessage {
-                                Text(message)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                        }
-                    }
+                    sheetTrouble
                 } else {
                     ContentUnavailableView(
                         "예정된 예배가 없습니다",
@@ -194,6 +151,93 @@ struct ServicePrepView: View {
                 Button("취소", role: .cancel) { pending = nil }
             } message: { push in
                 Text("「\(push.playlist.title)」의 곡으로 이 날짜의 목록이 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
+            }
+        }
+    }
+
+    /// Two different failures used to share one screen.
+    ///
+    /// "This token never asked for spreadsheets" and "Google refused this
+    /// account on this sheet" need opposite fixes — grant a scope, or change
+    /// who is asking — and the screen reported the first either way. Someone
+    /// holding a perfectly granted token was told to re-grant it, which
+    /// changes nothing and reads as the app being stuck.
+    ///
+    /// It also states what it knows: the account, whether the scope is
+    /// actually on the token, which sheet, and Google's own words. A wrong
+    /// account is the usual answer here and nothing on the screen used to
+    /// say which account was being used.
+    @ViewBuilder
+    private var sheetTrouble: some View {
+        let missingScope = !auth.canUseSheets
+        ContentUnavailableView {
+            Label(missingScope ? "시트 권한이 없습니다" : "시트를 열 수 없습니다",
+                  systemImage: missingScope ? "lock.rotation" : "person.badge.key")
+        } description: {
+            if missingScope {
+                Text("로그인할 때는 없던 권한입니다. 아래에서 허용하면 바로 열립니다.")
+            } else {
+                Text("권한은 있는데 Google이 이 시트에 대해 이 계정을 거절했습니다. 시트가 아래 주소와 공유되어 있는지, 아니면 교회 계정으로 바꿔야 하는지 확인하세요.")
+            }
+        } actions: {
+            VStack(spacing: 10) {
+                if missingScope {
+                    Button("시트 권한 허용") {
+                        Task {
+                            let ok = await auth.requestScopes(
+                                ["https://www.googleapis.com/auth/spreadsheets"]
+                            )
+                            if ok, let sheetId { await team.load(sheetId: sheetId) }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("다시 시도") {
+                        Task { if let sheetId { await team.load(sheetId: sheetId) } }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("교회 계정으로 전환") {
+                        Task {
+                            await planning.signIn()
+                            team.configure(auth: auth, planning: planning)
+                            if let sheetId { await team.load(sheetId: sheetId) }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                // Incremental consent fails outright if the scope is not
+                // listed on the OAuth consent screen, and a full re-login is
+                // the only thing that then picks it up.
+                Button("로그아웃 후 다시 로그인") {
+                    Task {
+                        auth.signOut()
+                        await auth.signIn()
+                        team.configure(auth: auth, planning: planning)
+                        if let sheetId { await team.load(sheetId: sheetId) }
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                VStack(spacing: 2) {
+                    if let email = team.actingEmail(auth: auth, planning: planning) {
+                        Text("계정: \(email)")
+                    }
+                    Text("spreadsheets 권한: \(auth.canUseSheets ? "있음" : "없음")")
+                    if let sheetId {
+                        Text("시트: \(sheetId.prefix(10))…")
+                    }
+                    if let message = team.errorMessage {
+                        Text(message).foregroundStyle(.orange)
+                    }
+                    if let message = planning.lastError {
+                        Text(message).foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             }
         }
     }
