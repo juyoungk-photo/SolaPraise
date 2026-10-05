@@ -602,6 +602,73 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Adds one item to a service's order — 특별순서, 헌금, 광고, anything the
+    /// week has that the usual template does not.
+    ///
+    /// The screen used to say "add it on the sheet's Plan tab", which is true
+    /// and useless on a phone in a sanctuary. The only thing the app could
+    /// write was a playlist's songs, so every non-song item meant opening
+    /// Google Sheets on something with a keyboard.
+    ///
+    /// Appended at the end with the next order number. Where it belongs in
+    /// the service is the leader's business and the sheet is where it gets
+    /// moved — this is for getting it in.
+    @discardableResult
+    func appendPlanItem(
+        title: String,
+        kind: PlanItem.Kind,
+        minutes: Int?,
+        to service: TeamService,
+        sheetId: String
+    ) async -> Bool {
+        guard let client else { return false }
+        let day = Calendar.current.startOfDay(for: service.date)
+        let existing = plans[day] ?? []
+        let order = (existing.map(\.order).max() ?? 0) + 1
+
+        // The Plan tab's own column order, read from its header, so this
+        // writes into the sheet the team actually has rather than one the app
+        // wishes they had.
+        guard let header = try? await client.read(
+            sheetId: sheetId, range: "\(TeamSheet.planTab)!1:1"
+        ).first, !header.isEmpty else {
+            errorMessage = "시트에 Plan 탭이 없습니다. 먼저 Plan 탭을 만들어 주세요."
+            return false
+        }
+
+        var cells = [String](repeating: "", count: header.count)
+        func put(_ names: [String], _ value: String) {
+            if let i = TeamSheet.column(header, names), cells.indices.contains(i) {
+                cells[i] = value
+            }
+        }
+        put(["date", "날짜"], TeamSheet.dateFormatter.string(from: service.date))
+        put(["order", "#"], String(order))
+        put(["type", "구분", "순서종류"], kind.label)
+        put(["title", "내용", "순서"], title)
+        if let minutes { put(["minutes", "분", "길이"], String(minutes)) }
+
+        do {
+            isReadOnly = false
+            let row = try await client.append(
+                sheetId: sheetId, tab: TeamSheet.planTab, row: cells
+            )
+            plans[day, default: []].append(
+                PlanItem(order: order, kind: kind, title: title, minutes: minutes,
+                         person: nil, key: nil, url: nil, notes: nil, row: row)
+            )
+            errorMessage = nil
+            return true
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            errorMessage = "이 시트에 편집 권한이 없어 순서를 추가하지 못했습니다."
+            return false
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
+
     // MARK: - Pushing a 콘티 into the sheet
 
     struct PushResult {

@@ -81,8 +81,11 @@ struct ServicePrepView: View {
             if isOpen(candidate) {
                 expansion = .none
             } else {
+                // No scrolling. Opening a row used to pull it to the top of
+                // the screen, which moved everything the eye was holding on
+                // to — you tapped a week and the list jumped somewhere else.
+                // The row opens where it already is.
                 expansion = .day(candidate.date)
-                scrollTo?(candidate.date)
             }
         }
     }
@@ -102,6 +105,11 @@ struct ServicePrepView: View {
     /// Set by the List's ScrollViewReader so opening a row can bring it into
     /// view — a row near the bottom would otherwise unfold off screen.
     @State private var scrollTo: ((Date) -> Void)?
+
+    /// What the switch was asked to be, per service, while the write is in
+    /// flight — see answerControl.
+    @State private var inFlight: [String: Bool] = [:]
+    @State private var addingItemTo: TeamService?
 
     var body: some View {
         NavigationStack {
@@ -174,6 +182,7 @@ struct ServicePrepView: View {
             .sheet(isPresented: $showSettings) { SettingsView() }
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
+            .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
             // An alert, not a confirmationDialog. On iPad the latter is a
             // popover anchored to whatever presented it, and anchored to a
             // row inside a List it was drawn clipped — the buttons were
@@ -365,7 +374,7 @@ struct ServicePrepView: View {
             }
 
             if items.isEmpty {
-                Text("이 예배의 순서가 비어 있습니다. 시트의 Plan 탭에 추가하거나, 아래에서 재생목록으로 찬양을 채우세요.")
+                Text("아직 순서가 없습니다. 아래에서 한 줄씩 더하거나, 재생목록으로 찬양을 한 번에 채울 수 있습니다.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -424,6 +433,13 @@ struct ServicePrepView: View {
                 }
             }
 
+            Button {
+                addingItemTo = service
+            } label: {
+                Label("순서 추가", systemImage: "plus.circle")
+            }
+            .disabled(team.isReadOnly)
+
             if pinnedPlaylists.isEmpty {
                 Text("찬양 탭에 재생목록을 고정하면 여기로 보낼 수 있습니다.")
                     .font(.caption2)
@@ -451,7 +467,7 @@ struct ServicePrepView: View {
                 if team.hasPlanTab {
                     Text("시작 시각은 \(Self.clockFormatter.string(from: serviceStart(service)))을 기준으로 계산합니다. 길이를 적지 않은 순서는 시계를 넘기지 않으므로 그 뒤는 대략적인 값입니다.")
                 } else {
-                    Text("시트에 Plan 탭을 추가하면 기도·설교·광고까지 포함한 순서와 시간이 보입니다. 지금은 Songs 탭의 찬양만 보여 주고 있습니다.")
+                    Text("지금은 Songs 탭의 찬양만 보여 주고 있습니다. 시트에 Plan 탭이 있으면 기도·설교·광고까지 시간과 함께 나옵니다.")
                 }
             }
             .font(.caption2)
@@ -739,9 +755,17 @@ struct ServicePrepView: View {
             Text(date, format: .dateTime.day())
                 .font(.system(size: 19, weight: .semibold))
                 .monospacedDigit()
-                .padding(.vertical, 1)
+            // The weekday, where a calendar icon puts it. It used to sit in
+            // the detail line beside the time, which is where you look for
+            // "when", not for "which day" — and on a tile it costs nothing.
+            // Coloured when it is not a Sunday, which is the exception worth
+            // catching.
+            Text(date, format: .dateTime.weekday(.abbreviated))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(isSunday(date) ? Color.secondary : Color.orange)
+                .padding(.bottom, 2)
         }
-        .frame(width: 42)
+        .frame(width: 44)
         .background(Color(.secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
@@ -884,38 +908,36 @@ struct ServicePrepView: View {
         let open = isOpen(upcoming)
 
         return HStack(alignment: .top, spacing: 10) {
-            dateTile(upcoming.date, isSelected: open)
-
             VStack(alignment: .leading, spacing: 7) {
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
+                    // The tile and the service name are one target. The tile
+                    // sat outside the button and did nothing when pressed —
+                    // which is the part of the row a finger goes to first,
+                    // because it is the part that looks like a thing.
                     Button { toggle(upcoming) } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(upcoming.title)
-                                    .font(.subheadline.weight(open ? .semibold : .regular))
-                                    .lineLimit(1)
-                                Image(systemName: open ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(.tint)
-                            }
-                            HStack(spacing: 6) {
-                                // Sunday is the usual answer, so it sits here
-                                // rather than in front of the date — and it
-                                // is coloured only when it is NOT a Sunday,
-                                // which is the part worth noticing.
-                                Text(upcoming.date, format: .dateTime.weekday(.abbreviated))
-                                    .foregroundStyle(isSunday(upcoming.date)
-                                                     ? Color.secondary : Color.orange)
-                                if let time = upcoming.time { Text("· \(time)") }
-                                if let where_ = upcoming.location { Text("· \(where_)") }
-                                if team.roles.count > 0, !upcoming.isRehearsal {
-                                    Text("· \(filled)/\(team.roles.count)").monospacedDigit()
+                        HStack(alignment: .top, spacing: 10) {
+                            dateTile(upcoming.date, isSelected: open)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 5) {
+                                    Text(upcoming.title)
+                                        .font(.subheadline.weight(open ? .semibold : .regular))
+                                        .lineLimit(1)
+                                    Image(systemName: open ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(.tint)
                                 }
+                                HStack(spacing: 6) {
+                                    if let time = upcoming.time { Text(time) }
+                                    if let where_ = upcoming.location { Text("· \(where_)") }
+                                    if team.roles.count > 0, !upcoming.isRehearsal {
+                                        Text("· \(filled)/\(team.roles.count)").monospacedDigit()
+                                    }
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                             }
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -924,8 +946,11 @@ struct ServicePrepView: View {
                 }
 
                 chipsLine(upcoming, answers: answers)
+                    .padding(.leading, 54)
 
-                if open { serviceDetail(upcoming) }
+                if open {
+                    serviceDetail(upcoming).padding(.leading, 54)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -936,12 +961,49 @@ struct ServicePrepView: View {
     /// there too. Plans change, and an answer you cannot withdraw is one
     /// people stop giving honestly.
     ///
-    /// The chip picks the part, the switch is the answer itself. Keeping
-    /// them apart is what lets the switch mean one thing: on, I am in; off,
-    /// I have not answered.
+    /// The menu picks the part in one gesture. It used to open a sheet: tap
+    /// the chip, wait for the sheet, pick a part, close it, then find the
+    /// switch — five steps to say "I'll lead". A part IS the answer, so
+    /// choosing one from the menu answers as well.
+    ///
+    /// The switch stays for the thing it is good at: in or out, without
+    /// thinking about which part.
     private func answerControl(_ upcoming: TeamService, mine: TeamSignup?) -> some View {
-        HStack(spacing: 8) {
-            Button { responding = upcoming } label: {
+        let key = upcoming.id
+        return HStack(spacing: 8) {
+            Menu {
+                Section("맡을 파트") {
+                    ForEach(team.roles) { role in
+                        Button {
+                            Task { await choose(role.name, for: upcoming) }
+                        } label: {
+                            if mine?.status == .available, mine?.role == role.name {
+                                Label(role.name, systemImage: "checkmark")
+                            } else {
+                                Text(role.name)
+                            }
+                        }
+                    }
+                }
+                Section {
+                    Button {
+                        Task { await answer(.declined, for: upcoming, role: mine?.role) }
+                    } label: { Label("이번 주는 어려움", systemImage: "xmark.circle") }
+                    Button {
+                        Task { await answer(.away, for: upcoming, role: mine?.role) }
+                    } label: { Label("자리비움", systemImage: "airplane") }
+                    if mine != nil {
+                        Button(role: .destructive) {
+                            Task { await setAnswered(false, for: upcoming, mine: mine) }
+                        } label: { Label("응답 취소", systemImage: "arrow.uturn.backward") }
+                    }
+                }
+                Section {
+                    Button {
+                        responding = upcoming
+                    } label: { Label("누가 뭘 맡았는지 보기", systemImage: "person.2") }
+                }
+            } label: {
                 HStack(spacing: 3) {
                     if let mine {
                         Circle().fill(tint(mine.status)).frame(width: 6, height: 6)
@@ -959,20 +1021,54 @@ struct ServicePrepView: View {
                 )
                 .foregroundStyle(mine.map { tint($0.status) } ?? Color.secondary)
             }
-            .buttonStyle(.plain)
             .disabled(team.isReadOnly)
 
+            // The switch follows the finger, not the network.
+            //
+            // Its `get` read the stored answer, which does not change until
+            // the sheet has been written. So a tap flipped it, the binding
+            // re-read the old value, and it snapped back — and tapping again
+            // then sent the OPPOSITE instruction, putting back the answer you
+            // had just removed. `inFlight` holds the value you asked for
+            // until the write settles.
             Toggle("", isOn: Binding(
-                get: { mine?.status == .available },
+                get: { inFlight[key] ?? (mine?.status == .available) },
                 set: { isOn in
-                    Task { await setAnswered(isOn, for: upcoming, mine: mine) }
+                    inFlight[key] = isOn
+                    Task {
+                        await setAnswered(isOn, for: upcoming, mine: mine)
+                        inFlight[key] = nil
+                    }
                 }
             ))
             .labelsHidden()
-            .disabled(team.isReadOnly)
+            .disabled(team.isReadOnly || inFlight[key] != nil)
             .accessibilityLabel("이 예배에 참여")
         }
         .fixedSize()
+    }
+
+    /// Picking a part is answering: one gesture, not a sheet and a switch.
+    private func choose(_ role: String, for upcoming: TeamService) async {
+        guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
+        else { return }
+        usualRole = role
+        await team.setAvailability(
+            .available, service: upcoming, role: role,
+            email: email, name: auth.displayName ?? email, sheetId: sheetId
+        )
+    }
+
+    private func answer(_ status: SignupStatus,
+                        for upcoming: TeamService, role: String?) async {
+        guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
+        else { return }
+        let part = (role?.isEmpty == false ? role! : usualRole)
+        guard !part.isEmpty else { responding = upcoming; return }
+        await team.setAvailability(
+            status, service: upcoming, role: part,
+            email: email, name: auth.displayName ?? email, sheetId: sheetId
+        )
     }
 
     /// 인도 then 반주 then everyone else: the two parts that decide whether a
