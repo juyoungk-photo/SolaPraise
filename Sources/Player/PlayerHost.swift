@@ -202,10 +202,27 @@ struct PlayerStage: View {
                                 .frame(width: PlayerStage.miniWidth + PlayerStage.miniPadding * 2)
                             MiniChrome(host: host, current: current)
                         }
-                        .frame(width: geo.size.width, height: PlayerStage.miniBarHeight)
-                        .background(.regularMaterial)
-                        .overlay(alignment: .top) { Divider() }
-                        .offset(y: dockBottom - PlayerStage.miniBarHeight)
+                        // Floating on iPad, where the tab bar below it is a
+                        // floating capsule: a full-width slab above a floating
+                        // pill left a strip of the grid showing between them,
+                        // which read as a gap rather than a layer. Edge to
+                        // edge on iPhone, where it sits on a full-width tab
+                        // bar and an inset would only break that line.
+                        .frame(width: geo.size.width - AppLayout.floatingInset * 2,
+                               height: PlayerStage.miniBarHeight)
+                        .background(
+                            .regularMaterial,
+                            in: RoundedRectangle(
+                                cornerRadius: AppLayout.usesCustomTabBar ? 16 : 0,
+                                style: .continuous)
+                        )
+                        .overlay(alignment: .top) {
+                            if !AppLayout.usesCustomTabBar { Divider() }
+                        }
+                        .shadow(color: .black.opacity(AppLayout.usesCustomTabBar ? 0.14 : 0),
+                                radius: 12, y: 4)
+                        .offset(x: AppLayout.floatingInset,
+                                y: dockBottom - PlayerStage.miniBarHeight)
                         // No tap gesture on the bar itself: a container tap
                         // competes with the buttons inside it, which is the
                         // other half of why close was unreliable. Expanding
@@ -233,7 +250,7 @@ struct PlayerStage: View {
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: mini ? 6 : 0, style: .continuous))
                     .offset(
-                        x: mini ? PlayerStage.miniPadding
+                        x: mini ? AppLayout.floatingInset + PlayerStage.miniPadding
                                 : (fullWidth - videoWidth) / 2,
                         y: mini ? dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding : 0
                     )
@@ -499,6 +516,7 @@ struct BottomChrome: ViewModifier {
                                 }
                         }
                         .frame(height: PlayerStage.miniBarHeight)
+                        Color.clear.frame(height: AppLayout.floatingGap)
                     }
                     if AppLayout.usesCustomTabBar {
                         Color.clear.frame(height: AppLayout.tabBarHeight)
