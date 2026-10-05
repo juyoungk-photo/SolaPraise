@@ -62,6 +62,8 @@ struct ServicePrepView: View {
     /// switch answer on its own instead of making every yes a two-step.
     @AppStorage("team.usualRole") private var usualRole = ""
 
+    @StateObject private var archiveStore = ServiceArchive()
+
     /// Set by the List's ScrollViewReader so a row can send the screen back
     /// to the 순서 it just selected.
     @State private var scrollToTop: (() -> Void)?
@@ -300,6 +302,33 @@ struct ServicePrepView: View {
                         )
                     } label: {
                         Label("찬양만 이어 듣기", systemImage: "play.fill")
+                    }
+
+                    // After the service, the songs outlive the 콘티 — next
+                    // week's overwrites this one. Offered from the day of the
+                    // service onwards, which is when "what we sang" becomes a
+                    // fact rather than a plan. Not `isPast`, which excludes
+                    // today: the moment this is wanted is Sunday afternoon.
+                    if hasHappened(service) {
+                    Button {
+                        Task { await archive(service, songs: songs) }
+                    } label: {
+                        HStack {
+                            Label("CCC_예배찬양곡_모음에 보관",
+                                  systemImage: "tray.and.arrow.down")
+                            Spacer()
+                            if archiveStore.isWorking {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }
+                    .disabled(archiveStore.isWorking || !auth.isSignedIn)
+
+                    if let note = archiveStore.note {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     }
                 }
             }
@@ -615,6 +644,25 @@ struct ServicePrepView: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         )
+    }
+
+    /// Copies what was sung into the standing archive playlist.
+    private func archive(_ service: TeamService, songs: [PlanItem]) async {
+        let entries = songs.compactMap { item in
+            item.videoId.map { ServiceArchive.Song(videoId: $0, title: item.title) }
+        }
+        _ = await archiveStore.archive(
+            entries,
+            using: AppServices.client(auth: auth, quota: quota)
+        )
+    }
+
+    /// Today counts. A service is archivable from its own morning, because
+    /// the tap that files the set list happens on the way home.
+    private func hasHappened(_ service: TeamService) -> Bool {
+        let calendar = Calendar.current
+        return calendar.startOfDay(for: service.date)
+            <= calendar.startOfDay(for: Date())
     }
 
     private func isSunday(_ date: Date) -> Bool {
