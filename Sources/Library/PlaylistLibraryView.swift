@@ -40,7 +40,7 @@ struct PlaylistLibraryView: View {
         NavigationStack {
             Group {
                 if state.isLoading && state.value == nil {
-                    ProgressView("Loading your playlists…")
+                    ProgressView("내 재생목록 불러오는 중…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if !auth.isSignedIn {
                     // Not an error. 보관함 is the one tab that is genuinely
@@ -64,7 +64,7 @@ struct PlaylistLibraryView: View {
                     Button { showSettings = true } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Settings")
+                    .accessibilityLabel("설정")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
@@ -319,11 +319,11 @@ struct ErrorState: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Couldn't load", systemImage: "exclamationmark.triangle")
+            Label("불러오지 못했습니다", systemImage: "exclamationmark.triangle")
         } description: {
             Text(message)
         } actions: {
-            Button("Try again", action: retry)
+            Button("다시 시도", action: retry)
                 .buttonStyle(.borderedProminent)
         }
     }

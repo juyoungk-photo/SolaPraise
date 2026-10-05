@@ -205,7 +205,7 @@ struct HomeView: View {
                     Button { showAddCard = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("카드 추가")
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
+                        .accessibilityLabel("설정")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }

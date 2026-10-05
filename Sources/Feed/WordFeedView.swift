@@ -73,7 +73,7 @@ struct WordFeedView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
+                        .accessibilityLabel("설정")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }

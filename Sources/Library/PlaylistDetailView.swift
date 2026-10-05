@@ -59,7 +59,7 @@ struct PlaylistDetailView: View {
                     } label: {
                         Image(systemName: "play.fill")
                     }
-                    .accessibilityLabel("Play all")
+                    .accessibilityLabel("전체 재생")
                 }
                 if let url = YouTubeID.playlistURL(playlist.id) {
                     ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }

@@ -68,6 +68,15 @@ final class ServiceArchive: ObservableObject {
         Calendar.current.startOfDay(for: service.date)
     }
 
+    /// Forgets which services have been filed, so they can be filed again.
+    /// The playlist itself is untouched — this is the app's memory, not the
+    /// archive, and the content dedupe still stops repeats.
+    func forgetAll() {
+        archivedDays = []
+        persistArchived()
+        note = nil
+    }
+
     func hasArchived(_ service: TeamService) -> Bool {
         archivedDays.contains(Self.day(of: service))
     }

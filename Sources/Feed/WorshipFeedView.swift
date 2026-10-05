@@ -110,7 +110,7 @@ struct WorshipFeedView: View {
             .accessibilityLabel("재생목록 추가")
 
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                .accessibilityLabel("Settings")
+                .accessibilityLabel("설정")
         }
         ToolbarItem(placement: .topBarLeading) {
             // Compact + fixedSize: the full "100/100" form gets truncated to

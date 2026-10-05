@@ -244,6 +244,30 @@ final class TeamStore: ObservableObject {
     /// relaunch.
     private var usingPlanningAccount = false
 
+    /// Forgets everything read from the sheet.
+    ///
+    /// Signing out used to leave the roster, the schedule and everyone's
+    /// answers in memory. The tab hides itself, so nobody saw it — until the
+    /// next person signed in on the same iPad and the previous team's
+    /// schedule was there waiting, before any load had run.
+    func reset() {
+        services = []
+        roles = []
+        songs = [:]
+        plans = [:]
+        signups = [:]
+        memberEmails = []
+        liveOrder = [:]
+        liveUpdatedBy = [:]
+        liveRows = [:]
+        errorMessage = nil
+        needsAuthorization = false
+        isReadOnly = false
+        lastLoaded = nil
+        client = nil
+        usingPlanningAccount = false
+    }
+
     func configure(auth: GoogleAuthManager, planning: PlanningAuth) {
         let wantsPlanning = planning.isSignedIn
         guard client == nil || wantsPlanning != usingPlanningAccount else { return }

@@ -39,6 +39,9 @@ final class GoogleAuthManager: ObservableObject {
     @Published private(set) var isRestoring: Bool = true
     /// What the current token carries. nil until the token says.
     @Published private(set) var grantedScopes: [String]?
+    /// Set when a token refresh is refused, i.e. the sign-in is stale even
+    /// though the SDK still has a user. Cleared by the next good token.
+    @Published private(set) var sessionExpired = false
     /// Set when the user chooses to carry on without Google. 시편 and the
     /// 말씀 feed need no auth — the psalms are bundled and the feeds are RSS —
     /// so a sign-in wall in front of them is just a dead end.
@@ -208,6 +211,8 @@ final class GoogleAuthManager: ObservableObject {
         displayName = nil
         userID = nil
         avatarURL = nil
+        grantedScopes = nil
+        sessionExpired = false
     }
 
     // MARK: - Access token for YouTubeAPIClient
@@ -218,14 +223,28 @@ final class GoogleAuthManager: ObservableObject {
         guard let user = GIDSignIn.sharedInstance.currentUser else {
             throw AuthError.notSignedIn
         }
-        let refreshed: GIDGoogleUser = try await withCheckedThrowingContinuation { cont in
-            user.refreshTokensIfNeeded { refreshed, error in
-                if let error { cont.resume(throwing: error); return }
-                if let refreshed { cont.resume(returning: refreshed); return }
-                cont.resume(throwing: AuthError.tokenUnavailable)
+        do {
+            let refreshed: GIDGoogleUser = try await withCheckedThrowingContinuation { cont in
+                user.refreshTokensIfNeeded { refreshed, error in
+                    if let error { cont.resume(throwing: error); return }
+                    if let refreshed { cont.resume(returning: refreshed); return }
+                    cont.resume(throwing: AuthError.tokenUnavailable)
+                }
             }
+            sessionExpired = false
+            adopt(user: refreshed)
+            return refreshed.accessToken.tokenString
+        } catch {
+            // A refresh token that Google has stopped honouring — which, with
+            // the OAuth consent screen still in Testing, is every session
+            // about a week old. Everything kept reporting "signed in" while
+            // no request could be authorised: reads quietly fell back to the
+            // app key and looked fine, writes failed with "sign in to
+            // continue" on a screen showing the account's own name. Say it
+            // out loud instead, once, where it can be acted on.
+            sessionExpired = true
+            throw error
         }
-        return refreshed.accessToken.tokenString
         #else
         throw AuthError.sdkMissing
         #endif
@@ -237,6 +256,7 @@ final class GoogleAuthManager: ObservableObject {
     private func adopt(user: GIDGoogleUser?) {
         guard let user else { isSignedIn = false; grantedScopes = nil; return }
         isSignedIn = true
+        sessionExpired = false
         // Published so a view asking canUseSheets is re-rendered when the
         // answer changes — a plain read of GIDSignIn tells SwiftUI nothing.
         grantedScopes = user.grantedScopes

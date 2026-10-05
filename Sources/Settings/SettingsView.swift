@@ -2,8 +2,11 @@
 //  SettingsView.swift
 //  SolaPraise
 //
-//  Channel whitelist, quota visibility, account.
-//  Topic searches arrive with Phase 4.
+//  Channels, today's API budget, the team sheet, the account.
+//
+//  Kept in the app's own language. Half of this screen was still in English
+//  — "Today", "API budget", "Sign out" — on a screen every other word of
+//  which is Korean, and one footer still promised a feature that shipped.
 //
 
 import SwiftUI
@@ -31,6 +34,7 @@ struct SettingsView: View {
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
     @StateObject private var feed = FeedStore()
+    @StateObject private var archive = ServiceArchive()
     @State private var refreshNote: String?
     @State private var notifyTime: Date = {
         var c = DateComponents()
@@ -49,15 +53,16 @@ struct SettingsView: View {
                 readingSection
                 refreshSection
                 todaySection
+                studioSection
                 accountSection
                 aboutSection
             }
-            .navigationTitle("Settings")
+            .navigationTitle("설정")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("완료") { dismiss() }
                 }
             }
             .sheet(item: $addingFor) { purpose in
@@ -95,7 +100,7 @@ struct SettingsView: View {
             Button {
                 addingFor = purpose
             } label: {
-                Label("Add channel", systemImage: "plus")
+                Label("채널 추가", systemImage: "plus")
             }
         } header: {
             Label(purpose.title, systemImage: purpose.symbolName)
@@ -477,7 +482,7 @@ struct SettingsView: View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("API budget")
+                    Text("API 사용량")
                     Spacer()
                     Text("\(quota.unitsUsed.formatted()) / \(QuotaLedger.dailyUnitLimit.formatted())")
                         .monospacedDigit()
@@ -489,16 +494,48 @@ struct SettingsView: View {
             .padding(.vertical, 2)
 
             HStack {
-                Text("Searches")
+                Text("전체 검색")
                 Spacer()
-                Text("\(quota.searchesUsed) of \(QuotaLedger.dailySearchLimit) used")
+                Text("\(quota.searchesUsed) / \(QuotaLedger.dailySearchLimit)회")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("Today")
+            Text("오늘 사용량")
         } footer: {
-            Text("Resets at midnight Pacific. Channel updates use the free RSS feed and cost nothing; each general search costs 100 units and each playlist edit 50.")
+            Text("태평양 시간 자정에 초기화됩니다. 채널 업데이트는 무료 RSS라 들지 않고, 전체 검색은 1회 100, 재생목록 수정은 1회 50을 씁니다. 음원 찾기는 애플 검색을 쓰므로 이 사용량과 무관합니다.")
+        }
+    }
+
+    /// Settings for things that shipped after this screen was last written:
+    /// the archive playlist, 음원 찾기, and where 작업실 lives on each device.
+    private var studioSection: some View {
+        Section {
+            LabeledContent("보관 재생목록", value: ServiceArchive.playlistTitle)
+
+            HStack {
+                Text("보관한 예배")
+                Spacer()
+                Text("\(archive.archivedDays.count)회")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+
+            if !archive.archivedDays.isEmpty {
+                Button("보관 기록 지우기", role: .destructive) {
+                    archive.forgetAll()
+                }
+            }
+        } header: {
+            Text("작업실과 보관")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("예배가 끝나면 「예배」 탭에서 그 날의 찬양을 「\(ServiceArchive.playlistTitle)」로 보관할 수 있습니다. 이미 보관한 예배는 다시 보관되지 않습니다 — 기록을 지우면 다시 보관할 수 있습니다.")
+                Text("「음원 찾기」는 애플 스토어에서 실제 음원을 찾아 구매 페이지로 연결하고, 받은 파일은 작업실에서 코드 분석으로 넘어갑니다.")
+                Text(AppLayout.usesCustomTabBar
+                     ? "작업실은 아래 탭에 있습니다."
+                     : "아이폰에서는 작업실이 「보관함」 안에 있습니다. 아이패드에서는 탭으로 나옵니다.")
+            }
         }
     }
 
@@ -533,8 +570,32 @@ struct SettingsView: View {
             .padding(.vertical, 2)
 
             if auth.isSignedIn {
-                Button("Sign out", role: .destructive) {
+                if auth.sessionExpired {
+                    // The account's own name is on the screen above, which is
+                    // exactly why this has to be said out loud: everything
+                    // looks signed in and nothing can be authorised.
+                    Label("로그인이 만료되었습니다. 다시 로그인하세요.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button {
+                        Task {
+                            auth.signOut()
+                            await auth.signIn()
+                        }
+                    } label: {
+                        Label("다시 로그인", systemImage: "arrow.clockwise")
+                    }
+                }
+                Button("로그아웃", role: .destructive) {
+                    // Both accounts. Signing out of Google while the church
+                    // account's refresh token stayed in the Keychain left the
+                    // app still writing to the team sheet as somebody who had
+                    // just signed out — on a shared iPad that is somebody
+                    // else's name on the answer.
                     auth.signOut()
+                    planning.signOut()
+                    team.reset()
                     dismiss()
                 }
             } else {
@@ -558,9 +619,14 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            LabeledContent("Version", value: Bundle.main.shortVersion)
+            LabeledContent("버전", value: Bundle.main.shortVersion)
+            LabeledContent("앱 키", value: AppSecrets.hasYouTubeAPIKey ? "포함됨" : "없음")
+        } header: {
+            Text("정보")
         } footer: {
-            Text("Topic searches arrive in a later phase.")
+            Text(AppSecrets.hasYouTubeAPIKey
+                 ? "앱에 YouTube 키가 들어 있어 로그인 없이도 찬양·말씀 피드와 검색, 재생목록 재생이 됩니다. 로그인은 내 재생목록을 보고 고칠 때만 필요합니다."
+                 : "앱에 YouTube 키가 없습니다. 이 빌드는 모든 기능에 Google 로그인이 필요합니다.")
         }
     }
 }
@@ -601,7 +667,7 @@ private struct ChannelRow: View {
                     .foregroundStyle(channel.isPinned ? .orange : .secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(channel.isPinned ? "Unpin channel" : "Pin channel")
+            .accessibilityLabel(channel.isPinned ? "채널 고정 해제" : "채널 고정")
         }
     }
 }
