@@ -511,24 +511,13 @@ struct ServicePrepView: View {
         let future = team.services.filter { !$0.isPast }
         if !future.isEmpty {
             Section {
-                ForEach(future) { upcoming in
-                    // A month label where the month turns, so scrolling
-                    // through a quarter does not become undifferentiated.
-                    if isFirstOfMonth(upcoming, in: future) {
-                        Text(upcoming.date, format: .dateTime.year().month(.wide))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 4)
-                    }
-                    scheduleRow(upcoming)
-                }
-            } header: {
-                Text("예배표")
-            } footer: {
+                // Whose answer this will be, and the note on how to answer.
+                // Both sat in the section footer, below a schedule that runs
+                // months deep — far enough down that the account you were
+                // answering as was something you scrolled past. Directly
+                // under the header it is read before the first answer.
+                // Same font and styling, only moved.
                 VStack(alignment: .leading, spacing: 4) {
-                    // Whose answer this will be, with the way to change it
-                    // right here. Burying that in Settings meant the wrong
-                    // account stayed the wrong account.
                     HStack(spacing: 6) {
                         if let email = team.actingEmail(auth: auth, planning: planning) {
                             (Text("응답 계정: ").foregroundStyle(.secondary)
@@ -560,8 +549,69 @@ struct ServicePrepView: View {
                     }
                     Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 맡을 파트를 고르세요. 응답한 사람이 먼저 나옵니다.")
                 }
+                // What a Section footer applies on its own, restated here
+                // because the block is no longer in one. The account line
+                // keeps its own .caption, as it always had.
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+                ForEach(future) { upcoming in
+                    // A month label where the month turns, so scrolling
+                    // through a quarter does not become undifferentiated.
+                    if isFirstOfMonth(upcoming, in: future) {
+                        Text(upcoming.date, format: .dateTime.year().month(.wide))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                    scheduleRow(upcoming)
+                }
+            } header: {
+                Text("예배표")
             }
         }
+    }
+
+    /// The two parts a service cannot happen without, in the order they are
+    /// always shown. Fixed rather than read from the sheet's Order column,
+    /// so the row does not reshuffle as the sheet is edited.
+    private static let keyRoleNames = ["인도", "반주"]
+
+    private struct KeyPart {
+        let role: String
+        /// Who has it, by answer or by the leader's plan. Nil means nobody.
+        let who: String?
+        /// Set only when this came from someone's answer, which is both what
+        /// makes it green and what keeps them from appearing twice on the row.
+        let signupId: String?
+    }
+
+    /// Who holds 인도 or 반주 for a service.
+    ///
+    /// An answer wins over the sheet's own column: somebody saying "I will
+    /// lead" is a stronger fact than a name typed into a plan weeks ago, and
+    /// the two disagree often enough to matter.
+    private func keyPart(_ role: String,
+                         _ service: TeamService,
+                         _ answers: [TeamSignup]) -> KeyPart {
+        func squashed(_ text: String) -> String {
+            text.replacingOccurrences(of: " ", with: "")
+        }
+        if let answer = answers.first(where: {
+            $0.status == .available && squashed($0.role).contains(role)
+        }) {
+            return KeyPart(role: role,
+                           who: answer.name.isEmpty ? answer.email : answer.name,
+                           signupId: answer.id)
+        }
+        // Matched on the key rather than by exact name, because the sheet
+        // writes 인도자 and 반주자 as often as 인도 and 반주.
+        if let planned = service.assignments.first(where: {
+            squashed($0.key).contains(role)
+        })?.value, !planned.trimmingCharacters(in: .whitespaces).isEmpty {
+            return KeyPart(role: role, who: planned, signupId: nil)
+        }
+        return KeyPart(role: role, who: nil, signupId: nil)
     }
 
     private func isFirstOfMonth(_ service: TeamService, in list: [TeamService]) -> Bool {
@@ -576,7 +626,6 @@ struct ServicePrepView: View {
         let answers = team.responses(for: upcoming)
         let mine = answers.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
         let filled = team.roles.filter { upcoming.assignments[$0.name] != nil }.count
-        let coreGap = team.roles.filter { $0.isCore && upcoming.assignments[$0.name] == nil }
 
         return VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -634,39 +683,48 @@ struct ServicePrepView: View {
                 .disabled(team.isReadOnly)
             }
 
-            if !coreGap.isEmpty, !upcoming.isRehearsal {
-                // The gap that decides whether the service can happen.
-                Text("미정: " + coreGap.map(\.name).joined(separator: ", "))
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.orange)
-            }
-
-            // Who is coming, then who is not, then who has not said.
-            // Pending is the actionable one, so it is shown rather than
-            // being the absence of a chip.
+            // 인도 then 반주 then everyone else: the two parts that decide
+            // whether a service can happen lead the line, in that order,
+            // whether or not anyone has them. An empty 인도 is the most
+            // important thing on the row, and it cannot be the absence of a
+            // chip — that is what the old "미정: …" line was for, and it
+            // listed every core part from a column the sheet does not keep
+            // up to date. This reads the answers people actually gave.
             let pending = team.pendingNames(for: upcoming)
-            if answers.isEmpty, pending.isEmpty {
-                Text("아직 응답 없음").font(.caption2).foregroundStyle(.tertiary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(answers) { answer in
-                            // "주영 인도" reads as a fact about Sunday.
-                            // "주영 가능" reads as a form someone filled in.
-                            chip(
-                                answer.name.isEmpty ? answer.email : answer.name,
-                                detail: answer.status == .available
-                                    ? (answer.role.isEmpty ? nil : answer.role)
-                                    : answer.status.label,
-                                color: tint(answer.status)
-                            )
-                        }
-                        ForEach(pending, id: \.self) { who in
-                            chip(who, detail: "미응답", color: .secondary, dashed: true)
+            let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
+            let spokenFor = Set(parts.compactMap(\.signupId))
+            let rest = answers.filter { !spokenFor.contains($0.id) }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(parts, id: \.role) { part in
+                        if let who = part.who {
+                            // Green when somebody answered for it, orange
+                            // when it is only the leader's plan and that
+                            // person has not said yes yet.
+                            chip(who, detail: part.role,
+                                 color: part.signupId == nil ? .orange : .green,
+                                 dashed: part.signupId == nil)
+                        } else {
+                            chip("\(part.role) 미지정", detail: nil, color: .red)
                         }
                     }
-                    .padding(.horizontal, 1)
+                    ForEach(rest) { answer in
+                        // "주영 인도" reads as a fact about Sunday.
+                        // "주영 가능" reads as a form someone filled in.
+                        chip(
+                            answer.name.isEmpty ? answer.email : answer.name,
+                            detail: answer.status == .available
+                                ? (answer.role.isEmpty ? nil : answer.role)
+                                : answer.status.label,
+                            color: tint(answer.status)
+                        )
+                    }
+                    ForEach(pending, id: \.self) { who in
+                        chip(who, detail: "미응답", color: .secondary, dashed: true)
+                    }
                 }
+                .padding(.horizontal, 1)
             }
         }
         .padding(.vertical, 4)
