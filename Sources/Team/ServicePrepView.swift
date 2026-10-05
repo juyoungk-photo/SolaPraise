@@ -49,10 +49,16 @@ struct ServicePrepView: View {
     private var sheetId: String? { TeamSheetSource.current }
 
     private var access: TeamAccess.State {
+        // The address that answers, not the one that plays YouTube. With the
+        // church account connected those are different addresses, and
+        // judging membership by the YouTube one meant you could be on the
+        // roster under a name your own answers were never filed under —
+        // your row said 미응답 while your answer sat there under the other
+        // address.
         TeamAccess.evaluate(
             sheetId: sheetId,
-            email: auth.email,
-            displayName: auth.displayName,
+            email: team.actingEmail(auth: auth, planning: planning),
+            displayName: planning.isSignedIn ? planning.email : auth.displayName,
             roster: team.memberEmails
         )
     }
@@ -971,7 +977,9 @@ struct ServicePrepView: View {
     }
 
     private func setAvailability(_ value: SignupStatus, _ service: TeamService, _ role: TeamRole) async {
-        guard let sheetId, let email = auth.email else { return }
+        guard let sheetId,
+              let email = team.actingEmail(auth: auth, planning: planning)
+        else { return }
         await team.setAvailability(
             value,
             service: service,

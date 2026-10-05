@@ -28,6 +28,10 @@ struct HomeSearchSheet: View {
 
     @State private var text = ""
     @State private var remoteResults: [YTSearchResult] = []
+    @State private var nextPageToken: String?
+    /// The query the current results belong to, so "more" asks for more of
+    /// the same rather than more of whatever is in the box now.
+    @State private var searchedQuery = ""
     @State private var isSearching = false
     @State private var errorMessage: String?
     @FocusState private var fieldFocused: Bool
@@ -79,6 +83,7 @@ struct HomeSearchSheet: View {
             if !text.isEmpty {
                 Button {
                     text = ""; remoteResults = []; errorMessage = nil
+                    nextPageToken = nil; searchedQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -151,6 +156,31 @@ struct HomeSearchSheet: View {
                         ) }
                         .buttonStyle(.plain)
                     }
+
+                    // Asked for, not prefetched: another page is another
+                    // full search out of a hundred a day, so the cost is on
+                    // the button rather than spent on scrolling.
+                    if nextPageToken != nil {
+                        Button {
+                            Task { await loadMore() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isSearching {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.down.circle")
+                                }
+                                Text("더 보기")
+                                Spacer()
+                                Text("검색 1회")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.footnote)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSearching || !quota.canSearch)
+                    }
                 }
             }
         }
@@ -218,8 +248,32 @@ struct HomeSearchSheet: View {
         defer { isSearching = false }
 
         let client = AppServices.client(auth: auth, quota: quota)
-        do { remoteResults = try await client.search(query: query) }
-        catch {
+        do {
+            let page = try await client.searchPage(query: query)
+            remoteResults = page.items
+            nextPageToken = page.nextPageToken
+            searchedQuery = query
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// The next page, on request.
+    ///
+    /// Appended rather than replacing, because the thing you were looking at
+    /// should not move when you ask for more.
+    private func loadMore() async {
+        guard let token = nextPageToken, !searchedQuery.isEmpty else { return }
+        isSearching = true
+        errorMessage = nil
+        defer { isSearching = false }
+        let client = AppServices.client(auth: auth, quota: quota)
+        do {
+            let page = try await client.searchPage(query: searchedQuery, pageToken: token)
+            let known = Set(remoteResults.compactMap(\.videoId))
+            remoteResults += page.items.filter { $0.videoId.map { !known.contains($0) } ?? false }
+            nextPageToken = page.nextPageToken
+        } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }

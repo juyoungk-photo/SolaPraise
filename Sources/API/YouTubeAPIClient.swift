@@ -443,6 +443,42 @@ final class YouTubeAPIClient {
     /// General YouTube search. Refuses when the self-imposed daily search
     /// budget is gone, with a clear message rather than a raw 403 — seeing
     /// this budget run down is the whole discipline mechanism.
+    /// One page of results, with the token for the next one.
+    ///
+    /// Search was one-shot: 24 results and no way to ask for more, on a tab
+    /// whose whole job is finding a song. The next page costs another full
+    /// search — 100 units — so it is asked for rather than prefetched, and
+    /// the screen says what it costs.
+    func searchPage(
+        query: String,
+        channelId: String? = nil,
+        maxResults: Int = 24,
+        pageToken: String? = nil
+    ) async throws -> (items: [YTSearchResult], nextPageToken: String?) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ([], nil) }
+        guard quota.canSearch else { throw APIError.searchBudgetSpent }
+
+        var searchQuery: [URLQueryItem] = [
+            .init(name: "part", value: "snippet"),
+            .init(name: "q", value: trimmed)
+        ]
+        if let channelId { searchQuery.append(.init(name: "channelId", value: channelId)) }
+        if let pageToken { searchQuery.append(.init(name: "pageToken", value: pageToken)) }
+
+        let page: YTListResponse<YTSearchResult> = try await get(
+            "search",
+            query: searchQuery + [
+                .init(name: "type", value: "video"),
+                .init(name: "videoEmbeddable", value: "true"),
+                .init(name: "maxResults", value: String(min(maxResults, 50))),
+                .init(name: "safeSearch", value: "moderate")
+            ],
+            cost: .search
+        )
+        return ((page.items ?? []).filter { $0.videoId != nil }, page.nextPageToken)
+    }
+
     func search(query: String, channelId: String? = nil,
                 maxResults: Int = 24) async throws -> [YTSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
