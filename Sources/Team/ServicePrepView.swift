@@ -1062,7 +1062,20 @@ struct ServicePrepView: View {
             .disabled(team.isReadOnly || inFlight[key] != nil)
             .accessibilityLabel("이 예배에 참여")
         }
-        .fixedSize()
+        // Layout priority, not fixedSize.
+        //
+        // `.fixedSize()` draws a view at its ideal size even when the parent
+        // gave it less, and SwiftUI hit-tests against the frame it was GIVEN,
+        // not the pixels it drew. The title column beside this one asks for
+        // all remaining width, so the switch was being drawn past the right
+        // edge of its own frame — visible, and taking taps nowhere. The menu
+        // beside it still worked, which is what made it look like the switch
+        // was broken rather than the layout.
+        //
+        // Priority makes this row's controls claim their width first and the
+        // title take what is left, so what is drawn and what is tappable are
+        // the same rectangle.
+        .layoutPriority(1)
     }
 
     /// Picking a part is answering: one gesture, not a sheet and a switch.
@@ -1130,6 +1143,20 @@ struct ServicePrepView: View {
             }
             .padding(.horizontal, 1)
         }
+        // A chip cut off at the edge reads as broken; a chip fading out reads
+        // as "there is more this way". Only on the trailing edge, and only
+        // the last few points, so it never dims a chip you are trying to
+        // read.
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.93),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .leading, endPoint: .trailing
+            )
+        )
     }
 
     /// A chart the team has already made for this song, matched on title.

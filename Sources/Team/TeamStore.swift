@@ -269,16 +269,25 @@ final class TeamStore: ObservableObject {
     }
 
 #if DEBUG
+    /// Set in sample mode: answering is applied in memory instead of being
+    /// written to a sheet, so the whole answer flow can be driven in a
+    /// simulator. Without it the switch bailed on a nil sheet id and looked
+    /// exactly like the bug it was meant to be testing.
+    private(set) var isSample = false
+    var sampleActingEmail: String?
+
     /// Drops sample data straight in, for reviewing 예배 without a sheet.
     func installSample(services: [TeamService], roles: [TeamRole],
                        signups: [Date: [TeamSignup]], plans: [Date: [PlanItem]],
                        members: Set<String>) {
+        isSample = true
+        sampleActingEmail = members.sorted().first
         self.services = services
         self.roles = roles
         self.signups = signups
         self.plans = plans
         self.memberEmails = members
-        self.isReadOnly = true
+        self.isReadOnly = false
         self.lastLoaded = Date()
     }
 #endif
@@ -296,7 +305,10 @@ final class TeamStore: ObservableObject {
 
     /// The address writes will be attributed to.
     func actingEmail(auth: GoogleAuthManager, planning: PlanningAuth) -> String? {
-        planning.isSignedIn ? planning.email : auth.email
+        #if DEBUG
+        if let sampleActingEmail { return sampleActingEmail }
+        #endif
+        return planning.isSignedIn ? planning.email : auth.email
     }
 
     /// The next service that has not happened yet, which is what anyone
@@ -498,6 +510,17 @@ final class TeamStore: ObservableObject {
         name: String,
         sheetId: String
     ) async {
+        #if DEBUG
+        if isSample {
+            let day = Calendar.current.startOfDay(for: service.date)
+            var list = signups[day] ?? []
+            list.removeAll { $0.email.caseInsensitiveCompare(email) == .orderedSame }
+            list.append(TeamSignup(role: role, email: email, name: name,
+                                   statusRaw: status.rawValue, row: nil))
+            signups[day] = list
+            return
+        }
+        #endif
         guard let client else { return }
         let day = Calendar.current.startOfDay(for: service.date)
         let row = signupLayout.row(
@@ -571,6 +594,9 @@ final class TeamStore: ObservableObject {
                 $0.email.caseInsensitiveCompare(email) == .orderedSame
             }
         }
+        #if DEBUG
+        if isSample { forget(); return true }
+        #endif
         guard let client else { forget(); return true }
 
         let rows = mine.compactMap(\.row).filter { $0 >= 2 }
