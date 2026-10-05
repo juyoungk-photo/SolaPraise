@@ -183,11 +183,16 @@ struct PlayerStage: View {
                     // video is narrower than the screen. Without it the
                     // letterboxing beside a capped video showed the page
                     // background — white in light mode, beside a black video.
-                    if !mini {
-                        Color.black
-                            .frame(width: fullWidth, height: videoHeight)
-                            .allowsHitTesting(false)
-                    }
+                    // Faded rather than removed. Dropped outright it
+                    // vanished on the first frame of the shrink, so the band
+                    // the video was travelling across disappeared before the
+                    // video had left it — a flash of the page behind, which
+                    // read as the animation stuttering rather than as the
+                    // backdrop going.
+                    Color.black
+                        .frame(width: fullWidth, height: videoHeight)
+                        .opacity(mini ? 0 : 1)
+                        .allowsHitTesting(false)
 
                     if mini {
                         // One bar, laid out across the full width, with a
@@ -505,19 +510,41 @@ struct BottomChrome: ViewModifier {
                      for: .tabBar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
+                    // The docked player's share, reserved only while it is
+                    // docked.
                     if host.mode == .mini {
-                        GeometryReader { proxy in
-                            Color.clear
-                                .onAppear {
-                                    host.dockAnchorY = proxy.frame(in: .global).maxY
-                                }
-                                .onChange(of: proxy.frame(in: .global).maxY) { _, new in
-                                    host.dockAnchorY = new
-                                }
-                        }
-                        .frame(height: PlayerStage.miniBarHeight)
-                        Color.clear.frame(height: AppLayout.floatingGap)
+                        Color.clear.frame(height: PlayerStage.miniBarHeight)
                     }
+
+                    // A zero-height line where the player's bottom edge
+                    // belongs, measured in EVERY mode.
+                    //
+                    // It used to be the mini reservation itself, which meant
+                    // the line did not exist until the player was already
+                    // docking. Shrinking out of full screen therefore started
+                    // with no idea where it was going, aimed at the bottom of
+                    // the screen, and corrected once the measurement landed a
+                    // frame or two later — two animations where there should
+                    // be one, which is what made it feel late. Everything
+                    // below this line is fixed furniture, so the line sits at
+                    // the same y in both modes and the target is known before
+                    // the gesture starts.
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear {
+                                host.dockAnchorY = proxy.frame(in: .global).maxY
+                            }
+                            .onChange(of: proxy.frame(in: .global).maxY) { _, new in
+                                host.dockAnchorY = new
+                            }
+                    }
+                    .frame(height: 0)
+
+                    // Reserved in both modes for the same reason: a gap that
+                    // appeared only while docked would move the line by its
+                    // own height mid-animation. Zero on iPhone.
+                    Color.clear.frame(height: AppLayout.floatingGap)
+
                     if AppLayout.usesCustomTabBar {
                         Color.clear.frame(height: AppLayout.tabBarHeight)
                     }
