@@ -649,33 +649,52 @@ struct ServicePrepView: View {
                 // answering as was something you scrolled past. Directly
                 // under the header it is read before the first answer.
                 // Same font and styling, only moved.
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
+                    // The address first, then the button that changes it,
+                    // each on its own line.
+                    //
+                    // They used to share one line with a Spacer between them,
+                    // which looked fine while there was an address and fell
+                    // apart without one: the button floated alone at the far
+                    // right, above the description, attached to nothing. The
+                    // row has the same shape either way now, and the button
+                    // sits under the thing it changes.
+                    Group {
                         if let email = team.actingEmail(auth: auth, planning: planning) {
-                            (Text("응답 계정: ").foregroundStyle(.secondary)
-                             + Text(email)
-                             + Text(planning.isSignedIn ? "" : " (YouTube 계정)")
-                                .foregroundStyle(.secondary))
-                        }
-                        Spacer(minLength: 4)
-                        if planning.isSignedIn {
-                            Button("계정 변경") {
-                                planning.signOut()
-                                team.configure(auth: auth, planning: planning)
-                            }
+                            Text("응답 계정: ").foregroundStyle(.secondary)
+                                + Text(email)
+                                + Text(planning.isSignedIn ? "" : " (YouTube 계정)")
+                                    .foregroundStyle(.secondary)
                         } else {
-                            Button("교회 계정으로 전환") {
-                                Task {
-                                    await planning.signIn()
-                                    team.configure(auth: auth, planning: planning)
-                                    if let id = TeamSheetSource.current {
-                                        await team.load(sheetId: id)
-                                    }
-                                }
-                            }
+                            Text("응답할 계정이 없습니다. 로그인하거나 교회 계정을 연결하세요.")
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .font(.caption)
+
+                    if planning.isSignedIn {
+                        Button("계정 변경") {
+                            planning.signOut()
+                            team.configure(auth: auth, planning: planning)
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    } else {
+                        Button("교회 계정으로 전환") {
+                            Task {
+                                await planning.signIn()
+                                team.configure(auth: auth, planning: planning)
+                                if let id = TeamSheetSource.current {
+                                    await team.load(sheetId: id)
+                                }
+                            }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
                     if let message = planning.lastError {
                         Text(message).foregroundStyle(.orange)
                     }
