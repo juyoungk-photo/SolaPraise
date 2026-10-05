@@ -241,9 +241,17 @@ actor SheetsClient {
     private func valuesURL(sheetId: String, suffix: String) -> URL? {
         guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
         else { return nil }
-        let root = comps.path
-        comps.path = root + "/\(sheetId)/values/\(suffix)"
+        // `base` ends in a slash. Appending another one produced
+        // "/v4/spreadsheets//<id>/values/..." — a double slash, which the API
+        // rejects with a 400 before it ever looks at the range. The old
+        // appendingPathComponent handled that for us; building the path by
+        // hand means handling it here.
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)/values/\(suffix)"
         return comps.url
+    }
+
+    private func trimmedRoot(_ path: String) -> String {
+        path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     func read(sheetId: String, range: String) async throws -> [[String]] {
@@ -311,7 +319,7 @@ actor SheetsClient {
         // The ranges here travel in the JSON body and need no encoding.
         guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
         else { throw SheetsError.badRange("batchUpdate") }
-        comps.path = comps.path + "/\(sheetId)/values:batchUpdate"
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)/values:batchUpdate"
         guard let url = comps.url else { throw SheetsError.badRange("batchUpdate") }
         _ = try await send(
             url: url,
