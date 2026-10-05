@@ -111,6 +111,13 @@ enum DebugHarness {
         return value.hasPrefix("-") ? nil : value
     }
 
+    /// Fill 예배 with sample data so its layout can be reviewed:
+    ///   -uiTestTeam
+    /// The tab otherwise needs a signed-in roster account and a real sheet,
+    /// neither of which a simulator has, so the one screen that most needs
+    /// looking at was the one that could not be looked at.
+    static var seedTeam: Bool { args.contains("-uiTestTeam") }
+
     static var initialTab: String? {
         guard let i = args.firstIndex(of: "-uiTestTab"), i + 1 < args.count else { return nil }
         return args[i + 1]

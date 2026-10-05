@@ -162,6 +162,9 @@ struct ServicePrepView: View {
             .toolbar { toolbar }
             .refreshable { if let sheetId { await team.load(sheetId: sheetId) } }
             .task {
+                #if DEBUG
+                if DebugHarness.seedTeam { return }
+                #endif
                 team.configure(auth: auth, planning: planning)
                 guard auth.canUseSheets else { return }
                 if team.services.isEmpty, let sheetId {

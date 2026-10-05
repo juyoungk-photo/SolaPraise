@@ -22,9 +22,14 @@ struct ContentView: View {
     /// Recomputed as the roster loads and as sign-in changes, so the tab
     /// appears without a relaunch.
     private var teamAccess: TeamAccess.State {
+        #if DEBUG
+        if DebugHarness.seedTeam {
+            return .member(email: "juyoung@example.com", name: "주영")
+        }
+        #endif
         // Shown while the scope is missing too, so the tab is where the fix
         // is rather than vanishing and leaving nowhere to grant it.
-        TeamAccess.evaluate(
+        return TeamAccess.evaluate(
             sheetId: TeamSheetSource.current,
             email: auth.email,
             displayName: auth.displayName,
@@ -74,6 +79,8 @@ struct ContentView: View {
             case "word":    return .word
             case "worship": return .worship
             case "library": return .library
+            case "team":    return .team
+            case "studio":  return .studio
             default: break
             }
             #endif
@@ -159,6 +166,9 @@ struct ContentView: View {
         }
         .task {
             DefaultChannels.seedIfEmpty(context: modelContext)
+            #if DEBUG
+            if DebugHarness.seedTeam { TeamSampleData.install(into: team) }
+            #endif
             daily.advanceIfNewDay()
             if daily.isGateOwed { showDailyGate = true }
             #if DEBUG

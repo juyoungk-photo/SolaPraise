@@ -268,6 +268,21 @@ final class TeamStore: ObservableObject {
         usingPlanningAccount = false
     }
 
+#if DEBUG
+    /// Drops sample data straight in, for reviewing 예배 without a sheet.
+    func installSample(services: [TeamService], roles: [TeamRole],
+                       signups: [Date: [TeamSignup]], plans: [Date: [PlanItem]],
+                       members: Set<String>) {
+        self.services = services
+        self.roles = roles
+        self.signups = signups
+        self.plans = plans
+        self.memberEmails = members
+        self.isReadOnly = true
+        self.lastLoaded = Date()
+    }
+#endif
+
     func configure(auth: GoogleAuthManager, planning: PlanningAuth) {
         let wantsPlanning = planning.isSignedIn
         guard client == nil || wantsPlanning != usingPlanningAccount else { return }
