@@ -111,6 +111,8 @@ struct ServicePrepView: View {
     @State private var inFlight: [String: Bool] = [:]
     /// Why a particular row's answer did not take.
     @State private var rowError: [String: String] = [:]
+    /// Done once per appearance of the list, not on every layout pass.
+    @State private var didLandOnUpcoming = false
     @State private var addingItemTo: TeamService?
 
     /// iPad has room for the chips beside the service; a phone does not, and
@@ -348,7 +350,20 @@ struct ServicePrepView: View {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
             }
-            .onAppear { scrollTo = { id in proxy.scrollTo(id, anchor: .top) } }
+            .onAppear {
+                scrollTo = { id in proxy.scrollTo(id, anchor: .top) }
+                // Land on the next service, not on the oldest one.
+                //
+                // With past weeks above, opening the tab would otherwise
+                // start months back. This is the one scroll the screen does:
+                // tapping a row still opens it where it sits, because moving
+                // the page under a finger that just pressed something is the
+                // thing that was wrong before.
+                guard !didLandOnUpcoming, let next = team.upcoming else { return }
+                didLandOnUpcoming = true
+                proxy.scrollTo(Calendar.current.startOfDay(for: next.date),
+                               anchor: .top)
+            }
         }
     }
 
@@ -663,15 +678,16 @@ struct ServicePrepView: View {
     /// parts, answer, tap the next week — when it is really one list.
     @ViewBuilder
     private var scheduleSection: some View {
-        let future = team.services.filter { !$0.isPast }
+        // Past services stay, above the upcoming ones, oldest first.
+        //
+        // They were filtered out, which threw away the only record of what
+        // the team actually sang — and took the 보관 button with it, since
+        // that only appears once a service has happened and the row vanished
+        // the moment it did. A schedule that forgets last Sunday the instant
+        // it is over is a schedule you cannot look back at.
+        let future = team.services.sorted { $0.date < $1.date }
         if !future.isEmpty {
             Section {
-                // Whose answer this will be, and the note on how to answer.
-                // Both sat in the section footer, below a schedule that runs
-                // months deep — far enough down that the account you were
-                // answering as was something you scrolled past. Directly
-                // under the header it is read before the first answer.
-                // Same font and styling, only moved.
                 // Who is answering, and the way to change it, on one line.
                 //
                 // No heading above it and no instructions below it. "예배표"
@@ -742,6 +758,10 @@ struct ServicePrepView: View {
                             .padding(.top, 4)
                     }
                     scheduleRow(upcoming)
+                        // Dimmed, not hidden. Last Sunday is a record, not a
+                        // decision, so it should be findable without
+                        // competing with the week you still have to answer.
+                        .opacity(upcoming.isPast ? 0.55 : 1)
                 }
             }
         }

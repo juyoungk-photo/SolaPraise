@@ -35,6 +35,18 @@ enum TeamSampleData {
             .map { TeamRole(name: $0.element, order: Double($0.offset)) }
 
         var services: [TeamService] = []
+        // Weeks already gone, so the past half of the list has something in
+        // it — including a service whose songs are waiting to be archived.
+        for week in -3 ..< 0 {
+            services.append(TeamService(
+                date: sunday(after: week),
+                title: "주일 2부예배",
+                time: "오전 11:30",
+                location: "본당",
+                notes: nil,
+                assignments: [:]
+            ))
+        }
         for week in 0 ..< 6 {
             let day = sunday(after: week)
             services.append(TeamService(
@@ -125,7 +137,7 @@ enum TeamSampleData {
         ]
 
         var plans: [Date: [PlanItem]] = [:]
-        for service in services.prefix(3) where !service.isRehearsal {
+        for service in services where !service.isRehearsal {
             plans[calendar.startOfDay(for: service.date)] = plan
         }
 
