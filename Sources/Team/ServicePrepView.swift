@@ -109,6 +109,8 @@ struct ServicePrepView: View {
     /// What the switch was asked to be, per service, while the write is in
     /// flight — see answerControl.
     @State private var inFlight: [String: Bool] = [:]
+    /// Why a particular row's answer did not take.
+    @State private var rowError: [String: String] = [:]
     @State private var addingItemTo: TeamService?
 
     /// iPad has room for the chips beside the service; a phone does not, and
@@ -670,62 +672,65 @@ struct ServicePrepView: View {
                 // answering as was something you scrolled past. Directly
                 // under the header it is read before the first answer.
                 // Same font and styling, only moved.
-                VStack(alignment: .leading, spacing: 6) {
-                    // The address first, then the button that changes it,
-                    // each on its own line.
-                    //
-                    // They used to share one line with a Spacer between them,
-                    // which looked fine while there was an address and fell
-                    // apart without one: the button floated alone at the far
-                    // right, above the description, attached to nothing. The
-                    // row has the same shape either way now, and the button
-                    // sits under the thing it changes.
+                // Who is answering, and the way to change it, on one line.
+                //
+                // No heading above it and no instructions below it. "예배표"
+                // named a list that is plainly a list of services, and the
+                // sentence explaining that a row opens when you press it was
+                // describing a chevron that already says so. A screen that
+                // needs a caption is a screen to fix, not to caption.
+                HStack(spacing: 6) {
                     Group {
                         if let email = team.actingEmail(auth: auth, planning: planning) {
-                            Text("응답 계정: ").foregroundStyle(.secondary)
+                            Text("로그인 계정: ").foregroundStyle(.secondary)
                                 + Text(email)
-                                + Text(planning.isSignedIn ? "" : " (YouTube 계정)")
-                                    .foregroundStyle(.secondary)
                         } else {
-                            Text("응답할 계정이 없습니다. 로그인하거나 교회 계정을 연결하세요.")
-                                .foregroundStyle(.secondary)
+                            Text("로그인된 계정이 없습니다").foregroundStyle(.secondary)
                         }
                     }
-                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
-                    if planning.isSignedIn {
-                        Button("계정 변경") {
-                            planning.signOut()
-                            team.configure(auth: auth, planning: planning)
-                        }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    } else {
-                        Button("교회 계정으로 전환") {
-                            Task {
-                                await planning.signIn()
+                    Menu {
+                        if planning.isSignedIn {
+                            Button("교회 계정 연결 해제") {
+                                planning.signOut()
                                 team.configure(auth: auth, planning: planning)
-                                if let id = TeamSheetSource.current {
-                                    await team.load(sheetId: id)
+                            }
+                        } else {
+                            Button("교회 계정으로 전환") {
+                                Task {
+                                    await planning.signIn()
+                                    team.configure(auth: auth, planning: planning)
+                                    if let id = TeamSheetSource.current {
+                                        await team.load(sheetId: id)
+                                    }
                                 }
                             }
                         }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                    } label: {
+                        // Tinted, not systemBackground: on a dark row that
+                        // fill is the same colour as what is behind it, and
+                        // the chip read as plain text rather than as
+                        // something to press.
+                        Text("계정 변경")
+                            .font(.caption2)
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.16)))
                     }
+                    .buttonStyle(.plain)
 
-                    if let message = planning.lastError {
-                        Text(message).foregroundStyle(.orange)
-                    }
-                    Text("줄을 누르면 그 자리에서 예배 순서가 열립니다. 오른쪽 스위치가 참여 여부이고, 옆의 칩으로 파트를 고릅니다.")
+                    Spacer(minLength: 0)
                 }
-                // What a Section footer applies on its own, restated here
-                // because the block is no longer in one. The account line
-                // keeps its own .caption, as it always had.
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.caption)
+
+                if let message = planning.lastError {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
 
                 ForEach(future) { upcoming in
                     // A month label where the month turns, so scrolling
@@ -738,8 +743,6 @@ struct ServicePrepView: View {
                     }
                     scheduleRow(upcoming)
                 }
-            } header: {
-                Text("예배표")
             }
         }
     }
@@ -821,8 +824,21 @@ struct ServicePrepView: View {
     private func setAnswered(_ isOn: Bool,
                              for upcoming: TeamService,
                              mine: TeamSignup?) async {
-        guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
-        else { return }
+        let key = upcoming.id
+        rowError[key] = nil
+
+        // These used to be a silent `return`. When either was missing the
+        // switch simply sprang back with nothing said, which is
+        // indistinguishable from a write that failed — and is most of why
+        // this took three attempts to find.
+        guard let sheetId else {
+            rowError[key] = "팀 시트가 연결되어 있지 않습니다. 설정에서 시트를 연결하세요."
+            return
+        }
+        guard let email = team.actingEmail(auth: auth, planning: planning) else {
+            rowError[key] = "응답할 계정이 없습니다. 로그인하거나 교회 계정을 연결하세요."
+            return
+        }
 
         if isOn {
             let role = !(mine?.role.isEmpty ?? true) ? mine!.role : usualRole
@@ -839,11 +855,15 @@ struct ServicePrepView: View {
                 sheetId: sheetId
             )
         } else {
-            await team.clearAvailability(
+            let ok = await team.clearAvailability(
                 service: upcoming,
                 email: email,
                 sheetId: sheetId
             )
+            if !ok {
+                rowError[key] = team.errorMessage
+                    ?? "응답을 취소하지 못했습니다. 시트에 쓰지 못했습니다."
+            }
         }
     }
 
@@ -969,6 +989,17 @@ struct ServicePrepView: View {
                 if !isWide {
                     chipsLine(upcoming, answers: answers)
                         .padding(.leading, 54)
+                }
+
+                // Why this row's answer did not take, where the answer was
+                // given. It used to land in a section at the very bottom of a
+                // schedule that runs months deep, which for a failure you are
+                // looking straight at is the same as saying nothing.
+                if let message = rowError[upcoming.id] {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.leading, isWide ? 62 : 54)
                 }
 
                 if open {
@@ -1118,51 +1149,64 @@ struct ServicePrepView: View {
         let spokenFor = Set(parts.compactMap(\.signupId))
         let rest = answers.filter { !spokenFor.contains($0.id) }
 
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(parts, id: \.role) { part in
-                    if let who = part.who {
-                        // Green when somebody answered for it, orange when it
-                        // is only the leader's plan and that person has not
-                        // said yes yet.
-                        chip(who, detail: part.role,
-                             color: part.signupId == nil ? .orange : .green,
-                             dashed: part.signupId == nil)
-                    } else {
-                        chip("\(part.role) 미지정", detail: nil, color: .red)
-                    }
+        return Group {
+            if isWide {
+                // Beside the service, where every row keeping the same height
+                // is what makes the month scannable: one line, scrolling,
+                // fading out rather than cut off mid-chip.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) { chips(parts, rest, pending) }
+                        .padding(.horizontal, 1)
                 }
-                ForEach(rest) { answer in
-                    // "주영 인도" reads as a fact about Sunday.
-                    // "주영 가능" reads as a form someone filled in.
-                    chip(
-                        answer.name.isEmpty ? answer.email : answer.name,
-                        detail: answer.status == .available
-                            ? (answer.role.isEmpty ? nil : answer.role)
-                            : answer.status.label,
-                        color: tint(answer.status)
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.93),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .leading, endPoint: .trailing
                     )
-                }
-                ForEach(pending, id: \.self) { who in
-                    chip(who, detail: "미응답", color: .secondary, dashed: true)
-                }
+                )
+            } else {
+                // A phone fits about three and a half chips on a line, so
+                // most of the team sat off screen behind a scroll nobody
+                // thinks to try. Wrapping spends a line and shows everyone,
+                // which is the question this row exists to answer.
+                ChipFlow { chips(parts, rest, pending) }
             }
-            .padding(.horizontal, 1)
         }
-        // A chip cut off at the edge reads as broken; a chip fading out reads
-        // as "there is more this way". Only on the trailing edge, and only
-        // the last few points, so it never dims a chip you are trying to
-        // read.
-        .mask(
-            LinearGradient(
-                stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: 0.93),
-                    .init(color: .clear, location: 1)
-                ],
-                startPoint: .leading, endPoint: .trailing
+    }
+
+    @ViewBuilder
+    private func chips(_ parts: [KeyPart],
+                       _ rest: [TeamSignup],
+                       _ pending: [String]) -> some View {
+        ForEach(parts, id: \.role) { part in
+            if let who = part.who {
+                // Green when somebody answered for it, orange when it is only
+                // the leader's plan and that person has not said yes yet.
+                chip(who, detail: part.role,
+                     color: part.signupId == nil ? .orange : .green,
+                     dashed: part.signupId == nil)
+            } else {
+                chip("\(part.role) 미지정", detail: nil, color: .red)
+            }
+        }
+        ForEach(rest) { answer in
+            // "주영 인도" reads as a fact about Sunday.
+            // "주영 가능" reads as a form someone filled in.
+            chip(
+                answer.name.isEmpty ? answer.email : answer.name,
+                detail: answer.status == .available
+                    ? (answer.role.isEmpty ? nil : answer.role)
+                    : answer.status.label,
+                color: tint(answer.status)
             )
-        )
+        }
+        ForEach(pending, id: \.self) { who in
+            chip(who, detail: "미응답", color: .secondary, dashed: true)
+        }
     }
 
     /// A chart the team has already made for this song, matched on title.
