@@ -58,6 +58,14 @@ struct ServicePrepView: View {
     }
     private var service: TeamService? { selected ?? team.upcoming }
 
+    /// The part you usually take, remembered by ResponseSheet. Lets the
+    /// switch answer on its own instead of making every yes a two-step.
+    @AppStorage("team.usualRole") private var usualRole = ""
+
+    /// Set by the List's ScrollViewReader so a row can send the screen back
+    /// to the 순서 it just selected.
+    @State private var scrollToTop: (() -> Void)?
+
     var body: some View {
         NavigationStack {
             Group {
@@ -222,6 +230,7 @@ struct ServicePrepView: View {
     // MARK: - Content
 
     private func content(_ service: TeamService) -> some View {
+        ScrollViewReader { proxy in
         List {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
@@ -242,6 +251,7 @@ struct ServicePrepView: View {
                     }
                 }
                 .padding(.vertical, 2)
+                .id(Self.topAnchor)
             }
 
             if !service.isRehearsal { songSection(service) }
@@ -251,7 +261,15 @@ struct ServicePrepView: View {
                 Section { Text(message).font(.caption).foregroundStyle(.orange) }
             }
         }
+        .onAppear {
+            scrollToTop = { proxy.scrollTo(Self.topAnchor, anchor: .top) }
+        }
+        }
     }
+
+    /// The header section, which is what "the 순서 of the selected service"
+    /// means in scroll terms.
+    private static let topAnchor = "service-top"
 
     // MARK: - Order of service
 
@@ -547,7 +565,7 @@ struct ServicePrepView: View {
                     if let message = planning.lastError {
                         Text(message).foregroundStyle(.orange)
                     }
-                    Text("줄을 눌러 그 예배의 순서를 보고, 오른쪽에서 맡을 파트를 고르세요. 응답한 사람이 먼저 나옵니다.")
+                    Text("줄을 누르면 위에서 그 예배의 순서가 열립니다. 오른쪽 스위치가 참여 여부이고, 옆의 칩으로 파트를 고릅니다.")
                 }
                 // What a Section footer applies on its own, restated here
                 // because the block is no longer in one. The account line
@@ -570,6 +588,91 @@ struct ServicePrepView: View {
                 Text("예배표")
             }
         }
+    }
+
+    /// The date as a calendar tile: month above, day below, the way a
+    /// calendar icon reads. "Sun, Oct 4" put the least useful word first —
+    /// nearly every one of these is a Sunday — and made every row start with
+    /// the same three letters.
+    private func dateTile(_ date: Date, isSelected: Bool) -> some View {
+        VStack(spacing: 0) {
+            Text(date, format: .dateTime.month(.abbreviated))
+                .font(.system(size: 10, weight: .bold))
+                .textCase(.uppercase)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 2)
+                .background(isSelected ? Color.accentColor : Color.secondary)
+            Text(date, format: .dateTime.day())
+                .font(.system(size: 19, weight: .semibold))
+                .monospacedDigit()
+                .padding(.vertical, 1)
+        }
+        .frame(width: 42)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
+        )
+    }
+
+    private func isSunday(_ date: Date) -> Bool {
+        Calendar.current.component(.weekday, from: date) == 1
+    }
+
+    /// What the chip says about my own answer.
+    private func answerLabel(_ mine: TeamSignup?) -> String {
+        guard let mine else { return "미지정" }
+        switch mine.status {
+        case .available: return mine.role.isEmpty ? "가능" : mine.role
+        default:         return mine.status.label
+        }
+    }
+
+    /// The switch, both ways.
+    ///
+    /// On needs a part to answer with: the one already chosen, else the usual
+    /// one. With neither, the switch cannot invent an answer, so it opens the
+    /// picker instead of turning itself on — the one case where it does not
+    /// simply flip.
+    private func setAnswered(_ isOn: Bool,
+                             for upcoming: TeamService,
+                             mine: TeamSignup?) async {
+        guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
+        else { return }
+
+        if isOn {
+            let role = !(mine?.role.isEmpty ?? true) ? mine!.role : usualRole
+            guard !role.trimmingCharacters(in: .whitespaces).isEmpty else {
+                responding = upcoming
+                return
+            }
+            await team.setAvailability(
+                .available,
+                service: upcoming,
+                role: role,
+                email: email,
+                name: auth.displayName ?? email,
+                sheetId: sheetId
+            )
+        } else {
+            guard let mine else { return }
+            await team.clearAvailability(
+                service: upcoming,
+                role: mine.role,
+                email: email,
+                sheetId: sheetId
+            )
+        }
+    }
+
+    /// Selecting a service puts its 순서 at the top of this screen — which is
+    /// off-screen by the time you are reading the schedule, so the tap also
+    /// takes you there. Without it the tap looked like it did nothing.
+    private func open(_ upcoming: TeamService) {
+        selected = upcoming
+        withAnimation { scrollToTop?() }
     }
 
     /// The two parts a service cannot happen without, in the order they are
@@ -629,22 +732,42 @@ struct ServicePrepView: View {
 
         return VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Button { selected = upcoming } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(upcoming.date, format: .dateTime.month().day().weekday())
-                            .font(.subheadline.weight(
-                                upcoming.id == service?.id ? .semibold : .regular
-                            ))
-                        HStack(spacing: 6) {
-                            Text(upcoming.title)
-                            if let time = upcoming.time { Text("· \(time)") }
-                            if let where_ = upcoming.location { Text("· \(where_)") }
-                            if team.roles.count > 0, !upcoming.isRehearsal {
-                                Text("· \(filled)/\(team.roles.count)").monospacedDigit()
+                Button { open(upcoming) } label: {
+                    HStack(spacing: 10) {
+                        dateTile(upcoming.date,
+                                 isSelected: upcoming.id == service?.id)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 5) {
+                                Text(upcoming.title)
+                                    .font(.subheadline.weight(
+                                        upcoming.id == service?.id ? .semibold : .regular
+                                    ))
+                                // The one icon that says this row opens
+                                // something. It used to open the 순서
+                                // silently, at the top of a screen you were
+                                // scrolled well below, so nothing appeared to
+                                // happen at all.
+                                Image(systemName: "list.bullet.rectangle")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tint)
                             }
+                            HStack(spacing: 6) {
+                                // Sunday is the usual answer, so it sits here
+                                // rather than in front of the date — and it
+                                // is coloured only when it is NOT a Sunday,
+                                // which is the part worth noticing.
+                                Text(upcoming.date, format: .dateTime.weekday(.abbreviated))
+                                    .foregroundStyle(isSunday(upcoming.date)
+                                                     ? Color.secondary : Color.orange)
+                                if let time = upcoming.time { Text("· \(time)") }
+                                if let where_ = upcoming.location { Text("· \(where_)") }
+                                if team.roles.count > 0, !upcoming.isRehearsal {
+                                    Text("· \(filled)/\(team.roles.count)").monospacedDigit()
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     }
                     .contentShape(Rectangle())
                 }
@@ -652,35 +775,45 @@ struct ServicePrepView: View {
 
                 Spacer(minLength: 4)
 
-                // Answering happens here, on the week it is about.
-                Button { responding = upcoming } label: {
-                    HStack(spacing: 4) {
-                        if let mine {
-                            Circle().fill(tint(mine.status)).frame(width: 7, height: 7)
-                            // The part, when there is one — that is the
-                            // answer. The status word only carries weight
-                            // when the answer is no.
-                            if mine.status == .available, !mine.role.isEmpty {
-                                Text(mine.role)
-                            } else {
-                                Text(mine.status.label)
+                // Answering happens here, on the week it is about — and it
+                // can be taken back here too. Plans change, and an answer you
+                // cannot withdraw is one people stop giving honestly.
+                //
+                // The chip picks the part, the switch is the answer itself.
+                // Keeping them apart is what lets the switch mean one thing:
+                // on, I am in; off, I have not answered.
+                HStack(spacing: 8) {
+                    Button { responding = upcoming } label: {
+                        HStack(spacing: 3) {
+                            if let mine {
+                                Circle().fill(tint(mine.status)).frame(width: 6, height: 6)
                             }
-                        } else {
-                            Image(systemName: "hand.raised").font(.caption2)
-                            Text("응답하기")
+                            Text(answerLabel(mine))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
                         }
+                        .font(.caption)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
+                                           ?? Color(.secondarySystemBackground))
+                        )
+                        .foregroundStyle(mine.map { tint($0.status) } ?? Color.secondary)
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
-                                       ?? Color(.secondarySystemBackground))
-                    )
-                    .foregroundStyle(mine.map { tint($0.status) } ?? Color.accentColor)
+                    .buttonStyle(.plain)
+                    .disabled(team.isReadOnly)
+
+                    Toggle("", isOn: Binding(
+                        get: { mine?.status == .available },
+                        set: { isOn in
+                            Task { await setAnswered(isOn, for: upcoming, mine: mine) }
+                        }
+                    ))
+                    .labelsHidden()
+                    .disabled(team.isReadOnly)
+                    .accessibilityLabel("이 예배에 참여")
                 }
-                .buttonStyle(.plain)
-                .disabled(team.isReadOnly)
             }
 
             // 인도 then 반주 then everyone else: the two parts that decide

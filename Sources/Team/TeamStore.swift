@@ -506,6 +506,49 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Takes an answer back, so the row reads as unanswered again.
+    ///
+    /// Plans change, and an answer you cannot withdraw is one people stop
+    /// giving honestly. The sheet keeps one row per person per part, and the
+    /// truthful way to say "I have not answered" is for that row to stop
+    /// counting. Deleting it outright needs the tab's numeric id and a
+    /// batchUpdate; blanking it does the same job, because parseSignups skips
+    /// any row without a readable date. The empty row is read by nothing.
+    func clearAvailability(
+        service: TeamService,
+        role: String,
+        email: String,
+        sheetId: String
+    ) async {
+        let day = Calendar.current.startOfDay(for: service.date)
+        func forget() {
+            signups[day]?.removeAll {
+                $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame
+            }
+        }
+        guard let client,
+              let existing = mySignup(for: service, role: role, email: email),
+              let target = existing.row, target >= 2 else {
+            // Never reached the sheet, so there is nothing to blank.
+            forget()
+            return
+        }
+        do {
+            isReadOnly = false
+            try await client.write(
+                sheetId: sheetId,
+                range: "\(TeamSheet.signupsTab)!A\(target):\(signupLayout.lastColumnLetter)\(target)",
+                row: [String](repeating: "", count: signupLayout.width)
+            )
+            forget()
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            errorMessage = "이 시트에 편집 권한이 없어 응답을 취소하지 못했습니다."
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     // MARK: - Pushing a 콘티 into the sheet
 
     struct PushResult {

@@ -115,6 +115,25 @@ struct ResponseSheet: View {
                     }
                 }
 
+                // Withdrawing has to be as easy as answering, or the first
+                // answer becomes one people hesitate over. Only offered once
+                // there is something to withdraw.
+                if let current {
+                    Section {
+                        Button(role: .destructive) {
+                            Task { await clear(role: current.role) }
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.uturn.backward")
+                                Text("응답 취소 (미지정으로)")
+                                Spacer()
+                            }
+                        }
+                    } footer: {
+                        Text("이 주에 대한 내 응답을 지웁니다. 다시 답할 수 있습니다.")
+                    }
+                }
+
                 if let message = team.errorMessage {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
@@ -152,4 +171,13 @@ struct ResponseSheet: View {
         if team.errorMessage == nil { dismiss() }
     }
 
+    private func clear(role: String) async {
+        guard let sheetId = TeamSheetSource.current else { return }
+        isSaving = true
+        defer { isSaving = false }
+        await team.clearAvailability(
+            service: service, role: role, email: email, sheetId: sheetId
+        )
+        if team.errorMessage == nil { dismiss() }
+    }
 }
