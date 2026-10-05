@@ -130,6 +130,14 @@ struct ContentView: View {
             }
         }
         .overlay { PlayerStage(host: playerHost) }
+        // 음원 찾기 can be opened from four places, none of them 작업실. When
+        // it hands over a file, this is what takes you to where it is
+        // analysed — on iPhone 작업실 lives inside 보관함, so that is the tab.
+        .onChange(of: StudioInbox.shared.wantsStudio) { _, wants in
+            guard wants else { return }
+            selection = showsStudioTab ? .studio : .library
+            StudioInbox.shared.wantsStudio = false
+        }
         // The roster has to be read before the tab can be decided, and the
         // sheet is the only place it lives.
         .task {

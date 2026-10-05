@@ -7,25 +7,23 @@
 
 import SwiftUI
 
+/// Kept as a button that opens 음원 찾기, so the four places that showed a
+/// menu of search links now show the search itself.
 struct AudioSourceMenu<Label: View>: View {
     let title: String
     @ViewBuilder var label: Label
 
-    @Environment(\.openURL) private var openURL
+    @State private var showSheet = false
 
     var body: some View {
-        Menu {
-            Section("구매하면 분석할 수 있습니다") {
-                ForEach(AudioSources.all) { source in
-                    Button {
-                        if let url = source.url(for: title) { openURL(url) }
-                    } label: {
-                        Text(source.name)
-                    }
-                }
-            }
+        Button {
+            showSheet = true
         } label: {
             label
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showSheet) {
+            AudioSourceSheet(title: title)
         }
     }
 }

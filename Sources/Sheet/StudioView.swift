@@ -205,6 +205,10 @@ struct StudioView: View {
                 guard case .success(let urls) = result, let url = urls.first else { return }
                 analyze(url)
             }
+            .onAppear { collectFromInbox() }
+            .onChange(of: StudioInbox.shared.wantsStudio) { _, wants in
+                if wants { collectFromInbox() }
+            }
         }
     }
 
@@ -269,5 +273,19 @@ struct StudioView: View {
     private func analyze(_ url: URL) {
         let title = url.deletingPathExtension().lastPathComponent
         analyzer.start(url: url, title: title, context: modelContext)
+    }
+
+    /// A file picked in 음원 찾기, which lives in another tab entirely.
+    ///
+    /// Taken rather than read, so coming back to 작업실 later does not
+    /// re-analyse the last thing that was bought.
+    private func collectFromInbox() {
+        guard let item = StudioInbox.shared.take() else { return }
+        // Picked from the file browser, so it is outside the sandbox until
+        // asked for. Without this the read fails and the analysis reports an
+        // empty file rather than a permissions problem.
+        let scoped = item.url.startAccessingSecurityScopedResource()
+        defer { if scoped { item.url.stopAccessingSecurityScopedResource() } }
+        analyzer.start(url: item.url, title: item.title, context: modelContext)
     }
 }
