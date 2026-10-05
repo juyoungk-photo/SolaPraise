@@ -909,7 +909,6 @@ struct ServicePrepView: View {
         let email = team.actingEmail(auth: auth, planning: planning) ?? ""
         let answers = team.responses(for: upcoming)
         let mine = answers.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
-        let filled = team.roles.filter { upcoming.assignments[$0.name] != nil }.count
         let open = isOpen(upcoming)
 
         return HStack(alignment: .top, spacing: 10) {
@@ -931,12 +930,19 @@ struct ServicePrepView: View {
                                         .font(.system(size: 9, weight: .semibold))
                                         .foregroundStyle(.tint)
                                 }
+                                // Time and place, and nothing else.
+                                //
+                                // There used to be a "0/6" here: roles filled
+                                // over roles that exist. It counted the
+                                // Schedule tab's assignment columns, which is
+                                // not where anyone answers — so it read 0/6
+                                // on a week four people had already said yes
+                                // to. The chips on the next line say who is
+                                // in, by name, which is the thing that was
+                                // being approximated.
                                 HStack(spacing: 6) {
                                     if let time = upcoming.time { Text(time) }
                                     if let where_ = upcoming.location { Text("· \(where_)") }
-                                    if team.roles.count > 0, !upcoming.isRehearsal {
-                                        Text("· \(filled)/\(team.roles.count)").monospacedDigit()
-                                    }
                                 }
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
