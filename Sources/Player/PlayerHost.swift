@@ -593,6 +593,11 @@ struct BottomChrome: ViewModifier {
             // TabView it would hide an enclosing bar instead of this one.
             .toolbar(AppLayout.usesCustomTabBar ? .hidden : .automatic,
                      for: .tabBar)
+            // Translucent, not the opaque slab the system swaps in once the
+            // content scrolls under it. That slab is a thick grey band at the
+            // top of a screen whose bottom bar is floating glass — the two
+            // did not look like they belonged to the same app.
+            .toolbarBackground(.regularMaterial, for: .navigationBar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     // The docked player's share, reserved only while it is

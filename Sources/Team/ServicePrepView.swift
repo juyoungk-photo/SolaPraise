@@ -769,6 +769,11 @@ struct ServicePrepView: View {
                         // decision, so it should be findable without
                         // competing with the week you still have to answer.
                         .opacity(upcoming.isPast ? 0.55 : 1)
+                        // No panel under every row. The list drew one behind
+                        // the whole schedule, which competed with the lit
+                        // panel that marks the open service — two highlights
+                        // for one thing. The open one is the only one now.
+                        .listRowBackground(Color.clear)
                 }
             }
         }
