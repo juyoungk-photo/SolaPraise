@@ -23,6 +23,11 @@ import SwiftUI
 
 struct SwipeToRemoveRow<Content: View>: View {
     let onRemove: () -> Void
+    /// What the revealed button shows. Removing from a queue is a deletion;
+    /// unpinning is not, so it should not wear a red bin.
+    var symbol: String = "trash"
+    var tint: Color = .red
+    var accessibility: String = "삭제"
     @ViewBuilder var content: Content
 
     @State private var offset: CGFloat = 0
@@ -73,16 +78,16 @@ struct SwipeToRemoveRow<Content: View>: View {
             withAnimation(.snappy(duration: 0.2)) { offset = 0 }
             onRemove()
         } label: {
-            Label("삭제", systemImage: "trash")
+            Label(accessibility, systemImage: symbol)
                 .labelStyle(.iconOnly)
                 .font(.body)
                 .foregroundStyle(.white)
                 .frame(width: Self.revealWidth)
                 .frame(maxHeight: .infinity)
-                .background(Color.red)
+                .background(tint)
         }
         .buttonStyle(.plain)
         .opacity(offset == 0 ? 0 : 1)
-        .accessibilityLabel("재생목록에서 삭제")
+        .accessibilityLabel(accessibility)
     }
 }

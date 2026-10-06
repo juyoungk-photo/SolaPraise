@@ -189,10 +189,25 @@ struct WorshipFeedView: View {
                             }
 
                             ForEach(pinnedVideos) { video in
-                                Button { play(video, in: pinnedVideos) } label: {
-                                    PinnedSetBar(video: video)
-                                }
-                                .buttonStyle(.plain)
+                                // Swipe to unpin, as well as the long press.
+                                //
+                                // These two were pinned as examples and
+                                // looked permanent: the only way to take one
+                                // down was a context menu nobody opens on a
+                                // row that does not look like it has one.
+                                SwipeToRemoveRow(onRemove: {
+                                    video.isPinned = false
+                                    try? modelContext.save()
+                                }, symbol: "pin.slash", tint: .orange,
+                                   accessibility: "고정 해제") {
+                                // Content with a tap gesture, not a Button: a
+                                // Button claims the drag before the swipe can
+                                // see it, so the row played instead of
+                                // revealing anything. The same trap the
+                                // playlist and queue rows fell into.
+                                PinnedSetBar(video: video)
+                                .contentShape(Rectangle())
+                                .onTapGesture { play(video, in: pinnedVideos) }
                                 .contextMenu {
                                     pinToggle(video)
                                     SheetMusicMenu(title: video.title) {
@@ -210,6 +225,7 @@ struct WorshipFeedView: View {
                                         Label("콘티에 추가",
                                               systemImage: "calendar.badge.plus")
                                     }
+                                }
                                 }
                             }
                         }

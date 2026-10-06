@@ -206,6 +206,19 @@ struct PlaylistBar: View {
                 .lineLimit(1)
                 .foregroundStyle(Color.primary)
 
+            // YouTube generates one of these per channel and fills it with
+            // every stream the channel has ever run, so what is in it is the
+            // service as it happened rather than anything anyone curated.
+            // Worth saying, because "주일 2부예배" reads like a set list.
+            if playlist.isLiveArchive {
+                Text("실황")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.red.opacity(0.18)))
+                    .foregroundStyle(.red)
+            }
+
             Spacer(minLength: 8)
 
             // Zero means "not fetched yet", not "empty" — a pinned link

@@ -244,6 +244,11 @@ final class CachedPlaylist {
     var inviteURL: URL? { inviteURLString.flatMap(URL.init(string:)) }
     var isCollaborative: Bool { inviteURL != nil }
 
+    /// YouTube's own "live streams" playlist for a channel, which it names
+    /// UULV… and fills automatically with every stream that channel has run.
+    /// Nobody chose what is in it, so a row showing one should say so.
+    var isLiveArchive: Bool { playlistId.hasPrefix("UULV") }
+
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }
 }
 
