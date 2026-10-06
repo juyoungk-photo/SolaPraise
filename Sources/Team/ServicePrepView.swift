@@ -822,6 +822,16 @@ struct ServicePrepView: View {
             <= calendar.startOfDay(for: Date())
     }
 
+    /// What to call somebody: the roster's name first.
+    ///
+    /// A signup row carries whatever name the app knew when it was written,
+    /// which for a Google account is the profile name — "Juyoung Kim", not
+    /// what the team calls anyone. The Members tab is where that is decided.
+    private func displayName(_ signup: TeamSignup) -> String {
+        team.rosterName(for: signup.email)
+            ?? (signup.name.isEmpty ? signup.email : signup.name)
+    }
+
     private func isSunday(_ date: Date) -> Bool {
         Calendar.current.component(.weekday, from: date) == 1
     }
@@ -877,7 +887,7 @@ struct ServicePrepView: View {
         } else {
             let ok = await team.clearAvailability(
                 service: upcoming,
-                email: email,
+                emails: team.myAddresses(auth: auth, planning: planning),
                 sheetId: sheetId
             )
             if !ok {
@@ -916,7 +926,7 @@ struct ServicePrepView: View {
             $0.status == .available && squashed($0.role).contains(role)
         }) {
             return KeyPart(role: role,
-                           who: answer.name.isEmpty ? answer.email : answer.name,
+                           who: displayName(answer),
                            signupId: answer.id)
         }
         // Matched on the key rather than by exact name, because the sheet
@@ -946,9 +956,8 @@ struct ServicePrepView: View {
     /// first line with the tile and the chips hung below the whole row, so
     /// every row was a different shape and the dates wandered.
     private func scheduleRow(_ upcoming: TeamService) -> some View {
-        let email = team.actingEmail(auth: auth, planning: planning) ?? ""
         let answers = team.responses(for: upcoming)
-        let mine = answers.first { $0.email.caseInsensitiveCompare(email) == .orderedSame }
+        let mine = answers.first { team.isMe($0.email, auth: auth, planning: planning) }
         let open = isOpen(upcoming)
 
         return HStack(alignment: .top, spacing: 10) {
@@ -1097,6 +1106,39 @@ struct ServicePrepView: View {
             }
             .disabled(team.isReadOnly)
 
+            // "I cannot make it" needs a control of its own.
+            //
+            // The switch said 가능 or nothing, and nothing has to cover both
+            // "not answered yet" and "cannot come" — which are opposite
+            // things to a leader looking for a gap. Saying you cannot come
+            // meant finding it in a menu that looks like a part picker, so
+            // most people simply left the switch off and the row read as
+            // silence.
+            //
+            // Filled and red once pressed, so the row shows at a glance who
+            // has actually declined rather than who merely has not replied.
+            Button {
+                Task {
+                    if mine?.status == .declined {
+                        await setAnswered(false, for: upcoming, mine: mine)
+                    } else {
+                        await answer(.declined, for: upcoming, role: mine?.role)
+                    }
+                }
+            } label: {
+                Image(systemName: mine?.status == .declined
+                      ? "xmark.circle.fill" : "xmark.circle")
+                    .font(.system(size: 19))
+                    .foregroundStyle(mine?.status == .declined
+                                     ? Color.red : Color.secondary.opacity(0.6))
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(team.isReadOnly)
+            .accessibilityLabel(mine?.status == .declined
+                                ? "참여 어려움 취소" : "참여 어려움")
+
             // The switch follows the finger, not the network.
             //
             // Its `get` read the stored answer, which does not change until
@@ -1150,8 +1192,11 @@ struct ServicePrepView: View {
                         for upcoming: TeamService, role: String?) async {
         guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
         else { return }
-        let part = (role?.isEmpty == false ? role! : usualRole)
-        guard !part.isEmpty else { responding = upcoming; return }
+        // Declining does not need a part — "I cannot come" is true of every
+        // part at once. It used to open the picker and ask which one you
+        // were not doing.
+        let part = (role?.isEmpty == false ? role!
+                    : (usualRole.isEmpty ? (team.roles.first?.name ?? "참여") : usualRole))
         await team.setAvailability(
             status, service: upcoming, role: part,
             email: email, name: auth.displayName ?? email, sheetId: sheetId
@@ -1217,7 +1262,7 @@ struct ServicePrepView: View {
             // "주영 인도" reads as a fact about Sunday.
             // "주영 가능" reads as a form someone filled in.
             chip(
-                answer.name.isEmpty ? answer.email : answer.name,
+                displayName(answer),
                 detail: answer.status == .available
                     ? (answer.role.isEmpty ? nil : answer.role)
                     : answer.status.label,

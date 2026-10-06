@@ -176,7 +176,9 @@ struct ResponseSheet: View {
         isSaving = true
         defer { isSaving = false }
         await team.clearAvailability(
-            service: service, email: email, sheetId: sheetId
+            service: service,
+            emails: team.myAddresses(auth: auth, planning: planning),
+            sheetId: sheetId
         )
         if team.errorMessage == nil { dismiss() }
     }

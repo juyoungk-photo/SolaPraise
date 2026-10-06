@@ -481,6 +481,40 @@ final class TeamStore: ObservableObject {
             .sorted()
     }
 
+    /// The roster's name for an address.
+    ///
+    /// One place sets how a person is shown: the Members tab. A signup row
+    /// carries whatever name the app happened to know when it was written —
+    /// for a Google account that is the profile name, "Juyoung Kim", which
+    /// is not what the team calls anyone. Changing 이름 on the Members tab
+    /// now changes it everywhere, including on answers already given.
+    func rosterName(for email: String) -> String? {
+        let match = members.first {
+            !$0.email.isEmpty && $0.email.caseInsensitiveCompare(email) == .orderedSame
+        }
+        let name = match?.name.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    /// Every address that is me.
+    ///
+    /// With the church account connected there are two, and an answer filed
+    /// under one of them was somebody else's as far as the other was
+    /// concerned — the row showed "Juyoung Kim 보컬" and the switch beside it
+    /// did nothing, because the app was looking at a different address.
+    func myAddresses(auth: GoogleAuthManager, planning: PlanningAuth) -> [String] {
+        #if DEBUG
+        if let sampleActingEmail { return [sampleActingEmail] }
+        #endif
+        return [auth.email, planning.email].compactMap { $0 }.filter { !$0.isEmpty }
+    }
+
+    func isMe(_ email: String, auth: GoogleAuthManager, planning: PlanningAuth) -> Bool {
+        myAddresses(auth: auth, planning: planning).contains {
+            $0.caseInsensitiveCompare(email) == .orderedSame
+        }
+    }
+
     func responses(for service: TeamService) -> [TeamSignup] {
         let day = Calendar.current.startOfDay(for: service.date)
         // One line per person, not per role, which is how a leader reads it.
@@ -582,17 +616,16 @@ final class TeamStore: ObservableObject {
     @discardableResult
     func clearAvailability(
         service: TeamService,
-        email: String,
+        emails: [String],
         sheetId: String
     ) async -> Bool {
         let day = Calendar.current.startOfDay(for: service.date)
-        let mine = (signups[day] ?? []).filter {
-            $0.email.caseInsensitiveCompare(email) == .orderedSame
+        func isMine(_ signup: TeamSignup) -> Bool {
+            emails.contains { $0.caseInsensitiveCompare(signup.email) == .orderedSame }
         }
+        let mine = (signups[day] ?? []).filter(isMine)
         func forget() {
-            signups[day]?.removeAll {
-                $0.email.caseInsensitiveCompare(email) == .orderedSame
-            }
+            signups[day]?.removeAll(where: isMine)
         }
         #if DEBUG
         if isSample { forget(); return true }
