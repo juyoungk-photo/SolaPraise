@@ -1126,17 +1126,35 @@ struct ServicePrepView: View {
             // three in a track, with one of them raised, read as a choice
             // being OFFERED. That is the whole difference between a row that
             // looks informative and a row that looks like a question.
+            // An unanswered week wears the accent until it is answered.
+            //
+            // A grey track reads the same whether you have answered or not,
+            // so a schedule of unanswered weeks was as quiet as a schedule
+            // of finished ones — and the screen exists to collect answers.
+            // Tinted, the rows still waiting on you are the loud ones and
+            // the done ones recede. Only for weeks still ahead: nothing is
+            // owed on a Sunday that has already happened.
+            let needsAnswer = shown == nil && !upcoming.isPast
             HStack(spacing: 0) {
-                answerButton(.available, "checkmark", upcoming, shown)
-                answerButton(.maybe, "questionmark", upcoming, shown)
-                answerButton(.declined, "xmark", upcoming, shown)
+                answerButton(.available, "checkmark", upcoming, shown,
+                             needsAnswer: needsAnswer)
+                answerButton(.maybe, "questionmark", upcoming, shown,
+                             needsAnswer: needsAnswer)
+                answerButton(.declined, "xmark", upcoming, shown,
+                             needsAnswer: needsAnswer)
             }
             .padding(2)
             .background(
-                Capsule().fill(Color(.tertiarySystemFill))
+                Capsule().fill(needsAnswer
+                               ? Color.accentColor.opacity(0.16)
+                               : Color(.tertiarySystemFill))
             )
             .overlay(
-                Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+                Capsule().strokeBorder(
+                    needsAnswer ? Color.accentColor.opacity(0.55)
+                                : Color.primary.opacity(0.10),
+                    lineWidth: needsAnswer ? 1 : 0.5
+                )
             )
         }
         .layoutPriority(1)
@@ -1147,7 +1165,8 @@ struct ServicePrepView: View {
     private func answerButton(_ status: SignupStatus,
                               _ symbol: String,
                               _ upcoming: TeamService,
-                              _ shown: SignupStatus?) -> some View {
+                              _ shown: SignupStatus?,
+                              needsAnswer: Bool = false) -> some View {
         let isOn = shown == status
         return Button {
             Task {
@@ -1162,7 +1181,9 @@ struct ServicePrepView: View {
                 // glyph; the other two carry white.
                 .foregroundStyle(isOn
                                  ? (status == .maybe ? Color.black : Color.white)
-                                 : Color.secondary)
+                                 : (needsAnswer
+                                    ? Color.accentColor.opacity(0.85)
+                                    : Color.secondary))
                 .frame(width: 34, height: 28)
                 .background(
                     Capsule().fill(isOn ? tint(status) : Color.clear)
