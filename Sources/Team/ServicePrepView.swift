@@ -1295,8 +1295,12 @@ struct ServicePrepView: View {
                 color: tint(answer.status)
             )
         }
+        // Just the name. The hollow grey ring already says "has not
+        // answered" — it is the only chip drawn that way — so repeating the
+        // word on every one of them spent a third of the line restating what
+        // the style says, and pushed a team of seven onto three rows.
         ForEach(pending, id: \.self) { who in
-            chip(who, detail: "미응답", color: .secondary, dashed: true)
+            chip(who, detail: nil, color: .secondary, dashed: true)
         }
     }
 
