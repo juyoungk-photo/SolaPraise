@@ -59,7 +59,7 @@ struct WorshipFeedView: View {
     @State private var showSettings = false
     @State private var showAddTopic = false
     @State private var addTarget: PlayableVideo?
-    @State private var genre: WorshipGenre = .all
+    @State private var length: WorshipLength = .all
     /// videoId → (duration, views), filled by one videos.list after a search.
     @State private var resultDetail: [String: (Int?, Int?)] = [:]
 
@@ -148,8 +148,15 @@ struct WorshipFeedView: View {
                 // and stays put.
                 LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
                     Section {
-                    genreChips
-                    topicChips
+                    // One line, where three rows of chips used to be — see
+                    // FilterBar. Topics ride along on the same line, because
+                    // they are the same kind of thing: a way to narrow what
+                    // is below.
+                    FilterBar(channels: channels,
+                              channelFilter: $channelFilter,
+                              length: $length) {
+                        topicChips
+                    }
 
                     if !pinnedPlaylists.isEmpty || !pinnedVideos.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
@@ -252,11 +259,11 @@ struct WorshipFeedView: View {
                         FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
                     }
                     } header: {
-                        // Was a jump bar, which only made sense while the
-                        // feed was cut into per-channel sections. With one
-                        // feed there is nowhere to jump, so the same row
-                        // filters instead.
-                        if !channels.isEmpty {
+                        // The channel row is gone: it pinned itself to the
+                        // top and sat there on every scroll, a row of names
+                        // costing a row of videos. Channels are in the filter
+                        // menu with everything else now.
+                        if false {
                             ChannelFilterBar(channels: channels, selected: $channelFilter)
                         }
                     }
@@ -266,48 +273,25 @@ struct WorshipFeedView: View {
     }
 
     /// Genre filters over the cache — free and instant, unlike a search.
-    private var genreChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(WorshipGenre.allCases) { option in
-                    Text(option.title)
-                        .font(.caption.weight(genre == option ? .semibold : .medium))
-                        .foregroundStyle(genre == option ? Color.white : Color.primary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule().fill(genre == option
-                                           ? Color.accentColor
-                                           : Color(.secondarySystemBackground))
-                        )
-                        .contentShape(Capsule())
-                        .onTapGesture { genre = option }
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-    }
-
     private var topicChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(topics) { topic in
                     Text(topic.label)
                         .font(.caption.weight(.medium))
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         .background(.quaternary, in: Capsule())
                 }
                 Button { showAddTopic = true } label: {
-                    Label("Topic", systemImage: "plus")
+                    Label("주제", systemImage: "plus")
                         .font(.caption.weight(.medium))
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 11)
                         .padding(.vertical, 7)
                         .background(.quaternary, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
         }
     }
 
@@ -504,7 +488,7 @@ struct WorshipFeedView: View {
                 return video.channelId.map(channelIds.contains) ?? false
                     || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
             }
-            .filter { genre.matches($0.title) }
+            .filter { length.matches(seconds: $0.durationSeconds) }
             .filter { !$0.isPinned }
             .prefix(Self.browseCap)
             .map { $0 }
@@ -516,7 +500,7 @@ struct WorshipFeedView: View {
     private func cappedVideos(forChannel channel: Channel) -> [CachedVideo] {
         allVideos
             .filter { $0.channelId == channel.youtubeChannelId }
-            .filter { genre.matches($0.title) }
+            .filter { length.matches(seconds: $0.durationSeconds) }
             .prefix(Self.perSectionCap)
             .map { $0 }
     }
