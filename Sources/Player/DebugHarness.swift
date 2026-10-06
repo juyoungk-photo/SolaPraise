@@ -169,7 +169,13 @@ struct DebugSeedContainer: View {
         try? modelContext.save()
     }
 }
-#endif
+/// NOTE: the DEBUG guard used to close here, which left the two views below
+/// it compiled into Release — where SwiftUI is not even imported, because
+/// that import is inside the guard. The app would not build for a device at
+/// all: `unknown attribute 'State'`, `cannot find type 'View'`. It is a
+/// compile error rather than a runtime one, so every simulator build passed
+/// and only an archive would have caught it. The guard now closes at the end
+/// of the file, where it belongs.
 
 /// Builds a SavedSong from the sample session so the lead sheet, section
 /// detection and PDF export can be checked without a microphone.
@@ -291,3 +297,5 @@ struct ApiCheckView: View {
         log("검색 남음: \(quota.searchesRemaining)/\(QuotaLedger.dailySearchLimit)")
     }
 }
+
+#endif
