@@ -117,6 +117,10 @@ struct ServicePrepView: View {
     /// Done once per appearance of the list, not on every layout pass.
     @State private var didLandOnUpcoming = false
     @State private var addingItemTo: TeamService?
+    /// A chart the team already made, opened from a 콘티 row.
+    @State private var openChart: SavedSong?
+    /// The song a picked audio file will be analysed as.
+    @State private var analysing: String?
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -195,6 +199,21 @@ struct ServicePrepView: View {
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
+            .navigationDestination(item: $openChart) { LeadSheetView(song: $0) }
+            // Picking a file here hands it to 작업실 with the song's name
+            // already attached, so the chart comes out labelled rather than
+            // called whatever the file was.
+            .fileImporter(
+                isPresented: Binding(get: { analysing != nil },
+                                     set: { if !$0 { analysing = nil } }),
+                allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio],
+                allowsMultipleSelection: false
+            ) { result in
+                guard case .success(let urls) = result, let url = urls.first,
+                      let title = analysing else { return }
+                StudioInbox.shared.submit(url: url, title: title)
+                analysing = nil
+            }
             // An alert, not a confirmationDialog. On iPad the latter is a
             // popover anchored to whatever presented it, and anchored to a
             // row inside a List it was drawn clipped — the buttons were
@@ -636,10 +655,17 @@ struct ServicePrepView: View {
                     if let person = item.person {
                         Text(person).font(.caption2).foregroundStyle(.secondary)
                     }
-                    if item.kind == .song, existingSheet(forTitle: item.title) != nil {
-                        Label("악보", systemImage: "music.quarternote.3")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
+                    if item.kind == .song, let chart = existingSheet(forTitle: item.title) {
+                        // Tappable. It used to be a label that said a chart
+                        // existed and gave you no way to it — the one place
+                        // in the app that knew the team had already worked
+                        // this song out, and a dead end.
+                        Button { openChart = chart } label: {
+                            Label("악보", systemImage: "music.quarternote.3")
+                                .font(.caption2)
+                                .foregroundStyle(.green)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 if let notes = item.notes {
@@ -650,7 +676,16 @@ struct ServicePrepView: View {
             Spacer(minLength: 0)
 
             if item.kind == .song {
-                SheetMusicMenu(title: item.title) {
+                Menu {
+                    Section {
+                        Button {
+                            analysing = item.title
+                        } label: {
+                            Label("이 곡 분석하기", systemImage: "waveform.badge.magnifyingglass")
+                        }
+                    }
+                    SheetMusicLinks(title: item.title)
+                } label: {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
