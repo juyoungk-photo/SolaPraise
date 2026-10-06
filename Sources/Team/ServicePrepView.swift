@@ -116,6 +116,9 @@ struct ServicePrepView: View {
     @State private var rowError: [String: String] = [:]
     /// Done once per appearance of the list, not on every layout pass.
     @State private var didLandOnUpcoming = false
+    /// Months whose weeks are hidden. Filled on first load with every month
+    /// but the one in hand — see monthHeader.
+    @State private var foldedMonths: Set<Date> = []
     @State private var addingItemTo: TeamService?
     /// A chart the team already made, opened from a 콘티 row.
     @State private var openChart: SavedSong?
@@ -468,6 +471,9 @@ struct ServicePrepView: View {
                 // thing that was wrong before.
                 guard !didLandOnUpcoming, let next = team.upcoming else { return }
                 didLandOnUpcoming = true
+                let here = monthStart(next.date)
+                foldedMonths = Set(team.services.map { monthStart($0.date) })
+                    .subtracting([here])
                 proxy.scrollTo(Calendar.current.startOfDay(for: next.date),
                                anchor: .top)
             }
@@ -821,23 +827,9 @@ struct ServicePrepView: View {
                     // A month label where the month turns, so scrolling
                     // through a quarter does not become undifferentiated.
                     if isFirstOfMonth(upcoming, in: future) {
-                        // A label with a hairline, not a bar. It was a full
-                        // list row, so it took a row's height and the list's
-                        // own chrome — which is why the first one looked like
-                        // the top of a card.
-                        HStack(spacing: 8) {
-                            Text(upcoming.date, format: .dateTime.year().month(.wide))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            VStack { Divider() }
-                        }
-                        .padding(.top, 14)
-                        .padding(.bottom, 2)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16,
-                                                  bottom: 0, trailing: 16))
+                        monthHeader(for: upcoming, in: future)
                     }
+                    if !isFolded(upcoming) {
                     scheduleRow(upcoming)
                         // Dimmed, not hidden. Last Sunday is a record, not a
                         // decision, so it should be findable without
@@ -854,10 +846,80 @@ struct ServicePrepView: View {
                         // whatever padding the list felt like adding.
                         .listRowInsets(EdgeInsets(top: 0, leading: 8,
                                                   bottom: 0, trailing: 12))
+                    }
                 }
             }
         }
     }
+
+    /// A month, and whether its weeks are showing.
+    ///
+    /// A year of Sundays is a long scroll to answer three of them, so months
+    /// other than the one in hand arrive folded: the header says how many
+    /// are in there and opens them when tapped. The month holding the open
+    /// service is always showing, because that is the one you came for.
+    private func monthHeader(for service: TeamService,
+                             in list: [TeamService]) -> some View {
+        let month = monthStart(service.date)
+        let count = list.filter { monthStart($0.date) == month }.count
+        let folded = foldedMonths.contains(month)
+        return Button {
+            withAnimation(.snappy(duration: 0.22)) {
+                if folded { foldedMonths.remove(month) }
+                else { foldedMonths.insert(month) }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(service.date, format: .dateTime.year().month(.wide))
+                    .font(.caption2.weight(.semibold))
+                Image(systemName: folded ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                if folded {
+                    Text("\(count)")
+                        .font(.caption2.monospacedDigit())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.18)))
+                }
+                VStack { Divider() }
+            }
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 14)
+        .padding(.bottom, 2)
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+    }
+
+    private func monthStart(_ date: Date) -> Date {
+        Calendar.current.date(from:
+            Calendar.current.dateComponents([.year, .month], from: date)) ?? date
+    }
+
+    /// The month holding the open service never folds, whatever is in the set.
+    private func isFolded(_ service: TeamService) -> Bool {
+        let month = monthStart(service.date)
+        if let open = self.service, monthStart(open.date) == month { return false }
+        return foldedMonths.contains(month)
+    }
+
+    /// The gold rule beside a week still waiting on you.
+    ///
+    /// Off while the gold answer track carries that on its own — two marks
+    /// for one fact was more emphasis than the row needed. The drawing stays
+    /// so turning it back on is one `true`.
+    private static let showsNeedsAnswerBar = false
+
+    /// Shared by the row's padding and by anything aligning to the tile, so
+    /// the two cannot drift apart again.
+    private static let rowVerticalPadding: CGFloat = 10
+
+    /// What dateTile comes out at: month strip, day, weekday, and the
+    /// padding around them.
+    private var tileHeight: CGFloat { isWide ? 58 : 50 }
 
     /// The date as a calendar tile: month above, day below, the way a
     /// calendar icon reads. "Sun, Oct 4" put the least useful word first —
@@ -1147,7 +1209,7 @@ struct ServicePrepView: View {
                 }
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, Self.rowVerticalPadding)
         .padding(.leading, 9)
         // The open service stands slightly off the page.
         //
@@ -1168,19 +1230,17 @@ struct ServicePrepView: View {
         // is the thing that makes the month scannable, and a bar that pushed
         // some rows sideways would cost more than it bought.
         .overlay(alignment: .topLeading) {
-            if needsAnswer {
-                // Beside the date, not down the whole row.
-                //
-                // Full height it ran the length of a row that on a phone is
-                // two lines of wrapped chips tall — a long stripe next to a
-                // track that is already gold, which is emphasis rather than
-                // information. Cropped to the tile it reads as a mark on the
-                // week itself, and the eye still finds it scanning the
-                // column.
+            // Off for now — see showsNeedsAnswerBar.
+            //
+            // Its height and offset were hand-numbers that stopped matching
+            // the tile the moment the row's padding changed, so it sat a few
+            // points high and short of the tile it was meant to mark. Tied
+            // to the same numbers the tile uses now, rather than guessed.
+            if Self.showsNeedsAnswerBar, needsAnswer {
                 Capsule()
                     .fill(Color.accentColor)
-                    .frame(width: 3, height: isWide ? 48 : 44)
-                    .padding(.top, 8)
+                    .frame(width: 3, height: tileHeight)
+                    .padding(.top, Self.rowVerticalPadding)
             }
         }
         .id(Calendar.current.startOfDay(for: upcoming.date))
