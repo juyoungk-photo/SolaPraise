@@ -2,9 +2,16 @@
 
 ## The mark
 
-Three C's, nested and turned to face upward. Read one way they are the
-church's initials; read the other they are hands open to receive — and the
-nested arcs with the mark above also read as a church with its steeple.
+A vessel with two lines cut through it. Three bands remain: the church's
+initials read one way, a cup open to receive reads the other, and the whole
+with the cross above also reads as a church with its steeple.
+
+It is a solid shape on purpose. Three separate nested strokes is the WiFi
+glyph's own construction, and the first version was that glyph mirrored —
+turning it upward and swapping the dot for a cross helped, but the
+silhouette still belonged to the same family. A filled bowl with gaps cut
+out of it is a different kind of thing rather than a milder version of the
+same thing: a signal meter is strokes, a vessel is a shape.
 
 Above them, a small cross: what is held up, and the centre the three C's
 are arranged around. It began as a plain dot, which was a mistake — arcs
