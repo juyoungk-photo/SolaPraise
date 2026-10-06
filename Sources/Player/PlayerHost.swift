@@ -191,12 +191,6 @@ struct PlayerStage: View {
                 let dockBottom = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
                     ?? geo.size.height
 
-                // 0 is the full player, 1 is docked, and a drag lives in
-                // between. Pulling the big player down used to do nothing at
-                // all until you let go — the gesture had only an onEnded —
-                // so there was no sense of dragging it anywhere, just a jump
-                // once you released.
-                let t = dockProgress(mini: mini)
 
                 // Full width, until that makes the video too tall — which is
                 // what landscape on an iPad does: 16:9 of a 1194pt width is
@@ -214,6 +208,20 @@ struct PlayerStage: View {
                 let miniH = miniW * 9 / 16
                 let miniX = AppLayout.floatingInset + PlayerStage.miniPadding
                 let miniY = dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding
+
+                // 0 is the full player, 1 is docked, and a drag lives in
+                // between — measured against the distance the player actually
+                // has to fall, not against a fixed number of points.
+                //
+                // It used to be translation/220 on a phone where the dock is
+                // some 600pt below the video, so the frame ran three times
+                // faster than the finger: you pushed it an inch and it fled.
+                // Dividing by the real travel makes y work out to exactly the
+                // finger's own displacement, so the video stays under the
+                // thumb the whole way down and shrinks as it goes.
+                let travel = max(1, miniY)
+                let base: CGFloat = mini ? 1 : 0
+                let t = min(1, max(0, base + drag / travel))
 
                 let width = videoWidth + (miniW - videoWidth) * t
                 let height = videoHeight + (miniH - videoHeight) * t
@@ -288,7 +296,7 @@ struct PlayerStage: View {
                         // other half of why close was unreliable. Expanding
                         // is the title's job, and dragging still works
                         // anywhere because a drag and a tap do not collide.
-                        .gesture(dragGesture(mini: true))
+                        .gesture(dragGesture(mini: true, travel: travel))
                         .transition(.opacity)
                     }
 
@@ -311,7 +319,7 @@ struct PlayerStage: View {
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                     .offset(x: originX, y: originY)
                     .allowsHitTesting(t < 0.5)
-                    .gesture(dragGesture(mini: mini))
+                    .gesture(dragGesture(mini: mini, travel: travel))
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
             }
@@ -326,45 +334,31 @@ struct PlayerStage: View {
 
     /// Down docks it, up restores it. The threshold is generous because this
     /// competes with the scroll view underneath.
-    /// How far between full and docked the player currently sits.
+    /// Follows the finger from the first few points of movement.
     ///
-    /// The resting value is whichever mode it is in; a drag in progress moves
-    /// it continuously between the two, which is the whole point — the player
-    /// should shrink under the finger rather than wait for it to let go.
-    private func dockProgress(mini: Bool) -> CGFloat {
-        let base: CGFloat = mini ? 1 : 0
-        guard drag != 0 else { return base }
-        if mini {
-            // Dragging up re-opens it, so upward travel takes t back to 0.
-            return max(0, min(1, base - max(0, -drag) / Self.expandTravel))
-        }
-        return max(0, min(1, base + max(0, drag) / Self.shrinkTravel))
-    }
-
-    /// Far enough to be a decision, short enough that the player is visibly
-    /// most of the way there before the commit point.
-    private static let shrinkTravel: CGFloat = 220
-    private static let expandTravel: CGFloat = 160
-
-    private func dragGesture(mini: Bool) -> some Gesture {
-        DragGesture(minimumDistance: 12)
+    /// `minimumDistance` is small but not zero: the video is a web view with
+    /// YouTube's own controls inside it, and a gesture that began at zero
+    /// would swallow the taps meant for play and pause.
+    private func dragGesture(mini: Bool, travel: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 5)
             .onChanged { value in
                 // Sideways swipes belong to whatever is underneath.
                 guard abs(value.translation.width) < 120 else { return }
                 drag = value.translation.height
             }
             .onEnded { value in
-                let travelled = value.translation.height
+                let moved = value.translation.height
+                let thrown = value.predictedEndTranslation.height
                 let sideways = abs(value.translation.width) >= 120
                 withAnimation(WatchScreen.stageAnimation) {
                     drag = 0
                     guard !sideways else { return }
-                    // Past halfway, or thrown hard enough to mean it.
-                    if !mini, travelled > Self.shrinkTravel / 2
-                        || (!mini && value.predictedEndTranslation.height > Self.shrinkTravel) {
+                    // A third of the way, or let go travelling fast enough to
+                    // get there — the same two tests any sheet dismissal uses.
+                    let commit = travel * 0.33
+                    if !mini, moved > commit || thrown > travel * 0.6 {
                         host.minimize()
-                    } else if mini, travelled < -Self.expandTravel / 2
-                        || (mini && value.predictedEndTranslation.height < -Self.expandTravel) {
+                    } else if mini, -moved > commit || -thrown > travel * 0.6 {
                         host.expand()
                     }
                 }

@@ -1260,33 +1260,13 @@ struct ServicePrepView: View {
         let spokenFor = Set(parts.compactMap(\.signupId))
         let rest = answers.filter { !spokenFor.contains($0.id) }
 
-        return Group {
-            if isWide {
-                // Beside the service, where every row keeping the same height
-                // is what makes the month scannable: one line, scrolling,
-                // fading out rather than cut off mid-chip.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) { chips(parts, rest, pending) }
-                        .padding(.horizontal, 1)
-                }
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.93),
-                            .init(color: .clear, location: 1)
-                        ],
-                        startPoint: .leading, endPoint: .trailing
-                    )
-                )
-            } else {
-                // A phone fits about three and a half chips on a line, so
-                // most of the team sat off screen behind a scroll nobody
-                // thinks to try. Wrapping spends a line and shows everyone,
-                // which is the question this row exists to answer.
-                ChipFlow { chips(parts, rest, pending) }
-            }
-        }
+        // Wrapping on both sizes.
+        //
+        // iPad used to keep them on one scrolling line so every row stayed
+        // the same height, which made the month scannable — but it also hid
+        // half the team behind a scroll nobody tries, on the row whose job is
+        // to say who is on. Seeing everyone beats rows of equal height.
+        return ChipFlow { chips(parts, rest, pending) }
     }
 
     @ViewBuilder
