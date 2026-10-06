@@ -22,6 +22,10 @@ import AVFoundation
 
 struct AudioSourceSheet: View {
     let title: String
+    /// What we already know about the recording being listened to, used to
+    /// sort the store's answers — see AudioSourceSearch.ranked.
+    var seconds: Int?
+    var artist: String?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -235,7 +239,10 @@ struct AudioSourceSheet: View {
         errorMessage = nil
         defer { isSearching = false; searched = true }
         do {
-            tracks = try await AudioSourceSearch.search(query)
+            tracks = AudioSourceSearch.ranked(
+                try await AudioSourceSearch.search(query),
+                seconds: seconds, artist: artist
+            )
         } catch {
             tracks = []
             errorMessage = "음원을 찾지 못했습니다: \(error.localizedDescription)"

@@ -11,6 +11,8 @@ import SwiftUI
 /// menu of search links now show the search itself.
 struct AudioSourceMenu<Label: View>: View {
     let title: String
+    var seconds: Int?
+    var artist: String?
     @ViewBuilder var label: Label
 
     @State private var showSheet = false
@@ -23,7 +25,7 @@ struct AudioSourceMenu<Label: View>: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showSheet) {
-            AudioSourceSheet(title: title)
+            AudioSourceSheet(title: title, seconds: seconds, artist: artist)
         }
     }
 }

@@ -102,6 +102,58 @@ enum AudioSourceSearch {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Ranks what the store returned against what we already know about the
+    /// recording being listened to.
+    ///
+    /// The store returns whatever matches the words, which for a hymn is
+    /// dozens of recordings by dozens of artists. Two things we already have
+    /// separate them: how long the video is, and who published it. A track
+    /// within a few seconds of the video is very likely the same recording;
+    /// one by the same artist is very likely the same people. Neither is
+    /// certain, so they sort rather than filter — the right answer is always
+    /// still in the list, just not under nine wrong ones.
+    static func ranked(_ tracks: [Track],
+                       seconds: Int?,
+                       artist: String?) -> [Track] {
+        guard seconds != nil || artist != nil else { return tracks }
+
+        func artistKey(_ text: String) -> String {
+            text.lowercased()
+                .replacingOccurrences(of: "[^a-z0-9가-힣]", with: "",
+                                      options: .regularExpression)
+        }
+        // A YouTube channel is called "어노인팅 ANOINTING - Topic"; the store
+        // calls the same people "Anointing". Either half matching is enough.
+        let wanted = artist.map(artistKey)
+
+        func score(_ track: Track) -> Double {
+            var points = 0.0
+            if let seconds, let ms = track.durationMillis {
+                let delta = abs(Double(ms) / 1000 - Double(seconds))
+                // Inside 5 seconds is almost certainly the same cut; past a
+                // minute it tells us nothing.
+                if delta <= 5 { points += 3 }
+                else if delta <= 15 { points += 2 }
+                else if delta <= 45 { points += 1 }
+            }
+            if let wanted, !wanted.isEmpty {
+                let candidate = artistKey(track.artist)
+                if !candidate.isEmpty,
+                   wanted.contains(candidate) || candidate.contains(wanted) {
+                    points += 2
+                }
+            }
+            return points
+        }
+
+        // Stable: equal scores keep the store's own ordering, which is its
+        // relevance ranking and better than anything we would invent.
+        return tracks.enumerated()
+            .map { (index: $0.offset, track: $0.element, score: score($0.element)) }
+            .sorted { ($0.score, -Double($0.index)) > ($1.score, -Double($1.index)) }
+            .map(\.track)
+    }
+
     static func search(_ term: String, limit: Int = 20) async throws -> [Track] {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }

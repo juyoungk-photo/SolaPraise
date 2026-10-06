@@ -271,7 +271,9 @@ struct WatchScreen: View {
                             }
                             .buttonStyle(.plain)
 
-                            AudioSourceMenu(title: item.title) {
+                            AudioSourceMenu(title: item.title,
+                                            seconds: item.durationSeconds,
+                                            artist: item.channelTitle) {
                                 Image(systemName: "waveform.badge.magnifyingglass")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -506,7 +508,9 @@ struct WatchScreen: View {
             // official chart — which usually exists and is sold by the team
             // that wrote the song — was invisible almost every time.
             if showsChordButton, let current {
-                AudioSourceMenu(title: current.title) {
+                AudioSourceMenu(title: current.title,
+                                seconds: current.durationSeconds,
+                                artist: current.channelTitle) {
                     HStack(spacing: 6) {
                         Image(systemName: "waveform.badge.magnifyingglass")
                         VStack(alignment: .leading, spacing: 1) {
