@@ -1114,25 +1114,36 @@ struct ServicePrepView: View {
             }
             .disabled(team.isReadOnly)
 
-            // Three answers, three buttons, all three visible.
+            // Three answers, three segments, all three visible.
             //
             // A switch has two positions and there are three things to say —
             // yes, not sure, no — so "off" was carrying both "I cannot come"
             // and "I have not answered", which are opposite things to a
-            // leader looking for a gap. Showing all three, greyed until
-            // chosen, also makes the row look like a question waiting for an
-            // answer rather than a setting that happens to be off.
-            HStack(spacing: 2) {
-                answerButton(.available, "checkmark.circle", upcoming, shown)
-                answerButton(.maybe, "questionmark.circle", upcoming, shown)
-                answerButton(.declined, "xmark.circle", upcoming, shown)
+            // leader looking for a gap.
+            //
+            // They sit in a trough rather than floating free. Three outlined
+            // glyphs on the page read as status being REPORTED; the same
+            // three in a track, with one of them raised, read as a choice
+            // being OFFERED. That is the whole difference between a row that
+            // looks informative and a row that looks like a question.
+            HStack(spacing: 0) {
+                answerButton(.available, "checkmark", upcoming, shown)
+                answerButton(.maybe, "questionmark", upcoming, shown)
+                answerButton(.declined, "xmark", upcoming, shown)
             }
+            .padding(2)
+            .background(
+                Capsule().fill(Color(.tertiarySystemFill))
+            )
+            .overlay(
+                Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+            )
         }
         .layoutPriority(1)
     }
 
-    /// One of the three. Pressing the one already chosen takes the answer
-    /// back, so every button is its own undo.
+    /// One segment of the three. Pressing the chosen one takes the answer
+    /// back, so every segment is its own undo.
     private func answerButton(_ status: SignupStatus,
                               _ symbol: String,
                               _ upcoming: TeamService,
@@ -1144,15 +1155,24 @@ struct ServicePrepView: View {
                 else { await record(status, for: upcoming) }
             }
         } label: {
-            Image(systemName: isOn ? "\(symbol).fill" : symbol)
-                .font(.system(size: 21))
-                .foregroundStyle(isOn ? tint(status) : Color.secondary.opacity(0.45))
-                .frame(width: 32, height: 34)
-                .contentShape(Rectangle())
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                // Solid when chosen, so the answer is the thing that stands
+                // out rather than the control around it. Yellow needs a dark
+                // glyph; the other two carry white.
+                .foregroundStyle(isOn
+                                 ? (status == .maybe ? Color.black : Color.white)
+                                 : Color.secondary)
+                .frame(width: 34, height: 28)
+                .background(
+                    Capsule().fill(isOn ? tint(status) : Color.clear)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(team.isReadOnly || inFlight[upcoming.id] != nil)
         .accessibilityLabel(status.label)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 
     /// Picking a part is answering: one gesture, not a sheet and a switch.
