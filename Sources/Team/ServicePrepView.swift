@@ -338,6 +338,81 @@ struct ServicePrepView: View {
 
     // MARK: - Content
 
+    /// Who is answering, pinned above the schedule.
+    ///
+    /// It used to be the first row of the list, where it scrolled away — and
+    /// sat directly against the month heading in the same grey, so the two
+    /// read as one indeterminate band. It is its own bar now, on the
+    /// toolbar's material, with a rule under it.
+    private var accountBar: some View {
+            // Who is answering, and the way to change it, on one line.
+            //
+            // No heading above it and no instructions below it. "예배표"
+            // named a list that is plainly a list of services, and the
+            // sentence explaining that a row opens when you press it was
+            // describing a chevron that already says so. A screen that
+            // needs a caption is a screen to fix, not to caption.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Group {
+                    if let email = team.actingEmail(auth: auth, planning: planning) {
+                        Text("로그인 계정: ").foregroundStyle(.secondary)
+                            + Text(email)
+                    } else {
+                        Text("로그인된 계정이 없습니다").foregroundStyle(.secondary)
+                    }
+                }
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+                Menu {
+                    if planning.isSignedIn {
+                        Button("교회 계정 연결 해제") {
+                            planning.signOut()
+                            team.configure(auth: auth, planning: planning)
+                        }
+                    } else {
+                        Button("교회 계정으로 전환") {
+                            Task {
+                                await planning.signIn()
+                                team.configure(auth: auth, planning: planning)
+                                if let id = TeamSheetSource.current {
+                                    await team.load(sheetId: id)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    // Tinted, not systemBackground: on a dark row that
+                    // fill is the same colour as what is behind it, and
+                    // the chip read as plain text rather than as
+                    // something to press.
+                    Text("계정 변경")
+                        .font(.caption2)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+
+            if let message = planning.lastError {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
     private func content() -> some View {
         ScrollViewReader { proxy in
             List {
@@ -356,6 +431,7 @@ struct ServicePrepView: View {
             // The section lost its header and kept the header's space, so the
             // list started with a band of nothing under the navigation title.
             .listSectionSpacing(.compact)
+            .safeAreaInset(edge: .top, spacing: 0) { accountBar }
             .onAppear {
                 scrollTo = { id in proxy.scrollTo(id, anchor: .top) }
                 // Land on the next service, not on the oldest one.
@@ -671,7 +747,10 @@ struct ServicePrepView: View {
         .font(.caption2)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Capsule().fill(color.opacity(dashed ? 0.06 : 0.14)))
+        // Lifted a step. At 0.14 a filled chip sat almost flat against the
+        // row and the colour was doing all the work; the fill should be
+        // readable as a fill.
+        .background(Capsule().fill(color.opacity(dashed ? 0.11 : 0.22)))
         .foregroundStyle(color)
     }
 
@@ -695,66 +774,6 @@ struct ServicePrepView: View {
         let future = team.services.sorted { $0.date < $1.date }
         if !future.isEmpty {
             Section {
-                // Who is answering, and the way to change it, on one line.
-                //
-                // No heading above it and no instructions below it. "예배표"
-                // named a list that is plainly a list of services, and the
-                // sentence explaining that a row opens when you press it was
-                // describing a chevron that already says so. A screen that
-                // needs a caption is a screen to fix, not to caption.
-                HStack(spacing: 6) {
-                    Group {
-                        if let email = team.actingEmail(auth: auth, planning: planning) {
-                            Text("로그인 계정: ").foregroundStyle(.secondary)
-                                + Text(email)
-                        } else {
-                            Text("로그인된 계정이 없습니다").foregroundStyle(.secondary)
-                        }
-                    }
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                    Menu {
-                        if planning.isSignedIn {
-                            Button("교회 계정 연결 해제") {
-                                planning.signOut()
-                                team.configure(auth: auth, planning: planning)
-                            }
-                        } else {
-                            Button("교회 계정으로 전환") {
-                                Task {
-                                    await planning.signIn()
-                                    team.configure(auth: auth, planning: planning)
-                                    if let id = TeamSheetSource.current {
-                                        await team.load(sheetId: id)
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        // Tinted, not systemBackground: on a dark row that
-                        // fill is the same colour as what is behind it, and
-                        // the chip read as plain text rather than as
-                        // something to press.
-                        Text("계정 변경")
-                            .font(.caption2)
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.16)))
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer(minLength: 0)
-                }
-                .font(.caption)
-
-                if let message = planning.lastError {
-                    Text(message)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-
                 ForEach(future) { upcoming in
                     // A month label where the month turns, so scrolling
                     // through a quarter does not become undifferentiated.
@@ -1068,7 +1087,7 @@ struct ServicePrepView: View {
         // drawing a box around half the screen.
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(open ? Color.primary.opacity(0.05) : Color.clear)
+                .fill(open ? Color.primary.opacity(0.10) : Color.clear)
                 .padding(.horizontal, -8)
                 .padding(.vertical, -2)
         )
