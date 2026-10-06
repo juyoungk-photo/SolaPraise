@@ -970,6 +970,8 @@ struct ServicePrepView: View {
         let answers = team.responses(for: upcoming)
         let mine = answers.first { team.isMe($0.email, auth: auth, planning: planning) }
         let open = isOpen(upcoming)
+        let shown = inFlight[upcoming.id] ?? mine?.status
+        let needsAnswer = shown == nil && !upcoming.isPast
 
         return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 7) {
@@ -1023,7 +1025,8 @@ struct ServicePrepView: View {
                         Spacer(minLength: 8)
                     }
 
-                    answerControl(upcoming, mine: mine)
+                    answerControl(upcoming, mine: mine,
+                                  shown: shown, needsAnswer: needsAnswer)
                 }
 
                 if !isWide {
@@ -1048,6 +1051,29 @@ struct ServicePrepView: View {
             }
         }
         .padding(.vertical, 4)
+        .padding(.leading, 9)
+        // A rule down the edge of a week still waiting on you.
+        //
+        // The space is reserved on every row, painted on only some, so the
+        // date tiles still start at the same x all the way down — the column
+        // is the thing that makes the month scannable, and a bar that pushed
+        // some rows sideways would cost more than it bought.
+        .overlay(alignment: .topLeading) {
+            if needsAnswer {
+                // Beside the date, not down the whole row.
+                //
+                // Full height it ran the length of a row that on a phone is
+                // two lines of wrapped chips tall — a long stripe next to a
+                // track that is already gold, which is emphasis rather than
+                // information. Cropped to the tile it reads as a mark on the
+                // week itself, and the eye still finds it scanning the
+                // column.
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: 3, height: isWide ? 48 : 44)
+                    .padding(.top, 8)
+            }
+        }
         .id(Calendar.current.startOfDay(for: upcoming.date))
     }
 
@@ -1062,9 +1088,11 @@ struct ServicePrepView: View {
     ///
     /// The switch stays for the thing it is good at: in or out, without
     /// thinking about which part.
-    private func answerControl(_ upcoming: TeamService, mine: TeamSignup?) -> some View {
+    private func answerControl(_ upcoming: TeamService,
+                               mine: TeamSignup?,
+                               shown: SignupStatus?,
+                               needsAnswer: Bool) -> some View {
         let key = upcoming.id
-        let shown = inFlight[key] ?? mine?.status
         return HStack(spacing: 8) {
             Menu {
                 Section("맡을 파트") {
@@ -1134,7 +1162,6 @@ struct ServicePrepView: View {
             // Tinted, the rows still waiting on you are the loud ones and
             // the done ones recede. Only for weeks still ahead: nothing is
             // owed on a Sunday that has already happened.
-            let needsAnswer = shown == nil && !upcoming.isPast
             HStack(spacing: 0) {
                 answerButton(.available, "checkmark", upcoming, shown,
                              needsAnswer: needsAnswer)
