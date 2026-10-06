@@ -193,6 +193,15 @@ struct ChannelDetailView: View {
 struct PlaylistBar: View {
     let playlist: CachedPlaylist
 
+    private func badge(_ text: String, _ color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.18)))
+            .foregroundStyle(color)
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: playlist.isCollaborative
@@ -211,12 +220,12 @@ struct PlaylistBar: View {
             // service as it happened rather than anything anyone curated.
             // Worth saying, because "주일 2부예배" reads like a set list.
             if playlist.isLiveArchive {
-                Text("실황")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.red.opacity(0.18)))
-                    .foregroundStyle(.red)
+                badge("실황", .red)
+            } else if playlist.isAutoCollected {
+                // Not the church's playlist: the app's filter over that
+                // channel's uploads. The channel has no standing 주일 설교
+                // list, so this is assembled rather than published.
+                badge("자동 모음", .secondary)
             }
 
             Spacer(minLength: 8)

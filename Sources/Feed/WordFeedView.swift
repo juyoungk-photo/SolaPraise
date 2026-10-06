@@ -49,6 +49,8 @@ struct WordFeedView: View {
     @State private var showAddChannel = false
     @State private var isLoadingPlaylist = false
     @Environment(\.horizontalSizeClass) private var sizeClass
+    /// The passage a hero card offered to open.
+    @State private var reading: ScriptureReference.Passage?
     @EnvironmentObject private var daily: DailyReading
     @State private var showReading = false
     @State private var playlistError: String?
@@ -78,6 +80,18 @@ struct WordFeedView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showAddChannel) { AddChannelView(defaultPurpose: .word) }
+            .sheet(item: $reading) { passage in
+                NavigationStack {
+                    ScrollView { ScripturePanel(passage: passage).padding(.horizontal, 16) }
+                        .navigationTitle(passage.display)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("닫기") { reading = nil }
+                            }
+                        }
+                }
+            }
             .refreshable { await refresh() }
             .task {
                 #if DEBUG
@@ -243,23 +257,61 @@ struct WordFeedView: View {
         let today = pinnedVideo
         let sermon = latestSermon
         if today != nil || sermon != nil {
-            HStack(alignment: .top, spacing: 14) {
-                if let today {
-                    Button { play(today, in: [today]) } label: {
-                        PinnedVideoCard(video: today)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 14) {
+                    if let today {
+                        heroCard(today)
                     }
-                    .buttonStyle(.plain)
-                }
-                if sizeClass == .regular, let sermon, sermon.videoId != today?.videoId {
-                    Button { play(sermon, in: [sermon]) } label: {
-                        PinnedVideoCard(video: sermon)
+                    if sizeClass == .regular, let sermon,
+                       sermon.videoId != today?.videoId {
+                        heroCard(sermon)
                     }
-                    .buttonStyle(.plain)
+                    // A card alone should not grow to fill the row. On a
+                    // Monday there is no QT video, so the sermon card
+                    // stretched the whole width of an iPad — one enormous
+                    // thumbnail where two normal ones usually sit.
+                    if sizeClass == .regular { Spacer(minLength: 0) }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
         }
+    }
+
+    /// One hero card, with a way straight into the passage it preaches.
+    ///
+    /// The reference is in the title — "(사사기 16:15-31)" — so the app can
+    /// offer the text without anyone typing anything. Watching the sermon
+    /// and reading the passage are the same errand, and until now the second
+    /// half of it meant opening a different app.
+    @ViewBuilder
+    private func heroCard(_ video: CachedVideo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { play(video, in: [video]) } label: {
+                PinnedVideoCard(video: video)
+            }
+            .buttonStyle(.plain)
+
+            if let passage = ScriptureReference.passage(in: video.title) {
+                Button { reading = passage } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "book")
+                        Text(passage.display)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+                    .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        // Half an iPad at most, so two sit side by side and one does not
+        // sprawl across the whole screen.
+        .frame(maxWidth: sizeClass == .regular ? 380 : .infinity, alignment: .leading)
     }
 
     /// Today's from the pinned channel — which on a Saturday is 토요예배,

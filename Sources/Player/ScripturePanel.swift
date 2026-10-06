@@ -167,7 +167,10 @@ enum ScriptureReference {
 extension ScriptureReference {
 
     /// A reference found in a video title.
-    struct Passage: Equatable {
+    struct Passage: Equatable, Identifiable {
+        /// So a passage can be presented as a sheet directly.
+        var id: String { esvQuery }
+
         let koreanBook: String
         let englishBook: String
         let chapter: Int

@@ -249,6 +249,15 @@ final class CachedPlaylist {
     /// Nobody chose what is in it, so a row showing one should say so.
     var isLiveArchive: Bool { playlistId.hasPrefix("UULV") }
 
+    /// A channel's uploads (UU…) narrowed by a title filter, rather than a
+    /// playlist anyone made. The app assembles it; the channel does not have
+    /// one. Worth saying, because a row named "주일 말씀" otherwise looks
+    /// like something the church publishes.
+    var isAutoCollected: Bool {
+        playlistId.hasPrefix("UU") && !isLiveArchive
+            && !(titleFilter?.isEmpty ?? true)
+    }
+
     var thumbnailURL: URL? { thumbnailURLString.flatMap(URL.init(string:)) }
 }
 

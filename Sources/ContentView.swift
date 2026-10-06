@@ -54,8 +54,8 @@ struct ContentView: View {
     private var tabItems: [TabItem] {
         var items: [TabItem] = [
             TabItem(tag: .home, title: "홈", symbol: "square.grid.2x2"),
-            TabItem(tag: .worship, title: "찬양", symbol: "music.note"),
             TabItem(tag: .word, title: "말씀", symbol: "book.closed"),
+            TabItem(tag: .worship, title: "찬양", symbol: "music.note"),
             TabItem(tag: .library, title: "보관함", symbol: "list.bullet.rectangle")
         ]
         if teamAccess != .unconfigured, teamAccess != .signInRequired {

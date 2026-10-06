@@ -275,11 +275,12 @@ struct WorshipFeedView: View {
                         FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
                     }
                     } header: {
-                        // The channel row is gone: it pinned itself to the
-                        // top and sat there on every scroll, a row of names
-                        // costing a row of videos. Channels are in the filter
-                        // menu with everything else now.
-                        if false {
+                        // Back as its own row. Channels are the filter people
+                        // actually reach for — which of the nine am I
+                        // listening to — and burying that in a menu made the
+                        // common case a two-tap one. The menu keeps them too,
+                        // for when the row is scrolled past.
+                        if !channels.isEmpty {
                             ChannelFilterBar(channels: channels, selected: $channelFilter)
                         }
                     }

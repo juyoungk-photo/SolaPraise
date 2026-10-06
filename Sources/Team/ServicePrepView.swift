@@ -744,8 +744,10 @@ struct ServicePrepView: View {
                 Text(detail).foregroundStyle(color.opacity(0.75))
             }
         }
-        .font(.caption2)
-        .padding(.horizontal, 8)
+        // caption2 read as a footnote on names that are the point of
+        // the row. One step up, and a point of width with it.
+        .font(.caption)
+        .padding(.horizontal, 9)
         .padding(.vertical, 4)
         // Lifted a step. At 0.14 a filled chip sat almost flat against the
         // row and the colour was doing all the work; the fill should be
