@@ -146,7 +146,14 @@ enum TeamSampleData {
             roles: roles,
             signups: signups,
             plans: plans,
-            members: Set(people.map { $0.1.lowercased() })
+            members: Set(people.map { $0.1.lowercased() }),
+            // The roster, with names — which is what the chips show, so a
+            // harness without it was testing the fallback rather than the
+            // thing people will see.
+            roster: people.enumerated().map { index, person in
+                TeamStore.Member(email: person.1, name: person.0,
+                                 isActive: true, row: index + 2)
+            }
         )
     }
 }

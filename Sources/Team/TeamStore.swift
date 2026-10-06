@@ -118,19 +118,21 @@ struct PlanItem: Identifiable, Hashable {
 /// collapsing them into one word loses the distinction that decides whether
 /// to ask again next week.
 enum SignupStatus: String {
-    case available, declined, away
+    case available, maybe, declined, away
 
     init(raw: String) {
         switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
-        case "declined", "불가", "어려움": self = .declined
-        case "away", "자리비움", "부재":    self = .away
-        default:                          self = .available
+        case "declined", "불가", "어려움":            self = .declined
+        case "away", "자리비움", "부재":               self = .away
+        case "maybe", "미정", "아마", "tentative":    self = .maybe
+        default:                                     self = .available
         }
     }
 
     var label: String {
         switch self {
         case .available: return "가능"
+        case .maybe:     return "미정"
         case .declined:  return "어려움"
         case .away:      return "자리비움"
         }
@@ -279,7 +281,7 @@ final class TeamStore: ObservableObject {
     /// Drops sample data straight in, for reviewing 예배 without a sheet.
     func installSample(services: [TeamService], roles: [TeamRole],
                        signups: [Date: [TeamSignup]], plans: [Date: [PlanItem]],
-                       members: Set<String>) {
+                       members: Set<String>, roster: [Member] = []) {
         isSample = true
         sampleActingEmail = members.sorted().first
         self.services = services
@@ -287,6 +289,7 @@ final class TeamStore: ObservableObject {
         self.signups = signups
         self.plans = plans
         self.memberEmails = members
+        self.members = roster
         self.isReadOnly = false
         self.lastLoaded = Date()
     }
@@ -527,8 +530,11 @@ final class TeamStore: ObservableObject {
         func rank(_ status: SignupStatus) -> Int {
             switch status {
             case .available: return 0
-            case .declined:  return 1
-            case .away:      return 2
+            // A maybe is still somebody considering it, so it sorts above a
+            // no — a leader reading the line wants the possibles next.
+            case .maybe:     return 1
+            case .declined:  return 2
+            case .away:      return 3
             }
         }
         return seen.values.sorted {

@@ -108,7 +108,10 @@ struct ServicePrepView: View {
 
     /// What the switch was asked to be, per service, while the write is in
     /// flight — see answerControl.
-    @State private var inFlight: [String: Bool] = [:]
+    /// The answer a row was just given, held until the write settles. The
+    /// stored value does not change until the sheet has been written, so
+    /// without this a button would light up and go straight back out.
+    @State private var inFlight: [String: SignupStatus?] = [:]
     /// Why a particular row's answer did not take.
     @State private var rowError: [String: String] = [:]
     /// Done once per appearance of the list, not on every layout pass.
@@ -636,6 +639,7 @@ struct ServicePrepView: View {
     private func tint(_ status: SignupStatus) -> Color {
         switch status {
         case .available: return .green
+        case .maybe:     return .yellow
         case .declined:  return .red
         case .away:      return .orange
         }
@@ -828,8 +832,13 @@ struct ServicePrepView: View {
     /// which for a Google account is the profile name — "Juyoung Kim", not
     /// what the team calls anyone. The Members tab is where that is decided.
     private func displayName(_ signup: TeamSignup) -> String {
-        team.rosterName(for: signup.email)
-            ?? (signup.name.isEmpty ? signup.email : signup.name)
+        if let roster = team.rosterName(for: signup.email) { return roster }
+        if !signup.name.isEmpty { return signup.name }
+        // Last resort, the part before the @. A full address in a chip is
+        // both unreadable and wider than the chip, and it is a name the
+        // person never chose.
+        return signup.email.split(separator: "@").first.map(String.init)
+            ?? signup.email
     }
 
     private func isSunday(_ date: Date) -> Bool {
@@ -837,30 +846,23 @@ struct ServicePrepView: View {
     }
 
     /// What the chip says about my own answer.
-    private func answerLabel(_ mine: TeamSignup?) -> String {
-        guard let mine else { return "미지정" }
-        switch mine.status {
-        case .available: return mine.role.isEmpty ? "가능" : mine.role
-        default:         return mine.status.label
-        }
+    private func answerLabel(_ mine: TeamSignup?, shown: SignupStatus?) -> String {
+        guard let shown else { return "미지정" }
+        if shown == .available, let role = mine?.role, !role.isEmpty { return role }
+        return shown.label
     }
 
-    /// The switch, both ways.
+    /// Records one of the three answers.
     ///
-    /// On needs a part to answer with: the one already chosen, else the usual
-    /// one. With neither, the switch cannot invent an answer, so it opens the
-    /// picker instead of turning itself on — the one case where it does not
-    /// simply flip.
-    private func setAnswered(_ isOn: Bool,
-                             for upcoming: TeamService,
-                             mine: TeamSignup?) async {
+    /// 가능 needs a part to be filed against: the one already chosen, else
+    /// the usual one, else the first the sheet lists. The other two are true
+    /// of every part at once, so they never ask.
+    private func record(_ status: SignupStatus, for upcoming: TeamService) async {
         let key = upcoming.id
         rowError[key] = nil
+        inFlight[key] = .some(status)
+        defer { inFlight[key] = nil }
 
-        // These used to be a silent `return`. When either was missing the
-        // switch simply sprang back with nothing said, which is
-        // indistinguishable from a write that failed — and is most of why
-        // this took three attempts to find.
         guard let sheetId else {
             rowError[key] = "팀 시트가 연결되어 있지 않습니다. 설정에서 시트를 연결하세요."
             return
@@ -870,30 +872,39 @@ struct ServicePrepView: View {
             return
         }
 
-        if isOn {
-            let role = !(mine?.role.isEmpty ?? true) ? mine!.role : usualRole
-            guard !role.trimmingCharacters(in: .whitespaces).isEmpty else {
-                responding = upcoming
-                return
-            }
-            await team.setAvailability(
-                .available,
-                service: upcoming,
-                role: role,
-                email: email,
-                name: auth.displayName ?? email,
-                sheetId: sheetId
-            )
-        } else {
-            let ok = await team.clearAvailability(
-                service: upcoming,
-                emails: team.myAddresses(auth: auth, planning: planning),
-                sheetId: sheetId
-            )
-            if !ok {
-                rowError[key] = team.errorMessage
-                    ?? "응답을 취소하지 못했습니다. 시트에 쓰지 못했습니다."
-            }
+        let existing = team.responses(for: upcoming)
+            .first { team.isMe($0.email, auth: auth, planning: planning) }
+        let part = [existing?.role, usualRole, team.roles.first?.name]
+            .compactMap { $0 }
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "참여"
+        if status == .available { usualRole = part }
+
+        await team.setAvailability(
+            status, service: upcoming, role: part,
+            email: email, name: auth.displayName ?? email, sheetId: sheetId
+        )
+        if let message = team.errorMessage { rowError[key] = message }
+    }
+
+    /// Takes the answer back, under every address that is me.
+    private func clearAnswer(for upcoming: TeamService) async {
+        let key = upcoming.id
+        rowError[key] = nil
+        inFlight[key] = .some(nil)
+        defer { inFlight[key] = nil }
+
+        guard let sheetId else {
+            rowError[key] = "팀 시트가 연결되어 있지 않습니다. 설정에서 시트를 연결하세요."
+            return
+        }
+        let ok = await team.clearAvailability(
+            service: upcoming,
+            emails: team.myAddresses(auth: auth, planning: planning),
+            sheetId: sheetId
+        )
+        if !ok {
+            rowError[key] = team.errorMessage
+                ?? "응답을 취소하지 못했습니다. 시트에 쓰지 못했습니다."
         }
     }
 
@@ -1053,6 +1064,7 @@ struct ServicePrepView: View {
     /// thinking about which part.
     private func answerControl(_ upcoming: TeamService, mine: TeamSignup?) -> some View {
         let key = upcoming.id
+        let shown = inFlight[key] ?? mine?.status
         return HStack(spacing: 8) {
             Menu {
                 Section("맡을 파트") {
@@ -1060,7 +1072,7 @@ struct ServicePrepView: View {
                         Button {
                             Task { await choose(role.name, for: upcoming) }
                         } label: {
-                            if mine?.status == .available, mine?.role == role.name {
+                            if shown == .available, mine?.role == role.name {
                                 Label(role.name, systemImage: "checkmark")
                             } else {
                                 Text(role.name)
@@ -1068,30 +1080,26 @@ struct ServicePrepView: View {
                         }
                     }
                 }
+                // Only the part lives in here now. 어려움 and 자리비움 were in
+                // this menu, which is labelled 맡을 파트 and shaped like a
+                // picker — asking "which part are you not doing?" to say you
+                // cannot come. They are buttons of their own below.
                 Section {
-                    Button {
-                        Task { await answer(.declined, for: upcoming, role: mine?.role) }
-                    } label: { Label("이번 주는 어려움", systemImage: "xmark.circle") }
-                    Button {
-                        Task { await answer(.away, for: upcoming, role: mine?.role) }
-                    } label: { Label("자리비움", systemImage: "airplane") }
                     if mine != nil {
                         Button(role: .destructive) {
-                            Task { await setAnswered(false, for: upcoming, mine: mine) }
+                            Task { await clearAnswer(for: upcoming) }
                         } label: { Label("응답 취소", systemImage: "arrow.uturn.backward") }
                     }
-                }
-                Section {
                     Button {
                         responding = upcoming
                     } label: { Label("누가 뭘 맡았는지 보기", systemImage: "person.2") }
                 }
             } label: {
                 HStack(spacing: 3) {
-                    if let mine {
-                        Circle().fill(tint(mine.status)).frame(width: 6, height: 6)
+                    if let shown {
+                        Circle().fill(tint(shown)).frame(width: 6, height: 6)
                     }
-                    Text(answerLabel(mine))
+                    Text(answerLabel(mine, shown: shown))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                 }
@@ -1099,82 +1107,52 @@ struct ServicePrepView: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .background(
-                    Capsule().fill(mine.map { tint($0.status).opacity(0.16) }
+                    Capsule().fill(shown.map { tint($0).opacity(0.16) }
                                    ?? Color(.secondarySystemBackground))
                 )
-                .foregroundStyle(mine.map { tint($0.status) } ?? Color.secondary)
+                .foregroundStyle(shown.map { tint($0) } ?? Color.secondary)
             }
             .disabled(team.isReadOnly)
 
-            // "I cannot make it" needs a control of its own.
+            // Three answers, three buttons, all three visible.
             //
-            // The switch said 가능 or nothing, and nothing has to cover both
-            // "not answered yet" and "cannot come" — which are opposite
-            // things to a leader looking for a gap. Saying you cannot come
-            // meant finding it in a menu that looks like a part picker, so
-            // most people simply left the switch off and the row read as
-            // silence.
-            //
-            // Filled and red once pressed, so the row shows at a glance who
-            // has actually declined rather than who merely has not replied.
-            Button {
-                Task {
-                    if mine?.status == .declined {
-                        await setAnswered(false, for: upcoming, mine: mine)
-                    } else {
-                        await answer(.declined, for: upcoming, role: mine?.role)
-                    }
-                }
-            } label: {
-                Image(systemName: mine?.status == .declined
-                      ? "xmark.circle.fill" : "xmark.circle")
-                    .font(.system(size: 19))
-                    .foregroundStyle(mine?.status == .declined
-                                     ? Color.red : Color.secondary.opacity(0.6))
-                    .frame(width: 34, height: 34)
-                    .contentShape(Rectangle())
+            // A switch has two positions and there are three things to say —
+            // yes, not sure, no — so "off" was carrying both "I cannot come"
+            // and "I have not answered", which are opposite things to a
+            // leader looking for a gap. Showing all three, greyed until
+            // chosen, also makes the row look like a question waiting for an
+            // answer rather than a setting that happens to be off.
+            HStack(spacing: 2) {
+                answerButton(.available, "checkmark.circle", upcoming, shown)
+                answerButton(.maybe, "questionmark.circle", upcoming, shown)
+                answerButton(.declined, "xmark.circle", upcoming, shown)
             }
-            .buttonStyle(.plain)
-            .disabled(team.isReadOnly)
-            .accessibilityLabel(mine?.status == .declined
-                                ? "참여 어려움 취소" : "참여 어려움")
-
-            // The switch follows the finger, not the network.
-            //
-            // Its `get` read the stored answer, which does not change until
-            // the sheet has been written. So a tap flipped it, the binding
-            // re-read the old value, and it snapped back — and tapping again
-            // then sent the OPPOSITE instruction, putting back the answer you
-            // had just removed. `inFlight` holds the value you asked for
-            // until the write settles.
-            Toggle("", isOn: Binding(
-                get: { inFlight[key] ?? (mine?.status == .available) },
-                set: { isOn in
-                    inFlight[key] = isOn
-                    Task {
-                        await setAnswered(isOn, for: upcoming, mine: mine)
-                        inFlight[key] = nil
-                    }
-                }
-            ))
-            .labelsHidden()
-            .disabled(team.isReadOnly || inFlight[key] != nil)
-            .accessibilityLabel("이 예배에 참여")
         }
-        // Layout priority, not fixedSize.
-        //
-        // `.fixedSize()` draws a view at its ideal size even when the parent
-        // gave it less, and SwiftUI hit-tests against the frame it was GIVEN,
-        // not the pixels it drew. The title column beside this one asks for
-        // all remaining width, so the switch was being drawn past the right
-        // edge of its own frame — visible, and taking taps nowhere. The menu
-        // beside it still worked, which is what made it look like the switch
-        // was broken rather than the layout.
-        //
-        // Priority makes this row's controls claim their width first and the
-        // title take what is left, so what is drawn and what is tappable are
-        // the same rectangle.
         .layoutPriority(1)
+    }
+
+    /// One of the three. Pressing the one already chosen takes the answer
+    /// back, so every button is its own undo.
+    private func answerButton(_ status: SignupStatus,
+                              _ symbol: String,
+                              _ upcoming: TeamService,
+                              _ shown: SignupStatus?) -> some View {
+        let isOn = shown == status
+        return Button {
+            Task {
+                if isOn { await clearAnswer(for: upcoming) }
+                else { await record(status, for: upcoming) }
+            }
+        } label: {
+            Image(systemName: isOn ? "\(symbol).fill" : symbol)
+                .font(.system(size: 21))
+                .foregroundStyle(isOn ? tint(status) : Color.secondary.opacity(0.45))
+                .frame(width: 32, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(team.isReadOnly || inFlight[upcoming.id] != nil)
+        .accessibilityLabel(status.label)
     }
 
     /// Picking a part is answering: one gesture, not a sheet and a switch.
