@@ -319,7 +319,14 @@ struct PlayerStage: View {
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                     .offset(x: originX, y: originY)
                     .allowsHitTesting(t < 0.5)
-                    .gesture(dragGesture(mini: mini, travel: travel))
+                    // High priority, not a plain gesture.
+                    //
+                    // The video is a WKWebView, and a web view's own
+                    // recognisers claim a drag that starts on it — so pulling
+                    // the player down worked only when the touch happened to
+                    // begin off the video, which reads as "it does not
+                    // respond". This one wins first.
+                    .highPriorityGesture(dragGesture(mini: mini, travel: travel))
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
             }

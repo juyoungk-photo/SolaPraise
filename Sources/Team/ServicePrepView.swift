@@ -353,6 +353,9 @@ struct ServicePrepView: View {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
             }
+            // The section lost its header and kept the header's space, so the
+            // list started with a band of nothing under the navigation title.
+            .listSectionSpacing(.compact)
             .onAppear {
                 scrollTo = { id in proxy.scrollTo(id, anchor: .top) }
                 // Land on the next service, not on the oldest one.
@@ -1052,6 +1055,18 @@ struct ServicePrepView: View {
         }
         .padding(.vertical, 4)
         .padding(.leading, 9)
+        // The open service stands slightly off the page.
+        //
+        // Its 순서 sits inside it, so without a boundary the detail read as
+        // loose rows belonging to the whole list rather than to one Sunday.
+        // A lit panel rather than a border: it says "this one" without
+        // drawing a box around half the screen.
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(open ? Color.primary.opacity(0.05) : Color.clear)
+                .padding(.horizontal, -8)
+                .padding(.vertical, -2)
+        )
         // A rule down the edge of a week still waiting on you.
         //
         // The space is reserved on every row, painted on only some, so the

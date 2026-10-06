@@ -47,7 +47,21 @@ struct FocusPlayerView: UIViewRepresentable {
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
           <style>
             html, body { margin:0; padding:0; background:#000; width:100%; height:100%; overflow:hidden; }
-            #player { width:100%; height:100%; }
+            /* The API replaces #player with an iframe and gives that iframe
+               an inline size — 640x390 unless told otherwise. An inline style
+               beats an id selector, so the old `#player { width:100% }` lost,
+               and the video sat at a fixed size inside a view of a different
+               one: black, until some later frame change happened to line the
+               two up. That is why docking and restoring "fixed" it.
+               !important and absolute positioning win, whatever the API
+               writes inline. */
+            #player, #player iframe, body > iframe {
+              position:absolute !important;
+              top:0; left:0;
+              width:100% !important;
+              height:100% !important;
+              border:0;
+            }
           </style>
         </head>
         <body>
@@ -87,8 +101,23 @@ struct FocusPlayerView: UIViewRepresentable {
               hasYT: (typeof YT !== 'undefined')
             });
 
+            // The web view is resized constantly — docking, restoring, and
+            // every frame of a drag — and the API does not follow on its own.
+            function fitPlayer() {
+              try {
+                if (player && player.setSize) {
+                  player.setSize(window.innerWidth, window.innerHeight);
+                }
+              } catch (e) {}
+            }
+            window.addEventListener('resize', fitPlayer);
+
             function onYouTubeIframeAPIReady() {
               player = new YT.Player('player', {
+                // Asked for explicitly as well, so the iframe is born the
+                // right size rather than corrected by CSS a frame later.
+                width: '100%',
+                height: '100%',
                 videoId: '\(videoId)',
                 playerVars: {
                   playsinline: 1,
@@ -105,6 +134,7 @@ struct FocusPlayerView: UIViewRepresentable {
                   onReady: function (e) {
                     post({ event: 'ready', duration: safeDuration() });
                     startTicker();
+                    fitPlayer();
                   },
                   onStateChange: function (e) {
                     post({ event: 'state', state: e.data, duration: safeDuration() });
