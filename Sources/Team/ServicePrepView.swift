@@ -430,6 +430,12 @@ struct ServicePrepView: View {
             }
             // The section lost its header and kept the header's space, so the
             // list started with a band of nothing under the navigation title.
+            // Plain, not grouped. The grouped style insets every row and
+            // rounds the first and last of a section — which on a schedule
+            // whose rows carry no card of their own meant side margins that
+            // looked like a second container, and a month label wearing a
+            // rounded top edge as if it were the start of one.
+            .listStyle(.plain)
             .listSectionSpacing(.compact)
             .safeAreaInset(edge: .top, spacing: 0) { accountBar }
             .onAppear {
@@ -780,10 +786,22 @@ struct ServicePrepView: View {
                     // A month label where the month turns, so scrolling
                     // through a quarter does not become undifferentiated.
                     if isFirstOfMonth(upcoming, in: future) {
-                        Text(upcoming.date, format: .dateTime.year().month(.wide))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 4)
+                        // A label with a hairline, not a bar. It was a full
+                        // list row, so it took a row's height and the list's
+                        // own chrome — which is why the first one looked like
+                        // the top of a card.
+                        HStack(spacing: 8) {
+                            Text(upcoming.date, format: .dateTime.year().month(.wide))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            VStack { Divider() }
+                        }
+                        .padding(.top, 14)
+                        .padding(.bottom, 2)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16,
+                                                  bottom: 0, trailing: 16))
                     }
                     scheduleRow(upcoming)
                         // Dimmed, not hidden. Last Sunday is a record, not a
@@ -795,6 +813,12 @@ struct ServicePrepView: View {
                         // panel that marks the open service — two highlights
                         // for one thing. The open one is the only one now.
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        // The row owns its own spacing, so services sit a
+                        // fixed distance apart instead of floating on
+                        // whatever padding the list felt like adding.
+                        .listRowInsets(EdgeInsets(top: 0, leading: 8,
+                                                  bottom: 0, trailing: 12))
                 }
             }
         }
@@ -1075,11 +1099,20 @@ struct ServicePrepView: View {
                 }
 
                 if open {
-                    serviceDetail(upcoming).padding(.leading, isWide ? 62 : 54)
+                    // Grows downward from the row rather than appearing all
+                    // at once: the 순서 belongs to the service above it, and
+                    // seeing it unroll from there is what says so.
+                    serviceDetail(upcoming)
+                        .padding(.leading, isWide ? 62 : 54)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top)
+                                .combined(with: .opacity),
+                            removal: .opacity
+                        ))
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
         .padding(.leading, 9)
         // The open service stands slightly off the page.
         //

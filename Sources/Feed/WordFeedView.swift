@@ -301,9 +301,15 @@ struct WordFeedView: View {
                             .font(.system(size: 8, weight: .semibold))
                     }
                     .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    // As wide as the card it belongs to. A small capsule
+                    // under a large thumbnail read as something stuck on;
+                    // matching the width makes it part of the card.
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.16))
+                    )
                     .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
