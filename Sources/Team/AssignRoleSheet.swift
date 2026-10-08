@@ -98,7 +98,11 @@ struct AssignRoleSheet: View {
             }
         }
         .onAppear {
-            pickedRole = role ?? roles.first ?? ""
+            // A role that is not among the offered ones would leave the
+            // picker showing nothing and the save failing on a part the user
+            // never chose, so it falls back rather than carrying through.
+            let wanted = role ?? roles.first ?? ""
+            pickedRole = roles.contains(wanted) ? wanted : (roles.first ?? "")
             // Opening from a person's chip proposes that person; opening from
             // "인도 미지정" proposes nobody and asks.
             pickedName = person ?? currentHolder(of: pickedRole) ?? ""

@@ -1574,7 +1574,14 @@ struct ServicePrepView: View {
             content()
                 .contentShape(Capsule())
                 .onTapGesture {
-                    assigning = AssignmentTarget(service: service, role: role, person: person)
+                    assigning = AssignmentTarget(
+                        service: service,
+                        // The chip says 인도; the sheet's column may say
+                        // 인도자. Resolve to the sheet's spelling here so the
+                        // picker opens on a part that actually exists.
+                        role: role.flatMap { team.scheduleRoleName(matching: $0) } ?? role,
+                        person: person
+                    )
                 }
         } else {
             content()

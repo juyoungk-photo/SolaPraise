@@ -673,6 +673,26 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// The Schedule tab's own spelling of a part.
+    ///
+    /// The chips say 인도 and 반주 — short keys the row is built from — while
+    /// the sheet's column is as often 인도자 or 반주자. keyPart already
+    /// matches loosely in that direction when READING, so without the same
+    /// rule here a tap on 인도 asked to write a column called 인도, which does
+    /// not exist, and the save failed on a sheet that was perfectly correct.
+    func scheduleRoleName(matching role: String) -> String? {
+        func squashed(_ text: String) -> String {
+            text.replacingOccurrences(of: " ", with: "")
+        }
+        let key = squashed(role)
+        if roleColumns[role] != nil { return role }
+        // Exact-but-for-spacing first, then the containment keyPart uses.
+        if let hit = roleColumns.keys.first(where: { squashed($0) == key }) { return hit }
+        return roleColumns.keys
+            .filter { squashed($0).contains(key) }
+            .min { $0.count < $1.count }
+    }
+
     /// Names that may be put into a role, newest roster first.
     var assignableNames: [String] {
         members.filter { $0.isActive && !$0.name.isEmpty }
