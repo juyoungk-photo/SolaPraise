@@ -18,18 +18,38 @@ store and SwiftData is only a local cache.
 
 ## Status
 
-| Phase | What | State |
+| Area | What | State |
 |---|---|---|
-| 1 | Scaffold, Google auth, quota ledger, playlist library | **Done** |
-| 2 | FocusPlayer with end-screen interception | **Done — verified on device** |
-| 3 | Word tab — channel whitelist + free RSS ingestion | **Done** |
-| 4 | Worship tab — budgeted search, topic searches, curation | **Done** (writes need on-device sign-in) |
-| 5 | Sharing — track list, songbook PDF, collaborative | Not started |
-| 6 | Home screen · psalm grid · chord detection · 악보 생성 | **Done** (detection needs a device) |
-| 7 | iPad performance mode · 악보 찾기 | Not started |
+| Player | Focus player, end-screen interception, drag-to-dock mini player | **Done — verified on device** |
+| 말씀 | Channel whitelist, free RSS ingestion, daily reading, passage shortcuts | **Done** |
+| 찬양 | Budgeted search with paging, topic searches, pinned playlists and sets | **Done** |
+| 보관함 | Your real YouTube playlists, reorder and remove | **Done** (needs sign-in) |
+| 예배 | Team schedule, three-state answers, 순서, 콘티 push, set-list archive | **Done** (needs a team sheet) |
+| 작업실 | Line-in recording, chord detection, lead sheets, PDF export | **Done** (detection needs a device) |
+| Sharing | Songbook PDF, collaborative playlists | Partial |
 
-Phases 1–4 build and run. The app cannot sign in until you complete the setup
-below — it shows a clear configuration message rather than failing obscurely.
+Most of the app works without signing in: an app-level API key covers the
+feeds, search, playback and the readers. A Google account is needed only for
+your own playlists and for the team sheet.
+
+## Privacy
+
+There is no backend and no account with this project. Nothing is collected,
+stored or transmitted to anyone operating it, because there is nobody
+operating it — the app talks to Google's APIs directly from the device.
+
+- **Google sign-in** is optional and used for two things only: reading and
+  editing *your own* YouTube playlists, and reading and writing the team's
+  planning spreadsheet. The tokens live in the device keychain and are never
+  sent anywhere else. Signing out deletes them.
+- **Everything else** — the worship and Word feeds, search, playback, the
+  Psalms, chord detection — runs without an account.
+- **Audio you analyse** stays on the device. Files are read for chord
+  detection and never uploaded.
+- **Scripture** comes from Crossway's ESV API (non-commercial use) and a
+  bundled public-domain 개역한글 Psalter.
+
+---
 
 ### The embed origin bug — read this before touching the player
 
