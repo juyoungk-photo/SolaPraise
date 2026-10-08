@@ -259,8 +259,14 @@ struct HomeView: View {
                 // Refresh once a day. "Only when empty" meant a device that
                 // already had videos never picked up new default channels or
                 // the psalm playlist — it would sit stale forever.
-                let today = Calendar.current.startOfDay(for: Date())
-                let stale = feed.lastRefreshedAt.map { $0 < today } ?? true
+                // Refreshed on a few hours, not once a day.
+                //
+                // "Before today" meant whatever time you first opened the app
+                // became the day's only fetch — so 모닝워십, which goes up at
+                // six in the morning, was missed by anyone who had already
+                // opened the app that day and did not appear until tomorrow.
+                let stale = feed.lastRefreshedAt
+                    .map { Date().timeIntervalSince($0) > 3 * 3600 } ?? true
                 if allVideos.isEmpty || stale { await refreshFeeds() }
                 #if DEBUG
                 if DebugHarness.showHomeSearch { showSearch = true }
@@ -398,10 +404,17 @@ struct HomeView: View {
                 : "시편 \(daily.chapter)편 · 탭하면 찾기"
         case .channel:
             guard let video = latestVideo(for: card) else { return nil }
-            // The date is the point of a QT card, so it leads.
-            guard let published = video.publishedAt else { return video.title }
-            let day = published.formatted(.dateTime.month().day())
-            return "\(day) · \(video.title)"
+            // The date is the point of a QT card, so it leads — but it has
+            // to be the day the episode is FOR, not the day it was uploaded.
+            //
+            // 매일성경 publishes two or three days ahead, so today's reading
+            // is stamped with an upload date from earlier in the week: the
+            // card led with "Oct 6" while showing the episode for Oct 8,
+            // which reads as the app being three days behind when it is in
+            // fact exactly right.
+            let day = EpisodeDate.inTitle(video.title) ?? video.publishedAt
+            guard let day else { return video.title }
+            return "\(day.formatted(.dateTime.month().day())) · \(video.title)"
         case .playlist:
             return "탭하면 재생"
         case .video:
@@ -617,10 +630,34 @@ struct HomeView: View {
             return exact
         }
 
-        // No episode claims that day — the channel skipped it, or none of
-        // these titles carry a date. Fall back to walking the uploads, which
-        // is what this did before and is still right for a channel that
-        // simply posts when it posts.
+        // No episode claims that day. Before falling back to upload order,
+        // try the most recent episode that is dated AT OR BEFORE it.
+        //
+        // This is the case where the cache has not caught up yet: today's
+        // episode exists on the channel but has not been fetched, and the
+        // newest thing in hand is from two days ago. Answering with the
+        // latest dated episode that is not in the future gives the nearest
+        // honest answer — and because the subtitle now shows the day the
+        // episode is FOR, it says plainly which day you are looking at
+        // rather than implying it is today's.
+        if let wanted {
+            let dated = episodes.compactMap { video -> (CachedVideo, Date)? in
+                EpisodeDate.inTitle(video.title).map { (video, $0) }
+            }
+            if !dated.isEmpty {
+                if let best = dated.filter({ $0.1 <= wanted }).max(by: { $0.1 < $1.1 }) {
+                    return best.0
+                }
+                // Everything in hand is in the future — the channel
+                // publishes ahead and the older ones have fallen out of the
+                // cache. The earliest of them is the closest.
+                return dated.min { $0.1 < $1.1 }?.0
+            }
+        }
+
+        // No title here carries a date at all. Walk the uploads, which is
+        // what this did before and is still right for a channel that simply
+        // posts when it posts.
         let offset = day.map {
             Calendar.current.dateComponents(
                 [.day], from: Calendar.current.startOfDay(for: Date()), to: $0).day ?? 0
