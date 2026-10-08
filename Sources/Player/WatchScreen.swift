@@ -345,7 +345,25 @@ struct WatchScreen: View {
             }
 
             actionRow
+
+            // Unfolds directly under the player the moment 코드 is pressed.
+            //
+            // It used to live in extrasBlock, further down a page that
+            // scrolls — below the fold on a phone. So pressing 코드 changed
+            // nothing you could see: the app was already listening, and the
+            // screen read as frozen. The feedback has to be where the button
+            // is.
+            if detection.isRecording || detection.isStarting || detection.permissionDenied {
+                chordPanel
+                    .padding(.top, 10)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+            }
         }
+        .animation(.snappy(duration: 0.25), value: detection.isRecording)
+        .animation(.snappy(duration: 0.25), value: detection.isStarting)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -394,6 +412,20 @@ struct WatchScreen: View {
     }
 
     private var actionRow: some View {
+        // Scrollable, and every label fixed at its natural width.
+        //
+        // The row has grown to five buttons. On an iPad the stack still
+        // overflowed, and SwiftUI answers an overflowing HStack by squeezing
+        // its children — so the labels were truncated rather than a button
+        // dropped, and 「콘티에 추가」 came out cut. A button whose name is cut
+        // is a button you have to guess at.
+        ScrollView(.horizontal, showsIndicators: false) {
+            actionButtons
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var actionButtons: some View {
         HStack(spacing: 10) {
             Button {
                 addTarget = current
@@ -443,7 +475,7 @@ struct WatchScreen: View {
                     videoId: current.id,
                     key: existingSheet(forVideo: current.id)?.keyLabel
                 ) {
-                    Label("콘티에", systemImage: "calendar.badge.plus")
+                    Label("콘티에 추가", systemImage: "calendar.badge.plus")
                 }
                 .buttonStyle(.bordered)
             }
@@ -479,15 +511,15 @@ struct WatchScreen: View {
         }
         .font(.subheadline)
         .controlSize(.small)
+        // Each button keeps its own width instead of being compressed to
+        // fit — the scroll view is what absorbs the overflow now.
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.vertical, 1)
     }
 
     /// Everything that is worth reading but not worth pinning.
     private var extrasBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if detection.isRecording || detection.isStarting || detection.permissionDenied {
-                chordPanel
-            }
-
             // A reading or a sermon shows one static frame for an hour, and
             // the passage it is working through is named in the title. Any
             // book, not just the Psalms — 모닝워십 walks 사사기 for weeks.
@@ -634,6 +666,21 @@ struct WatchScreen: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.tint)
                         }
+                        // Detection is a guess, and a wrong chart is worth
+                        // less than none — it has to be removable where you
+                        // are looking at it, not three screens away in
+                        // 작업실. Nothing leaves the device, so there is no
+                        // undo bar: running it again is cheap.
+                        Button(role: .destructive) {
+                            delete(song)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("악보 삭제")
+
                         Image(systemName: "chevron.right")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
@@ -643,6 +690,12 @@ struct WatchScreen: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private func delete(_ song: SavedSong) {
+        if leadSheet?.id == song.id { leadSheet = nil }
+        modelContext.delete(song)
+        try? modelContext.save()
     }
 
     // MARK: - Published worship set
@@ -869,6 +922,16 @@ struct WatchScreen: View {
             guard player.state == .playing else { return nil }
             return player.currentTime
         }
+        // Back to the top, and playing.
+        //
+        // Detection starts hearing at the moment it is switched on, so
+        // pressing 코드 three minutes into a song produced a chart that began
+        // at the bridge — with the first three minutes simply missing and
+        // nothing saying so. The structure pass then read that fragment as
+        // the whole song. Rewinding costs the listener the few seconds they
+        // had already heard and makes the chart cover the song.
+        player.seek(to: 0)
+        player.play()
         detection.start()
     }
 

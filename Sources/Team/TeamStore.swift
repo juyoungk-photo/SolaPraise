@@ -26,12 +26,7 @@ struct TeamRole: Identifiable, Hashable {
     /// Every other part can be covered, moved or dropped; these two cannot.
     /// So they sort to the top regardless of the Order column, and the sheet
     /// does not have to be maintained for that to stay true.
-    var isCore: Bool {
-        let key = name.replacingOccurrences(of: " ", with: "")
-        if key.lowercased().contains("lead") { return true }
-        return ["인도", "인도자", "반주", "반주자", "건반", "리더"]
-            .contains { key.contains($0) }
-    }
+    var isCore: Bool { PartAliases.isCore(name) }
 }
 
 struct TeamSong: Identifiable, Hashable {
@@ -517,10 +512,43 @@ final class TeamStore: ObservableObject {
     func pendingNames(for service: TeamService) -> [String] {
         let day = Calendar.current.startOfDay(for: service.date)
         let answered = Set((signups[day] ?? []).map { $0.email.lowercased() })
+        // Somebody the leader has put on a part is already on the row, in
+        // orange, saying exactly what they are down for. Listing them again
+        // as 미응답 was the same person twice on one line — and it made a
+        // service that had just been staffed look untouched.
+        //
+        // They have still not answered, and the orange hollow ring is what
+        // says so. The 미응답 chips are for the people the row would
+        // otherwise not mention at all.
+        let assigned = service.assignments.values
+            .map { $0.replacingOccurrences(of: " ", with: "") }
+            .filter { !$0.isEmpty }
+
+        // Loosely, because the two tabs are typed by different people. The
+        // Schedule cell says 김은혜 where the Members tab says 은혜 — the
+        // leader writes the full name into the plan and the roster carries
+        // what the team calls her. Exact matching left her listed as 미응답
+        // on a week she had just been given 반주.
+        //
+        // Two characters minimum on the shorter side, so a one-letter cell —
+        // an initial, a stray 'x' marking a column — cannot swallow a name
+        // it merely appears inside.
+        func isAssigned(_ name: String) -> Bool {
+            let needle = name.replacingOccurrences(of: " ", with: "")
+            guard !needle.isEmpty else { return false }
+            return assigned.contains { cell in
+                if cell == needle { return true }
+                let shorter = min(cell.count, needle.count)
+                guard shorter >= 2 else { return false }
+                return cell.contains(needle) || needle.contains(cell)
+            }
+        }
+
         return members
             .filter { $0.isActive }
             .filter { $0.email.isEmpty || !answered.contains($0.email.lowercased()) }
             .map { $0.name.isEmpty ? $0.email : $0.name }
+            .filter { !isAssigned($0) }
             .sorted()
     }
 
@@ -681,15 +709,13 @@ final class TeamStore: ObservableObject {
     /// rule here a tap on 인도 asked to write a column called 인도, which does
     /// not exist, and the save failed on a sheet that was perfectly correct.
     func scheduleRoleName(matching role: String) -> String? {
-        func squashed(_ text: String) -> String {
-            text.replacingOccurrences(of: " ", with: "")
-        }
-        let key = squashed(role)
         if roleColumns[role] != nil { return role }
-        // Exact-but-for-spacing first, then the containment keyPart uses.
-        if let hit = roleColumns.keys.first(where: { squashed($0) == key }) { return hit }
+        let key = PartAliases.key(role)
+        // Exact-but-for-spacing first, then the alias rule — so a tap on 반주
+        // finds a sheet whose column is 반주자, 건반 or Piano.
+        if let hit = roleColumns.keys.first(where: { PartAliases.key($0) == key }) { return hit }
         return roleColumns.keys
-            .filter { squashed($0).contains(key) }
+            .filter { PartAliases.matches($0, role) }
             .min { $0.count < $1.count }
     }
 

@@ -105,26 +105,13 @@ struct PlaylistDetailView: View {
                     // Swipe for the one thing you reach for; long press for
                     // the rest, the way YouTube's ⋮ menu works.
                     //
-                    // Both edges, because which way a list "opens" is a habit
-                    // rather than a rule, and a swipe that reveals nothing
-                    // reads as the row not being editable at all. Neither is
-                    // a full swipe: removing a song from a playlist is a
-                    // deliberate tap on the button, not something a stray
-                    // drag across the row can do.
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            Task { await remove(item, at: index) }
-                        } label: {
-                            Label("삭제", systemImage: "trash")
-                        }
-                    }
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            Task { await remove(item, at: index) }
-                        } label: {
-                            Label("삭제", systemImage: "trash")
-                        }
-                    }
+                    // NO SWIPE HERE. Both edges used to reveal 삭제, and a
+                    // sideways brush on the wrong row during a service is not
+                    // a risk worth carrying for a shortcut — the long-press
+                    // menu below removes a song deliberately, which is the
+                    // right amount of effort for an irreversible edit to a
+                    // playlist the whole team shares. The gesture is being
+                    // kept free for something else.
                     .contextMenu {
                         if !item.isUnavailable {
                             Button {

@@ -1181,20 +1181,19 @@ struct ServicePrepView: View {
     private func keyPart(_ role: String,
                          _ service: TeamService,
                          _ answers: [TeamSignup]) -> KeyPart {
-        func squashed(_ text: String) -> String {
-            text.replacingOccurrences(of: " ", with: "")
-        }
         if let answer = answers.first(where: {
-            $0.status == .available && squashed($0.role).contains(role)
+            $0.status == .available && PartAliases.matches($0.role, role)
         }) {
             return KeyPart(role: role,
                            who: displayName(answer),
                            signupId: answer.id)
         }
-        // Matched on the key rather than by exact name, because the sheet
-        // writes 인도자 and 반주자 as often as 인도 and 반주.
+        // Through PartAliases, so a sheet that writes 인도자, 반주자 or Piano
+        // answers for 인도 and 반주. Somebody on Piano HAS staffed 반주, and
+        // showing 「반주 미지정」 beside them was the screen failing to
+        // understand its own schedule.
         if let planned = service.assignments.first(where: {
-            squashed($0.key).contains(role)
+            PartAliases.matches($0.key, role)
         })?.value, !planned.trimmingCharacters(in: .whitespaces).isEmpty {
             return KeyPart(role: role, who: planned, signupId: nil)
         }

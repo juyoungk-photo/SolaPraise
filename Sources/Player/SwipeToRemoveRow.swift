@@ -31,6 +31,14 @@ struct SwipeToRemoveRow<Content: View>: View {
     @ViewBuilder var content: Content
 
     @State private var offset: CGFloat = 0
+    /// Where the row was when THIS drag began.
+    ///
+    /// Without it every new drag was measured from zero while the row was
+    /// still held open, so the row jumped back to centre on the first
+    /// millimetre and then followed the finger from there — which is what
+    /// made an open row feel like it was flicking back and forth and could
+    /// not simply be pushed closed again.
+    @State private var dragStart: CGFloat?
 
     private static var revealWidth: CGFloat { 84 }
 
@@ -51,17 +59,23 @@ struct SwipeToRemoveRow<Content: View>: View {
                             // with a finger that starts on a row.
                             guard abs(value.translation.width)
                                     > abs(value.translation.height) else { return }
+                            let start = dragStart ?? offset
+                            dragStart = start
                             offset = max(-Self.revealWidth,
-                                         min(Self.revealWidth, value.translation.width))
+                                         min(Self.revealWidth, start + value.translation.width))
                         }
-                        .onEnded { value in
-                            let travelled = value.translation.width
+                        .onEnded { _ in
+                            dragStart = nil
+                            // Judged on where the row ENDED UP, not on how
+                            // far the finger moved. A short push back from an
+                            // open row now closes it, instead of counting as
+                            // "not far enough" and snapping it open again.
                             withAnimation(.snappy(duration: 0.2)) {
-                                guard abs(travelled) > Self.revealWidth * 0.55 else {
+                                guard abs(offset) > Self.revealWidth * 0.55 else {
                                     offset = 0
                                     return
                                 }
-                                offset = travelled > 0 ? Self.revealWidth : -Self.revealWidth
+                                offset = offset > 0 ? Self.revealWidth : -Self.revealWidth
                             }
                         }
                 )

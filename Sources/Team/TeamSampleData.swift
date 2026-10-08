@@ -30,7 +30,7 @@ enum TeamSampleData {
             return calendar.date(byAdding: .weekOfYear, value: weeks, to: base) ?? base
         }
 
-        let roles = ["인도", "반주", "건반", "드럼", "베이스", "보컬"]
+        let roles = ["인도", "반주", "Piano", "드럼", "베이스", "보컬"]
             .enumerated()
             .map { TeamRole(name: $0.element, order: Double($0.offset)) }
 

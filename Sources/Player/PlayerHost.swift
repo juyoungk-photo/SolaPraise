@@ -317,8 +317,30 @@ struct PlayerStage: View {
                     }
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-                    .offset(x: originX, y: originY)
                     .allowsHitTesting(t < 0.5)
+                    // Docked, the video is a thumbnail rather than a player,
+                    // and pressing a thumbnail should bring the player back.
+                    //
+                    // It could not before: hit testing is off below 0.5 so
+                    // YouTube's own chrome cannot be pressed by accident in a
+                    // 100pt-wide picture, and that took the tap with it — so
+                    // the one part of the bar that most looks like a button
+                    // did nothing. This layer sits ABOVE that modifier, so
+                    // the web view stays deaf and the tap still lands.
+                    .overlay {
+                        if t > 0.5 {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(WatchScreen.stageAnimation) {
+                                        host.expand()
+                                    }
+                                }
+                                .accessibilityLabel("플레이어 열기")
+                                .accessibilityAddTraits(.isButton)
+                        }
+                    }
+                    .offset(x: originX, y: originY)
                     // High priority, not a plain gesture.
                     //
                     // The video is a WKWebView, and a web view's own
