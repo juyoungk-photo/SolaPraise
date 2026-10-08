@@ -1171,7 +1171,7 @@ struct ServicePrepView: View {
                     .fixedSize(horizontal: isWide, vertical: false)
 
                     if isWide {
-                        chipsLine(upcoming, answers: answers)
+                        chipsLine(upcoming, answers: answers, open: open)
                         Spacer(minLength: 8)
                     }
 
@@ -1180,7 +1180,7 @@ struct ServicePrepView: View {
                 }
 
                 if !isWide {
-                    chipsLine(upcoming, answers: answers)
+                    chipsLine(upcoming, answers: answers, open: open)
                         .padding(.leading, 54)
                 }
 
@@ -1423,7 +1423,8 @@ struct ServicePrepView: View {
     /// has them. An empty 인도 is the most important thing on the row, and it
     /// cannot be the absence of a chip.
     private func chipsLine(_ upcoming: TeamService,
-                           answers: [TeamSignup]) -> some View {
+                           answers: [TeamSignup],
+                           open: Bool) -> some View {
         let pending = team.pendingNames(for: upcoming)
         let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
         let spokenFor = Set(parts.compactMap(\.signupId))
@@ -1435,13 +1436,14 @@ struct ServicePrepView: View {
         // the same height, which made the month scannable — but it also hid
         // half the team behind a scroll nobody tries, on the row whose job is
         // to say who is on. Seeing everyone beats rows of equal height.
-        return ChipFlow { chips(parts, rest, pending) }
+        return ChipFlow { chips(parts, rest, pending, open: open) }
     }
 
     @ViewBuilder
     private func chips(_ parts: [KeyPart],
                        _ rest: [TeamSignup],
-                       _ pending: [String]) -> some View {
+                       _ pending: [String],
+                       open: Bool) -> some View {
         ForEach(parts, id: \.role) { part in
             if let who = part.who {
                 // Green when somebody answered for it, orange when it is only
@@ -1464,12 +1466,22 @@ struct ServicePrepView: View {
                 color: tint(answer.status)
             )
         }
-        // Just the name. The hollow grey ring already says "has not
-        // answered" — it is the only chip drawn that way — so repeating the
-        // word on every one of them spent a third of the line restating what
-        // the style says, and pushed a team of seven onto three rows.
-        ForEach(pending, id: \.self) { who in
-            chip(who, detail: nil, color: .secondary, dashed: true)
+        // Closed, the people who have not answered are one chip saying how
+        // many; open, they are named.
+        //
+        // Just the name was right — the hollow grey ring already says "has
+        // not answered", so the word was restating the style. But on a team
+        // of seven the names alone still ran to three rows on a phone, and
+        // most of them were people who have done nothing. The ones who
+        // ANSWERED are the news; the count is enough for the rest until you
+        // open the week and want to chase someone.
+        if open {
+            ForEach(pending, id: \.self) { who in
+                chip(who, detail: nil, color: .secondary, dashed: true)
+            }
+        } else if !pending.isEmpty {
+            chip("미응답 \(pending.count)", detail: nil,
+                 color: .secondary, dashed: true)
         }
     }
 

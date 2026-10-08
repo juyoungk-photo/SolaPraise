@@ -163,8 +163,8 @@ final class GoogleAuthManager: ObservableObject {
         // After `restorePreviousSignIn` grantedScopes is often nil until the
         // tokens are refreshed, and reading that as "no scope" put a
         // permissions wall in front of a session that had the permission —
-        // 예배 asking the signed-in account to re-grant access it already held, every
-        // time the app was reinstalled. When it is unknown, let the request
+        // 예배 asking the signed-in account to re-grant access it already
+        // held, every reinstall. When it is unknown, let the request
         // go and let a real 403 be the one that decides.
         guard let granted = user.grantedScopes else { return true }
         return granted.contains(scope)
