@@ -70,17 +70,37 @@ enum SongStructure {
         // Distinct progressions get letters in order of first appearance.
         var letterFor: [String: String] = [:]
         var counts: [String: Int] = [:]
+        var order: [String: Int] = [:]
         var nextLetter = UnicodeScalar("A").value
-        for chunk in chunks {
+        for (position, chunk) in chunks.enumerated() {
             if letterFor[chunk.key] == nil {
                 letterFor[chunk.key] = String(UnicodeScalar(nextLetter) ?? "A")
+                order[chunk.key] = position
                 nextLetter += 1
             }
             counts[chunk.key, default: 0] += 1
         }
 
-        let chorusKey = counts.filter { $0.value > 1 }.max { $0.value < $1.value }?.key
         let firstKey = chunks.first?.key
+
+        // Which repeated progression is the 후렴.
+        //
+        // Taking `max` over the counts was not deterministic: Swift
+        // randomises dictionary iteration order per process, so in the
+        // ordinary A-B-A-B-C shape — where verse and chorus BOTH occur
+        // twice — the same song came back labelled 절 1 / 후렴 on one run and
+        // 후렴 / 섹션 B on the next. The tie is the common case, not an edge
+        // case, so break it on purpose: prefer the progression that is not
+        // the song's opening phrase, because a chorus is what a verse leads
+        // to, and fall back to whichever appeared first.
+        let chorusKey = counts
+            .filter { $0.value > 1 }
+            .sorted { a, b in
+                if a.value != b.value { return a.value > b.value }
+                if (a.key == firstKey) != (b.key == firstKey) { return b.key == firstKey }
+                return (order[a.key] ?? 0) < (order[b.key] ?? 0)
+            }
+            .first?.key
 
         // Merge neighbouring chunks that share a progression.
         var sections: [SongSection] = []

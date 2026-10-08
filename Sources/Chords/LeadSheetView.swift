@@ -33,12 +33,16 @@ struct LeadSheetView: View {
             if sizeClass == .regular {
                 wideLayout
             } else {
-                List {
-                    transposeSection
-                    ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
-                        sectionBlock(section, at: index)
+                ScrollViewReader { proxy in
+                    List {
+                        mapRow { jump(to: $0, with: proxy) }
+                        transposeSection
+                        ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
+                            sectionBlock(section, at: index)
+                                .id(section.id)
+                        }
+                        ccliFooter
                     }
-                    ccliFooter
                 }
             }
         }
@@ -64,34 +68,61 @@ struct LeadSheetView: View {
     /// from the verse it follows. Side by side, a whole song is usually on
     /// one screen — which is how a chart is meant to be read.
     private var wideLayout: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Form { transposeSection }
-                    .frame(maxHeight: 150)
-                    .scrollDisabled(true)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    SongMapView(sections: song.sections) { jump(to: $0, with: proxy) }
+                        .padding(.horizontal, 20)
 
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: 16)],
-                    alignment: .leading,
-                    spacing: 16
-                ) {
-                    ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
-                        sectionCard(section, at: index)
+                    transposeCard
+                        .padding(.horizontal, 20)
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: 16)],
+                        alignment: .leading,
+                        spacing: 16
+                    ) {
+                        ForEach(Array(song.sections.enumerated()), id: \.element.id) { index, section in
+                            sectionCard(section, at: index)
+                                .id(section.id)
+                        }
                     }
-                }
-                .padding(.horizontal, 20)
+                    .padding(.horizontal, 20)
 
-                Form { ccliFooter }
-                    .frame(maxHeight: 220)
-                    .scrollDisabled(true)
+                    ccliCard
+                        .padding(.horizontal, 20)
+                }
+                .padding(.vertical, 12)
             }
-            .padding(.vertical, 12)
+        }
+    }
+
+    /// The map's row in a `List`, stripped of the inset and separator a
+    /// normal row would get — it is a full-width band, not a cell.
+    @ViewBuilder
+    private func mapRow(_ onSelect: @escaping (SongSection) -> Void) -> some View {
+        if !song.sections.isEmpty {
+            Section {
+                SongMapView(sections: song.sections, onSelect: onSelect)
+                    .padding(.vertical, 6)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .listRowSeparator(.hidden)
+            }
+        }
+    }
+
+    private func jump(to section: SongSection, with proxy: ScrollViewProxy) {
+        withAnimation(.snappy(duration: 0.25)) {
+            proxy.scrollTo(section.id, anchor: .top)
         }
     }
 
     private func sectionCard(_ section: SongSection, at index: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
+                Capsule()
+                    .fill(SongMapView.colour(for: section.patternKey))
+                    .frame(width: 4, height: 13)
                 Text(section.label)
                     .font(.subheadline.weight(.semibold))
                 Text(timeString(section.startTime))
@@ -153,7 +184,23 @@ struct LeadSheetView: View {
     // MARK: - Transpose
 
     private var transposeSection: some View {
-        Section {
+        Section { transposeControls }
+    }
+
+    /// iPad: a `Form` nested in a `ScrollView`'s `VStack` has no definite
+    /// height and collapses to an empty band — which is what it did, so the
+    /// key and the transpose buttons were simply absent on iPad. A card
+    /// needs no container.
+    private var transposeCard: some View {
+        VStack(alignment: .leading, spacing: 12) { transposeControls }
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Container-free, so both of the above can place it.
+    @ViewBuilder
+    private var transposeControls: some View {
             HStack {
                 Text("Key")
                     .foregroundStyle(.secondary)
@@ -189,7 +236,6 @@ struct LeadSheetView: View {
                     .buttonStyle(.plain)
                 Toggle("♭", isOn: $useFlats).toggleStyle(.button).fixedSize()
             }
-        }
     }
 
     // MARK: - Section block
@@ -200,6 +246,11 @@ struct LeadSheetView: View {
             lyricsEditor(for: section, at: index)
         } header: {
             HStack {
+                // The same colour the map gave this progression, so the two
+                // views are obviously about the same thing.
+                Capsule()
+                    .fill(SongMapView.colour(for: section.patternKey))
+                    .frame(width: 4, height: 13)
                 Text(section.label)
                     .font(.subheadline.weight(.semibold))
                 Text(timeString(section.startTime))
@@ -269,16 +320,37 @@ struct LeadSheetView: View {
 
     // MARK: - CCLI
 
+    private var ccliBinding: Binding<String> {
+        Binding(
+            get: { song.ccliNumber ?? "" },
+            set: { song.ccliNumber = $0.isEmpty ? nil : $0; save() }
+        )
+    }
+
+    private static let ccliNote = "가사는 저작권이 있어 앱이 가져올 수 없습니다. 직접 붙여넣어 주세요. 내보낸 악보에 인쇄하려면 교회의 CCLI 라이선스가 필요하며, 번호가 악보에 표시됩니다."
+
     private var ccliFooter: some View {
         Section {
-            TextField("CCLI 번호 (선택)", text: Binding(
-                get: { song.ccliNumber ?? "" },
-                set: { song.ccliNumber = $0.isEmpty ? nil : $0; save() }
-            ))
-            .keyboardType(.numbersAndPunctuation)
+            TextField("CCLI 번호 (선택)", text: ccliBinding)
+                .keyboardType(.numbersAndPunctuation)
         } footer: {
-            Text("가사는 저작권이 있어 앱이 가져올 수 없습니다. 직접 붙여넣어 주세요. 내보낸 악보에 인쇄하려면 교회의 CCLI 라이선스가 필요하며, 번호가 악보에 표시됩니다.")
+            Text(Self.ccliNote)
         }
+    }
+
+    /// See `transposeCard` — the footer vanished on iPad for the same reason.
+    private var ccliCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("CCLI 번호 (선택)", text: ccliBinding)
+                .keyboardType(.numbersAndPunctuation)
+                .textFieldStyle(.roundedBorder)
+            Text(Self.ccliNote)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - Helpers
