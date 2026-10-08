@@ -195,10 +195,22 @@ struct PlayerStage: View {
                 // Full width, until that makes the video too tall — which is
                 // what landscape on an iPad does: 16:9 of a 1194pt width is
                 // 672pt of an 834pt screen, leaving the title, the buttons
-                // and the queue about 160pt to share. Past half the height
+                // and the queue about 160pt to share. Past the share below
                 // the video stops growing and sits narrower instead, centred,
                 // so the screen stays readable in both orientations.
-                let videoHeight = min(fullWidth * 9 / 16, geo.size.height * 0.5)
+                //
+                // A PHONE ON ITS SIDE IS THE OPPOSITE CASE. Half of a 402pt
+                // landscape height is a 201pt video on an 874pt-wide screen —
+                // a small picture adrift in black, with the rest of the
+                // screen spent on a page nobody turns their phone sideways to
+                // read. Turning the phone IS the request to watch, so there
+                // the video takes the height it can and the page waits below
+                // it. Measured rather than asked of the device: an iPad in a
+                // short split view should behave like the small screen it is.
+                let isLandscape = geo.size.width > geo.size.height
+                let isShort = geo.size.height < 520
+                let heightShare: CGFloat = (isLandscape && isShort) ? 1 : 0.5
+                let videoHeight = min(fullWidth * 9 / 16, geo.size.height * heightShare)
                 let videoWidth = videoHeight * 16 / 9
 
                 // The two resting shapes, and the point between them the

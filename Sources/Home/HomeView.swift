@@ -505,39 +505,53 @@ struct HomeView: View {
 
     /// One step of the 매일성경 day, which moves the passage AND the card.
     ///
-    /// Bounded: forward only as far as the channel has published, back a
-    /// season. An arrow that can be pressed into a week with no episode
-    /// leaves the bar empty and looks broken.
+    /// Steps to the next episode that EXISTS, not to the next calendar day.
+    ///
+    /// Requiring an episode dated exactly one day either side disabled both
+    /// arrows whenever the cache was thin — which is most of the time, since
+    /// it holds a handful of episodes rather than a year — and a disabled
+    /// arrow at low opacity on a tinted bar is one nobody can see. Walking
+    /// the days that are actually in hand means an arrow is offered whenever
+    /// there is anywhere to go, and pressing it always lands on a reading.
     private func qtStep(_ delta: Int, _ symbol: String, _ label: String) -> some View {
-        Button {
-            withAnimation(.snappy(duration: 0.2)) { qtDayOffset += delta }
+        let target = qtNeighbourDay(delta)
+        return Button {
+            guard let target else { return }
+            let today = Calendar.current.startOfDay(for: Date())
+            let days = Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+            withAnimation(.snappy(duration: 0.2)) { qtDayOffset = days }
         } label: {
             Image(systemName: symbol)
-                .font(.caption2.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 // A fixed tap target, NOT maxHeight: .infinity — inside the
                 // pinned block that has the whole screen to grow into, the
                 // greedy height took it and the bar became a tinted slab
                 // down the page.
-                .frame(width: 34, height: 30)
+                .frame(width: 36, height: 30)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!canStepQT(delta))
-        .opacity(canStepQT(delta) ? 1 : 0.3)
+        .disabled(target == nil)
+        // Still legible when there is nowhere to go: an arrow faded to
+        // nothing reads as a missing feature rather than an unavailable one.
+        .opacity(target == nil ? 0.45 : 1)
         .accessibilityLabel("매일성경 \(label)")
     }
 
-    private func canStepQT(_ delta: Int) -> Bool {
-        guard let id = qtChannelId else { return false }
-        let next = qtDayOffset + delta
-        guard next > -200, next < 60 else { return false }
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let day = Calendar.current.date(byAdding: .day, value: next, to: today)
-        else { return false }
-        // Only where an episode for that day actually exists, so the arrow
-        // never leads to an empty bar.
-        return episode(fromChannel: id, on: day, needingPassage: true)
-            .map { EpisodeDate.inTitle($0.title) == day } ?? false
+    /// The days the cached 매일성경 readings are for, in order.
+    private var qtDays: [Date] {
+        guard let id = qtChannelId else { return [] }
+        let days = allVideos
+            .filter { $0.channelId == id && ScriptureReference.passage(in: $0.title) != nil }
+            .compactMap { EpisodeDate.inTitle($0.title) }
+        return Array(Set(days)).sorted()
+    }
+
+    /// The nearest day with a reading, in the given direction.
+    private func qtNeighbourDay(_ delta: Int) -> Date? {
+        let days = qtDays
+        guard !days.isEmpty else { return nil }
+        return delta < 0 ? days.last { $0 < qtDay } : days.first { $0 > qtDay }
     }
 
     private var qtPassageForDay: ScriptureReference.Passage? {

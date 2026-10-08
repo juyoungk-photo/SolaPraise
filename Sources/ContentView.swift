@@ -69,6 +69,24 @@ struct ContentView: View {
         return items
     }
 
+    @ViewBuilder
+    private func screen(for tab: Tab) -> some View {
+        switch tab {
+        case .home:    HomeView(selection: $selection)
+        case .word:    WordFeedView()
+        case .worship: WorshipFeedView()
+        case .library: PlaylistLibraryView()
+        // 예배 is shown whenever a sheet is configured and somebody is signed
+        // in — including when that person is NOT on the roster. Hiding it for
+        // a non-member was a dead end: the only way onto the roster is
+        // through this tab, so anyone left off it had no route back in, and
+        // the tab simply being absent explained nothing. tabItems decides
+        // whether it is listed at all; it appears and says why instead.
+        case .team:    ServicePrepView()
+        case .studio:  StudioView()
+        }
+    }
+
     enum Tab: Hashable {
         case home, worship, word, library, studio, team
 
@@ -89,40 +107,19 @@ struct ContentView: View {
     }
 
     var body: some View {
+        // Built FROM tabItems, which the iPad's own bar also reads.
+        //
+        // These were two separate lists, and they drifted: 말씀 was moved
+        // before 찬양 in tabItems, so the iPad showed the new order while the
+        // iPhone — whose system bar renders the TabView's own order — kept
+        // the old one. The same edit had to be made twice and was made once.
+        // One list now decides which tabs exist, what they are called, and
+        // what order they come in, on both devices.
         TabView(selection: $selection) {
-            HomeView(selection: $selection)
-                .tabItem { Label("홈", systemImage: "square.grid.2x2") }
-                .tag(Tab.home)
-
-            WorshipFeedView()
-                .tabItem { Label("찬양", systemImage: "music.note") }
-                .tag(Tab.worship)
-
-            WordFeedView()
-                .tabItem { Label("말씀", systemImage: "book.closed") }
-                .tag(Tab.word)
-
-            PlaylistLibraryView()
-                .tabItem { Label("보관함", systemImage: "list.bullet.rectangle") }
-                .tag(Tab.library)
-
-            // Shown whenever a sheet is configured and somebody is signed
-            // in — including when that person is NOT on the roster.
-            //
-            // Hiding it for a non-member was a dead end: the only way to get
-            // onto the roster is through this tab, so anyone left off it had
-            // no route back in, and the tab simply being absent explained
-            // nothing. It appears and says why instead.
-            if teamAccess != .unconfigured, teamAccess != .signInRequired {
-                ServicePrepView()
-                    .tabItem { Label("예배", systemImage: "calendar.badge.clock") }
-                    .tag(Tab.team)
-            }
-
-            if showsStudioTab {
-                StudioView()
-                    .tabItem { Label("작업실", systemImage: "recordingtape") }
-                    .tag(Tab.studio)
+            ForEach(tabItems) { item in
+                screen(for: item.tag)
+                    .tabItem { Label(item.title, systemImage: item.symbol) }
+                    .tag(item.tag)
             }
         }
         // The player lives here, above the tabs and in one place in the view
