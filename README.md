@@ -49,6 +49,9 @@ operating it — the app talks to Google's APIs directly from the device.
 - **Scripture** comes from Crossway's ESV API (non-commercial use) and a
   bundled public-domain 개역한글 Psalter.
 
+The full [Privacy Policy](PRIVACY.md) and [Terms of Service](TERMS.md) are
+in this repository.
+
 ---
 
 ### The embed origin bug — read this before touching the player
