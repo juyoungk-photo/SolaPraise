@@ -88,6 +88,10 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 
     /// True when the failure is worth another attempt rather than a hand-off.
     @Published private(set) var canRetryLoad = false
+    /// Whether `errorMessage` was raised by the readiness watchdog rather
+    /// than reported by YouTube. Only a watchdog error may be withdrawn:
+    /// a real 150 does not stop being true because a `time` event arrived.
+    private var errorWasWatchdog = false
 
     /// Builds the player document, or returns the one already running.
     func hostedWebView() -> WKWebView {
@@ -143,19 +147,61 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     private func watchForSilentFailure(videoId: String) {
         readinessWatchdog?.cancel()
         readinessWatchdog = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
-            guard let self, !Task.isCancelled else { return }
-            guard self.loadedVideoId == videoId, !self.isReady,
+            // Checked every second up to a deadline rather than judged once.
+            //
+            // A single shot at six seconds condemned any player that became
+            // ready at seven — and then left the message up, because nothing
+            // ever looked again. On a slow connection that is an ordinary
+            // load, not a failure.
+            for _ in 0..<14 {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled,
+                      self.loadedVideoId == videoId else { return }
+                if self.isAlive { return }
+            }
+            guard let self, !Task.isCancelled,
+                  self.loadedVideoId == videoId, !self.isAlive,
                   self.errorMessage == nil else { return }
             self.errorMessage = "영상이 열리지 않습니다. 다시 시도하거나 YouTube에서 열어 보세요."
+            self.errorWasWatchdog = true
             self.canRetryLoad = true
         }
+    }
+
+    /// Any evidence the page is working, from whatever message carried it.
+    ///
+    /// Readiness used to mean one thing: the `ready` message. A message can
+    /// be missed — a page that reloads, a handler attached a moment late, an
+    /// event coalesced away — and when it was, `isReady` stayed false while
+    /// `state` and `time` events kept arriving from a video that was plainly
+    /// playing. The watchdog then put 「영상이 열리지 않습니다」 over a working
+    /// player. Docking and re-expanding appeared to fix it, which it did:
+    /// that path clears the error, not the fault.
+    private var isAlive: Bool {
+        if isReady || currentTime > 0 { return true }
+        switch state {
+        case .playing, .paused, .buffering, .cued, .ended: return true
+        case .unstarted: return false
+        }
+    }
+
+    /// Called from every message that proves the page is alive.
+    private func noteAlive() {
+        if !isReady { isReady = true }
+        guard errorWasWatchdog else { return }
+        // The watchdog was wrong; take the message back rather than leaving
+        // it over a video the viewer can see playing.
+        errorMessage = nil
+        canRetryLoad = false
+        errorWasWatchdog = false
+        readinessWatchdog?.cancel()
     }
 
     /// Rebuilds the loopback server and the document from scratch.
     func retryLoad() {
         guard let videoId = loadedVideoId else { return }
         errorMessage = nil
+        errorWasWatchdog = false
         canRetryLoad = false
         isReady = false
         hasRetriedLoad = false
@@ -199,6 +245,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     func load(videoId: String) {
         didEnd = false
         errorMessage = nil
+        errorWasWatchdog = false
         isEmbedBlocked = false
         maxTimeReached = 0
         currentTime = 0
@@ -256,6 +303,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         currentTime = 0
         duration = 0
         errorMessage = nil
+        errorWasWatchdog = false
         isEmbedBlocked = false
     }
 }
@@ -310,12 +358,13 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         #endif
         switch event {
         case "ready":
-            isReady = true
+            noteAlive()
             if let d = body["duration"] as? Double { duration = d }
 
         case "state":
             let raw = (body["state"] as? Int) ?? -1
             state = YTPlayerState(rawValue: raw) ?? .unstarted
+            if state != .unstarted { noteAlive() }
             if let d = body["duration"] as? Double, d > 0 { duration = d }
 
             if state == .ended {
@@ -329,13 +378,19 @@ extension PlayerCoordinator: WKScriptMessageHandler {
             if let t = body["t"] as? Double {
                 currentTime = t
                 maxTimeReached = max(maxTimeReached, t)
+                if t > 0 { noteAlive() }
             }
             if let d = body["duration"] as? Double, d > 0 { duration = d }
 
         case "error":
             let code = (body["code"] as? Int) ?? -1
             errorMessage = Self.describeError(code)
+            errorWasWatchdog = false
             isEmbedBlocked = [101, 150, 152].contains(code)
+            // YouTube has answered, so the watchdog has nothing left to
+            // guess at — and must not overwrite a specific reason with a
+            // vague one a few seconds later.
+            readinessWatchdog?.cancel()
 
         default:
             break

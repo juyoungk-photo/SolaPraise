@@ -43,6 +43,10 @@ struct HomeView: View {
     @State private var showPsalmSheet = false
     /// The 매일성경 passage the bar under 오늘의 시편 opened.
     @State private var qtPassage: ScriptureReference.Passage?
+    /// Days from today for the 매일성경 bar and card, stepped by the arrows
+    /// on the bar. Separate from `dayOffset`, which belongs to 오늘의 시편 —
+    /// reading ahead in the QT should not move the psalm.
+    @State private var qtDayOffset = 0
     @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
@@ -435,30 +439,92 @@ struct HomeView: View {
     @ViewBuilder
     private var qtPassageBar: some View {
         if let passage = qtPassageForDay {
-            Button { qtPassage = passage } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "book")
-                    // Named, because this is NOT the psalm on the card above
-                    // it — two readings sitting together need to say which
-                    // is which.
-                    Text("매일성경")
-                        .foregroundStyle(.secondary)
-                    Text(passage.display)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
+            HStack(spacing: 0) {
+                qtStep(-1, "chevron.left", "전날")
+
+                Button { qtPassage = passage } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "book")
+                        // Named, because this is NOT the psalm on the card
+                        // above it — two readings sitting together need to
+                        // say which is which. Away from today it names the
+                        // day instead, since that is then the surprising
+                        // part.
+                        Text(qtDayOffset == 0
+                             ? "매일성경"
+                             : qtDay.formatted(.dateTime.month().day()))
+                            .foregroundStyle(.secondary)
+                        Text(passage.display)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                    }
+                    .font(.caption.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
                 }
-                .font(.caption.weight(.medium))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.16))
-                )
-                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+                .accessibilityLabel("매일성경 \(passage.display) 읽기")
+
+                qtStep(1, "chevron.right", "다음날")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("매일성경 \(passage.display) 읽기")
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.16))
+            )
+            .foregroundStyle(Color.accentColor)
+            // Back to today in one press once you have wandered off it.
+            .overlay(alignment: .topTrailing) {
+                if qtDayOffset != 0 {
+                    Button("오늘") {
+                        withAnimation(.snappy(duration: 0.2)) { qtDayOffset = 0 }
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.22)))
+                    .offset(y: -9)
+                }
+            }
         }
+    }
+
+    /// One step of the 매일성경 day, which moves the passage AND the card.
+    ///
+    /// Bounded: forward only as far as the channel has published, back a
+    /// season. An arrow that can be pressed into a week with no episode
+    /// leaves the bar empty and looks broken.
+    private func qtStep(_ delta: Int, _ symbol: String, _ label: String) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { qtDayOffset += delta }
+        } label: {
+            Image(systemName: symbol)
+                .font(.caption2.weight(.semibold))
+                // A fixed tap target, NOT maxHeight: .infinity — inside the
+                // pinned block that has the whole screen to grow into, the
+                // greedy height took it and the bar became a tinted slab
+                // down the page.
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canStepQT(delta))
+        .opacity(canStepQT(delta) ? 1 : 0.3)
+        .accessibilityLabel("매일성경 \(label)")
+    }
+
+    private func canStepQT(_ delta: Int) -> Bool {
+        guard let id = qtChannelId else { return false }
+        let next = qtDayOffset + delta
+        guard next > -200, next < 60 else { return false }
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let day = Calendar.current.date(byAdding: .day, value: next, to: today)
+        else { return false }
+        // Only where an episode for that day actually exists, so the arrow
+        // never leads to an empty bar.
+        return episode(fromChannel: id, on: day, needingPassage: true)
+            .map { EpisodeDate.inTitle($0.title) == day } ?? false
     }
 
     private var qtPassageForDay: ScriptureReference.Passage? {
@@ -468,7 +534,7 @@ struct HomeView: View {
 
     private var qtEpisodeForDay: CachedVideo? {
         guard let id = qtChannelId else { return nil }
-        return episode(fromChannel: id)
+        return episode(fromChannel: id, on: qtDay, needingPassage: true)
     }
 
     /// The home card first, so a reader who swapped in a different 매일성경
@@ -509,6 +575,11 @@ struct HomeView: View {
     /// picks by date and steps a day at a time, the way you would turn a page.
     private func latestVideo(for card: HomeCard) -> CachedVideo? {
         guard let id = card.targetId else { return nil }
+        // The 매일성경 card and the bar under 오늘의 시편 are the same errand,
+        // so they move together: stepping the bar steps the card.
+        if id == qtChannelId {
+            return episode(fromChannel: id, on: qtDay, needingPassage: true)
+        }
         return episode(fromChannel: id)
     }
 
@@ -516,17 +587,56 @@ struct HomeView: View {
     ///
     /// Shared with the 매일성경 bar so the two cannot disagree about which
     /// day they are on.
-    private func episode(fromChannel id: String) -> CachedVideo? {
-        let episodes = allVideos.filter { $0.channelId == id }
+    private func episode(fromChannel id: String,
+                         on day: Date? = nil,
+                         needingPassage: Bool = false) -> CachedVideo? {
+        var episodes = allVideos.filter { $0.channelId == id }
         guard !episodes.isEmpty else { return nil }
 
-        let offset = dayOffset
+        // 매일성경 interleaves book introductions and 묵상 among the daily
+        // readings, and only a reading names its passage. Asking for one
+        // keeps a 책소개 out of the slot that is meant to be today's QT.
+        if needingPassage {
+            let readings = episodes.filter { ScriptureReference.passage(in: $0.title) != nil }
+            if !readings.isEmpty { episodes = readings }
+        }
+
+        // THE DATE IN THE TITLE WINS.
+        //
+        // Both daily channels publish on a different clock from the one they
+        // serve: 매일성경 uploads days ahead, and 모닝워십 goes out at six in
+        // the morning but is timestamped whenever the stream finished
+        // processing. So "the newest upload" was regularly tomorrow's
+        // reading, or yesterday's worship at breakfast. The title says which
+        // day it is for; nothing else in the feed does.
+        let wanted = day ?? Calendar.current.date(
+            byAdding: .day, value: dayOffset,
+            to: Calendar.current.startOfDay(for: Date()))
+        if let wanted,
+           let exact = episodes.first(where: { EpisodeDate.inTitle($0.title) == wanted }) {
+            return exact
+        }
+
+        // No episode claims that day — the channel skipped it, or none of
+        // these titles carry a date. Fall back to walking the uploads, which
+        // is what this did before and is still right for a channel that
+        // simply posts when it posts.
+        let offset = day.map {
+            Calendar.current.dateComponents(
+                [.day], from: Calendar.current.startOfDay(for: Date()), to: $0).day ?? 0
+        } ?? dayOffset
         guard offset != 0 else { return episodes.first }
 
         // Step through what exists rather than through the calendar: a channel
         // that skips a Saturday should go back to Friday, not to an empty day.
         let index = min(max(-offset, 0), episodes.count - 1)
         return episodes[index]
+    }
+
+    /// The day the 매일성경 bar and card are showing.
+    private var qtDay: Date {
+        let today = Calendar.current.startOfDay(for: Date())
+        return Calendar.current.date(byAdding: .day, value: qtDayOffset, to: today) ?? today
     }
 
     /// How far back the whole screen is looking, in days.
