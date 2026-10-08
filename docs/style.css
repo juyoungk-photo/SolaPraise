@@ -1,0 +1,48 @@
+/* One stylesheet for the three pages. No webfonts, no CDN — these pages have
+   to render for a Google reviewer with nothing else loading. */
+:root {
+  color-scheme: light dark;
+  --ink: #1c1917;
+  --muted: #6b6560;
+  --rule: #e3dfd9;
+  --bg: #fdfcfa;
+  --card: #ffffff;
+  --accent: #b98a2e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ece8e2; --muted: #a09a93; --rule: #322e2a;
+    --bg: #15130f; --card: #1d1a16; --accent: #d8a94a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 20px 72px;
+  background: var(--bg); color: var(--ink);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+main { max-width: 720px; margin: 0 auto; }
+header { border-bottom: 1px solid var(--rule); padding: 40px 0 20px; margin-bottom: 28px; }
+h1 { font-size: 1.75rem; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; margin: 36px 0 10px; letter-spacing: -0.01em; }
+h3 { font-size: 1rem; margin: 26px 0 8px; color: var(--muted); }
+.updated { color: var(--muted); font-size: .88rem; margin: 0; }
+a { color: var(--accent); }
+.lede {
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: 12px; padding: 16px 18px; margin: 24px 0;
+}
+.lede p:first-child { margin-top: 0; }
+.lede p:last-child { margin-bottom: 0; }
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: .94rem; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+code { font-size: .88em; background: var(--card); border: 1px solid var(--rule);
+       border-radius: 5px; padding: 1px 5px; word-break: break-all; }
+ul { padding-left: 1.2em; }
+li { margin: 7px 0; }
+nav { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--rule);
+      font-size: .9rem; color: var(--muted); }
+nav a { margin-right: 16px; }
