@@ -41,6 +41,8 @@ struct HomeView: View {
     @State private var playlistError: String?
     @State private var showError = false
     @State private var showPsalmSheet = false
+    /// The 매일성경 passage the bar under 오늘의 시편 opened.
+    @State private var qtPassage: ScriptureReference.Passage?
     @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("psalm.channelId") private var psalmChannelId = DefaultChannels.psalmAudioChannelId
     @State private var isFindingPsalm = false
@@ -212,6 +214,18 @@ struct HomeView: View {
             .sheet(isPresented: $showAddCard) { AddHomeCardSheet() }
             .sheet(isPresented: $showSearch) { HomeSearchSheet(initialQuery: searchQuery) }
             .sheet(isPresented: $showPsalmSheet) { PsalmAudioSheet() }
+            .sheet(item: $qtPassage) { passage in
+                NavigationStack {
+                    ScrollView { ScripturePanel(passage: passage).padding(.horizontal, 16) }
+                        .navigationTitle(passage.display)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("닫기") { qtPassage = nil }
+                            }
+                        }
+                }
+            }
             // Debounced, because -/+ is held down: stepping ten chapters
             // should be one lookup after you stop, not ten while you go.
             .onChange(of: daily.chapter) { _, _ in
@@ -292,7 +306,10 @@ struct HomeView: View {
     @ViewBuilder
     private var pinnedReading: some View {
         if !isEditing, let card = cards.first(where: { $0.kind == .reading }) {
-            cardView(card)
+            VStack(spacing: 7) {
+                cardView(card)
+                qtPassageBar
+            }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 10)
                 // An explicit colour, not .bar: on device that material
@@ -404,6 +421,70 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - 매일성경
+
+    /// The day's 매일성경 passage, under 오늘의 시편.
+    ///
+    /// WHY NOT A READING PLAN: 매일성경 publishes a yearly schedule, and
+    /// shipping it would mean a table that is wrong every January and that
+    /// nobody remembers to replace. The channel's own episode for the day
+    /// already names its passage in the title — "(사사기 16:15-31)" — which
+    /// is the same thing the 말씀 hero card reads, costs no network call,
+    /// and cannot drift out of date. It also follows the day stepper, so
+    /// stepping back a day on 오늘의 시편 steps the QT passage with it.
+    @ViewBuilder
+    private var qtPassageBar: some View {
+        if let passage = qtPassageForDay {
+            Button { qtPassage = passage } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book")
+                    // Named, because this is NOT the psalm on the card above
+                    // it — two readings sitting together need to say which
+                    // is which.
+                    Text("매일성경")
+                        .foregroundStyle(.secondary)
+                    Text(passage.display)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .font(.caption.weight(.medium))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.16))
+                )
+                .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("매일성경 \(passage.display) 읽기")
+        }
+    }
+
+    private var qtPassageForDay: ScriptureReference.Passage? {
+        guard let video = qtEpisodeForDay else { return nil }
+        return ScriptureReference.passage(in: video.title)
+    }
+
+    private var qtEpisodeForDay: CachedVideo? {
+        guard let id = qtChannelId else { return nil }
+        return episode(fromChannel: id)
+    }
+
+    /// The home card first, so a reader who swapped in a different 매일성경
+    /// channel gets theirs; the channel list second, so the bar still works
+    /// for someone who removed the card but kept the channel.
+    private var qtChannelId: String? {
+        if let id = cards.first(where: {
+            $0.kind == .channel && $0.title.contains("매일성경")
+        })?.targetId {
+            return id
+        }
+        return channels.first {
+            $0.title.contains("매일성경") || $0.title.contains("성서유니온")
+        }?.youtubeChannelId
+    }
+
     /// 공동체성경읽기's reading of whichever psalm is showing today.
     ///
     /// Matched from the local cache, so it costs nothing at lookup time. The
@@ -428,6 +509,14 @@ struct HomeView: View {
     /// picks by date and steps a day at a time, the way you would turn a page.
     private func latestVideo(for card: HomeCard) -> CachedVideo? {
         guard let id = card.targetId else { return nil }
+        return episode(fromChannel: id)
+    }
+
+    /// One channel's episode for the day the home screen is showing.
+    ///
+    /// Shared with the 매일성경 bar so the two cannot disagree about which
+    /// day they are on.
+    private func episode(fromChannel id: String) -> CachedVideo? {
         let episodes = allVideos.filter { $0.channelId == id }
         guard !episodes.isEmpty else { return nil }
 
