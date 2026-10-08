@@ -35,30 +35,23 @@ struct PlaylistLibraryView: View {
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @State private var showImporter = false
     @State private var analyzedSong: SavedSong?
+    @State private var isSigningIn = false
 
     var body: some View {
         NavigationStack {
-            Group {
-                if state.isLoading && state.value == nil {
-                    ProgressView("내 재생목록 불러오는 중…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if !auth.isSignedIn {
-                    // Not an error. 보관함 is the one tab that is genuinely
-                    // about *your* account — the app's key can read all of
-                    // YouTube but it cannot be asked whose playlists these
-                    // are — so a reader who chose 둘러보기 gets the offer
-                    // rather than a retry button that fails the same way.
-                    SignInPrompt()
-                } else if let message = state.errorMessage, state.value == nil {
-                    ErrorState(message: message) { Task { await load() } }
-                } else if let playlists = state.value, playlists.isEmpty, shelfChannels.isEmpty {
-                    EmptyState()
-                } else {
-                    list
-                }
-            }
+            // One list, always. Only 재생목록 needs the account, so only
+            // that section carries the sign-in offer — 작업실 analyses files
+            // on this device and must not disappear with the login state.
+            list
             .bottomChrome()
             .navigationTitle("보관함")
+            // Inline on both. On iPadOS 26 a LARGE title splits the
+            // navigation bar into two rows and the system puts the tab bar
+            // back in the upper one — visible despite .toolbar(.hidden,
+            // for: .tabBar) — so the iPad showed the system bar at the top
+            // and ours at the bottom at the same time. Every other tab was
+            // already inline, which is why only these two did it.
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: {
@@ -83,7 +76,12 @@ struct PlaylistLibraryView: View {
                 runAnalysis(on: url)
             }
             .refreshable { await load() }
-            .task { if state.value == nil { await load() } }
+            .task { if auth.isSignedIn, state.value == nil { await load() } }
+            // Signing in from the row above has to fill the section it was
+            // standing in; nothing else here re-triggers the load.
+            .onChange(of: auth.isSignedIn) { _, signedIn in
+                if signedIn { Task { await load() } }
+            }
         }
     }
 
@@ -187,18 +185,69 @@ struct PlaylistLibraryView: View {
             }
 
             Section {
-                ForEach(state.value ?? []) { playlist in
-                    NavigationLink {
-                        PlaylistDetailView(playlist: playlist)
-                    } label: {
-                        PlaylistRow(playlist: playlist)
+                if !auth.isSignedIn {
+                    signInRow
+                } else if state.isLoading && state.value == nil {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("불러오는 중…")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                } else if let message = state.errorMessage, state.value == nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(message)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Button("다시 시도") { Task { await load() } }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                    .padding(.vertical, 2)
+                } else if state.value?.isEmpty ?? false {
+                    Text("YouTube에서 만든 재생목록이 여기에 보입니다.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(state.value ?? []) { playlist in
+                        NavigationLink {
+                            PlaylistDetailView(playlist: playlist)
+                        } label: {
+                            PlaylistRow(playlist: playlist)
+                        }
                     }
                 }
             } header: {
-                if !shelfChannels.isEmpty { Text("재생목록") }
+                Text("재생목록")
             }
         }
         .listStyle(.plain)
+    }
+
+    /// 보관함's playlists are the one thing in the app that genuinely needs
+    /// the account: the app's key can read all of YouTube, but it cannot be
+    /// asked whose playlists these are. So the offer lives in that section
+    /// alone, as a row, instead of standing in for the whole tab.
+    private var signInRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("내 YouTube 재생목록을 보고 편집하려면 Google 계정이 필요합니다.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button {
+                isSigningIn = true
+                Task { await auth.signIn(); isSigningIn = false }
+            } label: {
+                if isSigningIn {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Google 로그인", systemImage: "person.crop.circle")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(isSigningIn)
+        }
+        .padding(.vertical, 4)
     }
 
     private func channelChip(_ channel: Channel) -> some View {
@@ -241,6 +290,7 @@ struct PlaylistLibraryView: View {
     }
 
     private func load() async {
+        guard auth.isSignedIn else { return }
         let client = AppServices.client(auth: auth, quota: quota)
         await state.run { try await client.myPlaylists() }
     }
@@ -275,43 +325,6 @@ private struct PlaylistRow: View {
 }
 
 // MARK: - States
-
-private struct EmptyState: View {
-    var body: some View {
-        ContentUnavailableView(
-            "No playlists yet",
-            systemImage: "list.bullet.rectangle",
-            description: Text("Playlists you create on YouTube — or here — will appear in this list.")
-        )
-    }
-}
-
-/// What 보관함 shows a reader who is browsing without an account.
-private struct SignInPrompt: View {
-    @EnvironmentObject private var auth: GoogleAuthManager
-    @State private var isWorking = false
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("내 재생목록", systemImage: "list.bullet.rectangle")
-        } description: {
-            Text("내 YouTube 재생목록을 보고 편집하려면 Google 계정이 필요합니다.\n찬양·말씀과 검색은 로그인 없이 그대로 쓸 수 있습니다.")
-        } actions: {
-            Button {
-                isWorking = true
-                Task { await auth.signIn(); isWorking = false }
-            } label: {
-                if isWorking {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Google 로그인", systemImage: "person.crop.circle")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isWorking)
-        }
-    }
-}
 
 struct ErrorState: View {
     let message: String

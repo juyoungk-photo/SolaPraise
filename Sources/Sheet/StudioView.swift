@@ -194,6 +194,9 @@ struct StudioView: View {
             .onDisappear { stopPlayback() }
             .bottomChrome()
             .navigationTitle("작업실")
+            // See 보관함: a large title brings the system tab bar back on
+            // iPadOS 26, on top of the one we draw.
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(item: $openedSong) { song in
                 LeadSheetView(song: song)
             }
