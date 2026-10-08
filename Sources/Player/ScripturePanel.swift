@@ -49,6 +49,21 @@ struct ScripturePanel: View {
                     // reading screen.
                     ScriptureAttribution(translation: data.translation)
                         .padding(.top, 2)
+
+                    // Say why there is no Korean here instead of just
+                    // showing English. Outside the Psalms the app has no
+                    // Korean text it may serve: 개역한글 is bundled for the
+                    // Psalms alone, and 새번역 and 개역개정 are licensed by
+                    // 대한성서공회 directly, through no API. Silently landing
+                    // on ESV looks like a setting stuck in the wrong place.
+                    if data.translation == .esv, !passage.isPsalms,
+                       ReadingSettings.extraVersion == nil {
+                        Text("이 본문은 영어(ESV)로만 볼 수 있습니다. 한글 개역한글은 시편만 앱에 들어 있고, 다른 번역본은 설정 → 번역본 추가에서 연결할 수 있습니다.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
                 }
             }
         }
