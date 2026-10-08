@@ -160,6 +160,21 @@ enum TeamSheet {
         return nil
     }
 
+    /// 0-based column index to A1 letters: 0 → "A", 25 → "Z", 26 → "AA".
+    ///
+    /// A Schedule tab with a column per role gets wide, and the old
+    /// single-letter arithmetic silently wrote to Z for everything past it.
+    static func columnLetter(_ index: Int) -> String {
+        guard index >= 0 else { return "A" }
+        var n = index
+        var letters = ""
+        repeat {
+            letters = String(UnicodeScalar(UInt8(65 + n % 26))) + letters
+            n = n / 26 - 1
+        } while n >= 0
+        return letters
+    }
+
     /// Finds a column by any of its accepted names, case-insensitively.
     ///
     /// Every tab is read this way now. A person adds a column, renames one,

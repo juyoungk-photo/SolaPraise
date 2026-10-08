@@ -124,6 +124,8 @@ struct ServicePrepView: View {
     @State private var openChart: SavedSong?
     /// The song a picked audio file will be analysed as.
     @State private var analysing: String?
+    /// The chip a leader tapped, and what it was about.
+    @State private var assigning: AssignmentTarget?
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -200,6 +202,15 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(item: $assigning) { target in
+                AssignRoleSheet(
+                    service: target.service,
+                    role: target.role,
+                    person: target.person,
+                    sheetId: sheetId
+                )
+                .environmentObject(team)
+            }
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
@@ -1145,6 +1156,14 @@ struct ServicePrepView: View {
     /// so the row does not reshuffle as the sheet is edited.
     private static let keyRoleNames = ["인도", "반주"]
 
+    /// What a tapped chip was about: a part, a person, or both.
+    struct AssignmentTarget: Identifiable {
+        let service: TeamService
+        let role: String?
+        let person: String?
+        var id: String { "\(service.id)-\(role ?? "")-\(person ?? "")" }
+    }
+
     private struct KeyPart {
         let role: String
         /// Who has it, by answer or by the leader's plan. Nil means nobody.
@@ -1530,35 +1549,70 @@ struct ServicePrepView: View {
         // the same height, which made the month scannable — but it also hid
         // half the team behind a scroll nobody tries, on the row whose job is
         // to say who is on. Seeing everyone beats rows of equal height.
-        return ChipFlow { chips(parts, rest, pending, open: open) }
+        return ChipFlow { chips(upcoming, parts, rest, pending, open: open) }
+    }
+
+    /// Whether this account may put other people's names on the schedule.
+    /// See TeamStore.canAssign — this is the team's own decision, not a
+    /// security boundary, and the sheet remains the thing that enforces.
+    private var canAssign: Bool {
+        team.canAssign(email: team.actingEmail(auth: auth, planning: planning))
+    }
+
+    /// A chip a leader can act on, wrapped so it opens the assignment sheet.
+    ///
+    /// onTapGesture rather than a Button: these sit inside a row that is
+    /// itself a Button, and nesting them swallowed the tap entirely — the
+    /// same trap this project has now hit on playlist rows, the player queue
+    /// and the pinned videos.
+    @ViewBuilder
+    private func assignable(_ service: TeamService,
+                            role: String?,
+                            person: String?,
+                            @ViewBuilder _ content: () -> some View) -> some View {
+        if canAssign {
+            content()
+                .contentShape(Capsule())
+                .onTapGesture {
+                    assigning = AssignmentTarget(service: service, role: role, person: person)
+                }
+        } else {
+            content()
+        }
     }
 
     @ViewBuilder
-    private func chips(_ parts: [KeyPart],
+    private func chips(_ service: TeamService,
+                       _ parts: [KeyPart],
                        _ rest: [TeamSignup],
                        _ pending: [String],
                        open: Bool) -> some View {
         ForEach(parts, id: \.role) { part in
-            if let who = part.who {
-                // Green when somebody answered for it, orange when it is only
-                // the leader's plan and that person has not said yes yet.
-                chip(who, detail: part.role,
-                     color: part.signupId == nil ? .orange : .green,
-                     dashed: part.signupId == nil)
-            } else {
-                chip("\(part.role) 미지정", detail: nil, color: .red)
+            assignable(service, role: part.role, person: nil) {
+                if let who = part.who {
+                    // Green when somebody answered for it, orange when it is
+                    // only the leader's plan and that person has not said yes
+                    // yet.
+                    chip(who, detail: part.role,
+                         color: part.signupId == nil ? .orange : .green,
+                         dashed: part.signupId == nil)
+                } else {
+                    chip("\(part.role) 미지정", detail: nil, color: .red)
+                }
             }
         }
         ForEach(rest) { answer in
             // "주영 인도" reads as a fact about Sunday.
             // "주영 가능" reads as a form someone filled in.
-            chip(
-                displayName(answer),
-                detail: answer.status == .available
-                    ? (answer.role.isEmpty ? nil : answer.role)
-                    : answer.status.label,
-                color: tint(answer.status)
-            )
+            assignable(service, role: nil, person: displayName(answer)) {
+                chip(
+                    displayName(answer),
+                    detail: answer.status == .available
+                        ? (answer.role.isEmpty ? nil : answer.role)
+                        : answer.status.label,
+                    color: tint(answer.status)
+                )
+            }
         }
         // Closed, the people who have not answered are one chip saying how
         // many; open, they are named.
@@ -1571,7 +1625,9 @@ struct ServicePrepView: View {
         // open the week and want to chase someone.
         if open {
             ForEach(pending, id: \.self) { who in
-                chip(who, detail: nil, color: .secondary, dashed: true)
+                assignable(service, role: nil, person: who) {
+                    chip(who, detail: nil, color: .secondary, dashed: true)
+                }
             }
         } else if !pending.isEmpty {
             chip("미응답 \(pending.count)", detail: nil,

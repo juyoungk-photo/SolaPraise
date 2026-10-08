@@ -170,6 +170,10 @@ struct TeamService: Identifiable, Hashable {
     let notes: String?
     /// Role name → assigned member, as filled in on the Schedule tab.
     let assignments: [String: String]
+    /// 1-based row on the Schedule tab, so an assignment knows where to
+    /// write. nil for a service that did not come from a sheet — the DEBUG
+    /// sample — and assignment is refused rather than guessed in that case.
+    var row: Int? = nil
     /// Several services can fall on one day — 주일예배 and a 팀연습 the
     /// evening before a 금요 Worship — so the date alone is not an identity.
     var id: String { "\(date.timeIntervalSince1970)-\(title)" }
@@ -216,6 +220,11 @@ final class TeamStore: ObservableObject {
     @Published private(set) var memberEmails: Set<String> = []
     /// 헌신찬양 and 설교제목 from the church's own sheet, by day.
     @Published private(set) var churchNotes: [Date: ChurchNote] = [:]
+    /// Role name → 0-based column on the Schedule tab, so an assignment
+    /// knows which cell to write. Empty until a schedule has been read.
+    @Published private(set) var roleColumns: [String: Int] = [:]
+    /// Whether the Members tab names who the leaders are.
+    @Published private(set) var hasLeaderColumn = false
 
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -406,6 +415,7 @@ final class TeamStore: ObservableObject {
 
             roles = Self.parseRoles(roleData)
             services = Self.parseSchedule(schedule, roles: roles)
+            roleColumns = Self.scheduleRoleColumns(schedule)
             songs = Self.parseSongs(songData)
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
@@ -453,6 +463,9 @@ final class TeamStore: ObservableObject {
         let emailCol = TeamSheet.column(header, ["email", "이메일", "메일"]) ?? 0
         let nameCol = TeamSheet.column(header, ["name", "이름"]) ?? 1
         let activeCol = TeamSheet.column(header, ["active", "사용", "활성"])
+        // Optional. A sheet without it is handled in `canAssign`, not here.
+        let leaderCol = TeamSheet.column(header, ["leader", "리더", "팀장", "인도자여부", "관리자"])
+        hasLeaderColumn = leaderCol != nil
 
         var emails: Set<String> = []
         var list: [Member] = []
@@ -471,7 +484,10 @@ final class TeamStore: ObservableObject {
             guard !name.isEmpty || email.contains("@") else { continue }
             let activeCell = activeCol.map { cell($0).lowercased() } ?? "true"
             let active = !["false", "no", "n", "0"].contains(activeCell)
-            list.append(Member(email: email, name: name, isActive: active, row: offset + 1))
+            let leaderCell = leaderCol.map { cell($0).lowercased() } ?? ""
+            let isLeader = ["true", "yes", "y", "o", "1", "리더", "팀장"].contains(leaderCell)
+            list.append(Member(email: email, name: name, isActive: active,
+                               row: offset + 1, isLeader: isLeader))
             if active, email.contains("@") { emails.insert(email.lowercased()) }
         }
         members = list
@@ -630,6 +646,103 @@ final class TeamStore: ObservableObject {
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // MARK: - Assigning somebody else
+
+    /// Whether this account may put other people's names on the schedule.
+    ///
+    /// WHERE THE LINE ACTUALLY IS: the sheet is the permission system. Anyone
+    /// Google has made an editor can already type any name into any cell from
+    /// a browser, and nothing the app does changes that. So this is not a
+    /// security control and must not be dressed up as one — it is there so
+    /// that a team which has decided who schedules can have the app reflect
+    /// that decision, and so the rest of the team does not reorder Sunday by
+    /// mis-tapping a chip.
+    ///
+    /// A Members tab with no Leader column means the team has not made that
+    /// decision, and the app does not invent one: everybody may assign, which
+    /// is exactly what the sheet already allows them. Adding the column is
+    /// how a team narrows it.
+    func canAssign(email: String?) -> Bool {
+        guard !isReadOnly else { return false }
+        guard hasLeaderColumn else { return true }
+        guard let email = email?.lowercased(), !email.isEmpty else { return false }
+        return members.contains {
+            $0.isLeader && $0.email.lowercased() == email
+        }
+    }
+
+    /// Names that may be put into a role, newest roster first.
+    var assignableNames: [String] {
+        members.filter { $0.isActive && !$0.name.isEmpty }
+            .map(\.name)
+            .sorted()
+    }
+
+    /// Puts somebody's name in a role on the Schedule tab — or clears it.
+    ///
+    /// This writes the LEADER'S PLAN, not an answer. The distinction is the
+    /// whole point of the two tabs: Schedule says who is meant to do it,
+    /// Signups says who has agreed. Assigning somebody does not answer for
+    /// them, and the chip stays orange until they say yes themselves.
+    func assign(
+        role: String,
+        to name: String?,
+        service: TeamService,
+        sheetId: String
+    ) async -> String? {
+        let cleaned = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = (cleaned?.isEmpty ?? true) ? "" : cleaned!
+
+        #if DEBUG
+        if isSample {
+            applyAssignmentLocally(role: role, value: value, service: service)
+            return nil
+        }
+        #endif
+
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let row = service.row, row >= 2 else {
+            return "이 예배가 시트의 몇 번째 줄인지 알 수 없어 지정할 수 없습니다. 새로 고친 뒤 다시 시도해 주세요."
+        }
+        guard let column = roleColumns[role] else {
+            // The role exists on the Roles tab but has no column on Schedule.
+            // Creating one would move every column to its right, which is a
+            // destructive edit to somebody else's document — so it says what
+            // to do instead of doing it.
+            return "Schedule 탭에 「\(role)」 열이 없습니다. 시트에 열을 추가한 뒤 새로 고쳐 주세요."
+        }
+
+        let cell = "\(TeamSheet.scheduleTab)!\(TeamSheet.columnLetter(column))\(row)"
+        do {
+            isReadOnly = false
+            try await client.write(sheetId: sheetId, range: cell, row: [value])
+            applyAssignmentLocally(role: role, value: value, service: service)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 지정하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Reflects the write without a four-round-trip reload.
+    private func applyAssignmentLocally(role: String, value: String, service: TeamService) {
+        guard let index = services.firstIndex(where: { $0.id == service.id }) else { return }
+        var assignments = services[index].assignments
+        if value.isEmpty { assignments.removeValue(forKey: role) }
+        else { assignments[role] = value }
+        services[index] = TeamService(
+            date: services[index].date,
+            title: services[index].title,
+            time: services[index].time,
+            location: services[index].location,
+            notes: services[index].notes,
+            assignments: assignments,
+            row: services[index].row
+        )
     }
 
     /// Takes back every answer this person has given for a service.
@@ -927,6 +1040,35 @@ final class TeamStore: ObservableObject {
     /// NOTE | 찬양 lead | 반주자 | 찬양 2…, which fixed indices would have
     /// read as gibberish. Anything not recognised as one of the known
     /// columns is a role, which is also how a team adds a part.
+    /// Where each role column sits on the Schedule tab, by the header's own
+    /// spelling. The same reserved-column reasoning as parseSchedule, kept
+    /// beside it so the two cannot disagree about what is a role.
+    static func scheduleRoleColumns(_ rows: [[String]]) -> [String: Int] {
+        guard let header = rows.first else { return [:] }
+        let reserved = Set(reservedScheduleColumns(header))
+        var result: [String: Int] = [:]
+        for (index, raw) in header.enumerated() where !reserved.contains(index) {
+            let name = raw.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, result[name] == nil { result[name] = index }
+        }
+        return result
+    }
+
+    private static func reservedScheduleColumns(_ header: [String]) -> [Int] {
+        func column(_ names: [String]) -> Int? {
+            header.firstIndex {
+                names.contains($0.trimmingCharacters(in: .whitespaces).lowercased())
+            }
+        }
+        return [
+            column(["date", "날짜"]) ?? TeamSheet.Schedule.date,
+            column(["title", "service", "구분", "type", "예배", "행사", "예배명"]),
+            column(["time", "시간"]),
+            column(["location", "장소"]),
+            column(["note", "notes", "비고", "메모"])
+        ].compactMap { $0 }
+    }
+
     static func parseSchedule(_ rows: [[String]], roles: [TeamRole]) -> [TeamService] {
         guard let header = rows.first else { return [] }
 
@@ -951,7 +1093,7 @@ final class TeamStore: ObservableObject {
             .map { ($0.offset, $0.element.trimmingCharacters(in: .whitespaces)) }
             .filter { !$0.1.isEmpty }
 
-        return rows.dropFirst().compactMap { row -> TeamService? in
+        return rows.dropFirst().enumerated().compactMap { offset, row -> TeamService? in
             guard row.count > dateCol, let date = TeamSheet.day(row[dateCol]) else { return nil }
 
             func cell(_ index: Int?) -> String? {
@@ -972,7 +1114,9 @@ final class TeamStore: ObservableObject {
                 time: cell(timeCol),
                 location: cell(locationCol),
                 notes: cell(notesCol),
-                assignments: assignments
+                assignments: assignments,
+                // +2: one for the header, one because sheets count from 1.
+                row: offset + 2
             )
         }
         .sorted { $0.date < $1.date }
@@ -1027,6 +1171,9 @@ final class TeamStore: ObservableObject {
         let name: String
         let isActive: Bool
         let row: Int
+        /// From an optional Leader column on the Members tab. See
+        /// `canAssign` for what happens when the sheet has no such column.
+        var isLeader: Bool = false
         var id: String { email.lowercased() }
     }
 
