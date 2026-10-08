@@ -36,6 +36,21 @@ func valuesURL(sheetId: String, suffix: String) -> URL? {
     return comps.url
 }
 
+/// The church sheet's tab is named "찬양/설교", and a slash in a URL path is a
+/// segment boundary rather than a character — so `comps.path` would send a
+/// request for a sheet called 찬양 inside a collection called 설교. The caller
+/// escapes the range and this assigns it without escaping it a second time.
+func encodedValuesURL(sheetId: String, encodedSuffix: String) -> URL? {
+    guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+    else { return nil }
+    comps.percentEncodedPath =
+        trimmedRoot(comps.path) + "/\(sheetId)/values/\(encodedSuffix)"
+    return comps.url
+}
+
+let churchTab = "'찬양/설교'"
+let churchEncoded = churchTab.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+
 let root = "https://sheets.googleapis.com/v4/spreadsheets/SID/values"
 let cases: [(name: String, got: String?, want: String)] = [
     ("read a tab",      valuesURL(sheetId: "SID", suffix: "Signups")?.absoluteString,
@@ -46,6 +61,15 @@ let cases: [(name: String, got: String?, want: String)] = [
                         "\(root)/Plan!1:1"),
     ("append to a tab", valuesURL(sheetId: "SID", suffix: "Signups:append")?.absoluteString,
                         "\(root)/Signups:append")
+]
+
+// The church tab is checked apart from the others: it is the one range that
+// SHOULD carry percent-encoding, so the "no % anywhere" rule below does not
+// apply to it.
+let churchCases: [(name: String, got: String?, want: String)] = [
+    ("church tab, slash escaped",
+     encodedValuesURL(sheetId: "SID", encodedSuffix: churchEncoded)?.absoluteString,
+     "\(root)/%27%EC%B0%AC%EC%96%91%2F%EC%84%A4%EA%B5%90%27")
 ]
 
 var failures = 0
@@ -62,6 +86,22 @@ for test in cases {
     if got.contains("%") { print("       !! percent-encoded: \(got)"); failures += 1 }
     if got.contains("values//") || got.contains("spreadsheets//") {
         print("       !! double slash: \(got)"); failures += 1
+    }
+}
+
+for test in churchCases {
+    let got = test.got ?? "<nil>"
+    let ok = got == test.want
+    if !ok { failures += 1 }
+    print("\(ok ? "ok  " : "FAIL") \(test.name)")
+    if !ok {
+        print("       want: \(test.want)")
+        print("       got : \(got)")
+    }
+    // The failure that would actually ship: the slash left as a separator,
+    // or escaped twice the way the colon once was.
+    if got.contains("찬양/설교") || got.contains("%2F%2F") || got.contains("%25") {
+        print("       !! slash wrong: \(got)"); failures += 1
     }
 }
 

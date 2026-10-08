@@ -254,6 +254,36 @@ actor SheetsClient {
         path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
+    /// Same URL, but for a range that is ALREADY percent-encoded.
+    ///
+    /// `comps.path` escapes what it is given, which is right for every range
+    /// this app writes — until a tab name contains a slash. The church
+    /// sheet's tab is "찬양/설교", and a slash in a path is a segment
+    /// boundary, not a character: setting `path` leaves it as a separator and
+    /// the request asks for a sheet called 찬양 inside a collection called
+    /// 설교. Escaping it first and assigning `percentEncodedPath` — which
+    /// escapes nothing further — gets it escaped exactly once, the same
+    /// once-and-only-once rule the colon bug above is about.
+    private func encodedValuesURL(sheetId: String, encodedSuffix: String) -> URL? {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { return nil }
+        comps.percentEncodedPath =
+            trimmedRoot(comps.path) + "/\(sheetId)/values/\(encodedSuffix)"
+        return comps.url
+    }
+
+    /// Read a range whose name had to be escaped by the caller.
+    func readEncoded(sheetId: String, encodedRange: String) async throws -> [[String]] {
+        guard let url = encodedValuesURL(sheetId: sheetId, encodedSuffix: encodedRange),
+              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange(encodedRange) }
+        comps.percentEncodedQuery = "valueRenderOption=FORMATTED_VALUE"
+
+        struct Response: Decodable { let values: [[String]]? }
+        let data = try await send(url: comps.url!, method: "GET", body: Optional<Data>.none)
+        return (try? JSONDecoder().decode(Response.self, from: data))?.values ?? []
+    }
+
     func read(sheetId: String, range: String) async throws -> [[String]] {
         guard let url = valuesURL(sheetId: sheetId, suffix: range),
               var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)

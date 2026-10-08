@@ -62,6 +62,17 @@ enum AppSecrets {
     /// Google's sharing, not by whether the id is guessable. It still lives
     /// in the gitignored xcconfig, because it is the team's document and does
     /// not belong in a repository.
+    /// The church's information sheet, shipped with the build like the
+    /// team's. Read-only, and not a secret for the same reason: Google's
+    /// sharing decides who can open it.
+    static var churchSheetId: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ChurchSheetId") as? String
+        else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return nil }
+        return trimmed
+    }
+
     static var teamSheetId: String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: "TeamSheetId") as? String
         else { return nil }

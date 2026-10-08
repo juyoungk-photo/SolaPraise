@@ -95,6 +95,7 @@ enum ReadingSettings {
         static let apiBibleKey = "reading.apiBibleKey"
         static let youtubeKey = "app.youtubeAPIKey"
         static let teamSheetId = "team.sheetId"
+        static let churchSheetId = "church.sheetId"
         static let extraVersion = "reading.extraVersion"
         static let currentChapter = "reading.currentChapter"
         static let lastAdvancedDay = "reading.lastAdvancedDay"
@@ -117,6 +118,14 @@ enum ReadingSettings {
     static var teamSheetId: String? {
         get { defaults.string(forKey: Keys.teamSheetId)?.trimmingCharacters(in: .whitespaces) }
         set { defaults.set(newValue, forKey: Keys.teamSheetId) }
+    }
+
+    /// The church's information sheet, read for 헌신찬양 and 설교제목.
+    /// Separate from the team's sheet: a different document, owned by the
+    /// office, and only ever read.
+    static var churchSheetId: String? {
+        get { defaults.string(forKey: Keys.churchSheetId)?.trimmingCharacters(in: .whitespaces) }
+        set { defaults.set(newValue, forKey: Keys.churchSheetId) }
     }
 
     /// A YouTube API key typed in on this device, overriding the build's.

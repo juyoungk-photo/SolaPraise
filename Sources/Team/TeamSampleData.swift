@@ -141,6 +141,27 @@ enum TeamSampleData {
             plans[calendar.startOfDay(for: service.date)] = plan
         }
 
+        // What the church office has filled in so far. Deliberately partial:
+        // the nearest Sunday has both, the next has only a 설교제목, and the
+        // ones after that have nothing — which is how the sheet actually
+        // looks weeks ahead, and the state the block has to handle without
+        // reading as an error.
+        var churchNotes: [Date: ChurchNote] = [:]
+        let sundays = services
+            .filter { $0.title.contains("주일") && $0.date >= calendar.startOfDay(for: Date()) }
+            .map { calendar.startOfDay(for: $0.date) }
+            .sorted()
+        if let first = sundays.first {
+            churchNotes[first] = ChurchNote(date: first,
+                                            dedicationSong: "주 은혜임을",
+                                            sermonTitle: "기브아의 비극")
+        }
+        if sundays.count > 1 {
+            churchNotes[sundays[1]] = ChurchNote(date: sundays[1],
+                                                 dedicationSong: nil,
+                                                 sermonTitle: "다시 세우시는 하나님")
+        }
+
         store.installSample(
             services: services,
             roles: roles,
@@ -153,7 +174,8 @@ enum TeamSampleData {
             roster: people.enumerated().map { index, person in
                 TeamStore.Member(email: person.1, name: person.0,
                                  isActive: true, row: index + 2)
-            }
+            },
+            churchNotes: churchNotes
         )
     }
 }

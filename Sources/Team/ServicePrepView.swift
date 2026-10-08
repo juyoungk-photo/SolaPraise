@@ -128,6 +128,7 @@ struct ServicePrepView: View {
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.openURL) private var openURL
     private var isWide: Bool { sizeClass == .regular }
 
     var body: some View {
@@ -354,6 +355,10 @@ struct ServicePrepView: View {
                 }
                 .accessibilityLabel("라이브 진행")
             }
+            if let url = teamSheetURL {
+                Button { openURL(url) } label: { Image(systemName: "tablecells") }
+                    .accessibilityLabel("구글 시트에서 편집")
+            }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
         }
     }
@@ -435,6 +440,37 @@ struct ServicePrepView: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
+    /// The way out to the sheet itself.
+    ///
+    /// The app deliberately does not cover everything the sheet can do —
+    /// adding a service, renaming a role, fixing a date typed wrong — and
+    /// without a door to it the answer to all of those was "find the URL
+    /// somewhere else". It is the same document either way; this is the
+    /// team's own planner, and editing it in Sheets is not a fallback.
+    @ViewBuilder
+    private var sheetLinkSection: some View {
+        if TeamSheetSource.current != nil || ChurchSheetSource.current != nil {
+            Section {
+                if let url = teamSheetURL {
+                    Button { openURL(url) } label: {
+                        Label("구글 시트에서 편집", systemImage: "tablecells")
+                    }
+                }
+                if let url = ChurchSheetSource.url {
+                    Button { openURL(url) } label: {
+                        Label("교회 정보 시트 열기", systemImage: "building.columns")
+                    }
+                }
+            } footer: {
+                Text("시트에서 바꾼 내용은 이 화면을 아래로 당겨 새로 고치면 반영됩니다.")
+            }
+        }
+    }
+
+    private var teamSheetURL: URL? {
+        sheetId.flatMap { URL(string: "https://docs.google.com/spreadsheets/d/\($0)/edit") }
+    }
+
     private func content() -> some View {
         ScrollViewReader { proxy in
             List {
@@ -449,6 +485,8 @@ struct ServicePrepView: View {
                 if let message = team.errorMessage {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
+
+                sheetLinkSection
             }
             // The section lost its header and kept the header's space, so the
             // list started with a band of nothing under the navigation title.
@@ -482,6 +520,48 @@ struct ServicePrepView: View {
 
     // MARK: - Order of service
 
+    /// 설교제목 and 헌신찬양, as the church office wrote them.
+    ///
+    /// Said to come from the church sheet, because it does: nobody on the
+    /// worship team can change these from here, and a line that looks
+    /// editable but is not is worse than one that says where to go. Absent
+    /// entirely when the office has not filled the week in — which is the
+    /// normal state of a service three weeks out, and not an error.
+    @ViewBuilder
+    private func churchNoteBlock(_ service: TeamService) -> some View {
+        if let note = team.churchNote(for: service) {
+            VStack(alignment: .leading, spacing: 3) {
+                if let sermon = note.sermonTitle {
+                    churchNoteLine("설교", sermon)
+                }
+                if let song = note.dedicationSong {
+                    churchNoteLine("헌신찬양", song)
+                }
+                Text("교회 시트에서 가져옴")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.045))
+            )
+        }
+    }
+
+    private func churchNoteLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 48, alignment: .leading)
+            Text(value)
+                .font(.footnote)
+                .textSelection(.enabled)
+        }
+    }
+
     /// What a service row shows when it is open: the 순서, and the things
     /// you do with it. A plain stack rather than a Section, because it now
     /// lives inside a row instead of being a screen of its own.
@@ -507,6 +587,8 @@ struct ServicePrepView: View {
             if let notes = service.notes {
                 Text(notes).font(.footnote).foregroundStyle(.secondary)
             }
+
+            churchNoteBlock(service)
 
             if items.isEmpty {
                 Text("아직 순서가 없습니다. 아래에서 한 줄씩 더하거나, 재생목록으로 찬양을 한 번에 채울 수 있습니다.")
@@ -1158,6 +1240,18 @@ struct ServicePrepView: View {
                                 }
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
+
+                                // What this Sunday is about, from the church
+                                // sheet. On the closed row because it is the
+                                // question asked of a service you have not
+                                // opened; 헌신찬양 waits inside, where the
+                                // 순서 it belongs beside is.
+                                if let sermon = team.churchNote(for: upcoming)?.sermonTitle {
+                                    Text(sermon)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
                             }
                             // Fixed on iPad so the chips beside it start at
                             // the same x on every row; elastic on a phone,

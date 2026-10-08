@@ -214,6 +214,8 @@ final class TeamStore: ObservableObject {
     private var liveRows: [Date: Int] = [:]
     @Published private(set) var signups: [Date: [TeamSignup]] = [:]
     @Published private(set) var memberEmails: Set<String> = []
+    /// 헌신찬양 and 설교제목 from the church's own sheet, by day.
+    @Published private(set) var churchNotes: [Date: ChurchNote] = [:]
 
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -281,7 +283,8 @@ final class TeamStore: ObservableObject {
     /// Drops sample data straight in, for reviewing 예배 without a sheet.
     func installSample(services: [TeamService], roles: [TeamRole],
                        signups: [Date: [TeamSignup]], plans: [Date: [PlanItem]],
-                       members: Set<String>, roster: [Member] = []) {
+                       members: Set<String>, roster: [Member] = [],
+                       churchNotes: [Date: ChurchNote] = [:]) {
         isSample = true
         sampleActingEmail = members.sorted().first
         self.services = services
@@ -290,6 +293,7 @@ final class TeamStore: ObservableObject {
         self.plans = plans
         self.memberEmails = members
         self.members = roster
+        self.churchNotes = churchNotes
         self.isReadOnly = false
         self.lastLoaded = Date()
     }
@@ -406,6 +410,7 @@ final class TeamStore: ObservableObject {
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
+            await loadChurchNotes(client: client)
             lastLoaded = Date()
             needsAuthorization = false
         } catch SheetsClient.SheetsError.http(403, let message) {
@@ -414,6 +419,25 @@ final class TeamStore: ObservableObject {
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    /// The church sheet's two columns, if there is a church sheet.
+    ///
+    /// Never throws outward and never sets `errorMessage`. This is a
+    /// different document, owned by someone else, and the team's own planner
+    /// has to keep working when it is missing, renamed, unshared or simply
+    /// not configured — a 403 here is not the team's problem to see.
+    private func loadChurchNotes(client: SheetsClient) async {
+        guard let id = ChurchSheetSource.current,
+              let range = ChurchSheet.encodedRange else { churchNotes = [:]; return }
+        guard let rows = try? await client.readEncoded(sheetId: id, encodedRange: range)
+        else { churchNotes = [:]; return }
+        churchNotes = ChurchSheet.notes(from: rows)
+    }
+
+    /// What the church sheet says about a service, if anything.
+    func churchNote(for service: TeamService) -> ChurchNote? {
+        churchNotes[Calendar.current.startOfDay(for: service.date)]
     }
 
     /// The Members tab is optional. Without one, anyone who can open the
