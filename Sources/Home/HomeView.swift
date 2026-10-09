@@ -414,7 +414,7 @@ struct HomeView: View {
             // fact exactly right.
             let day = EpisodeDate.inTitle(video.title) ?? video.publishedAt
             guard let day else { return video.title }
-            return "\(day.formatted(.dateTime.month().day())) · \(video.title)"
+            return "\(Self.relativeDay(day)) · \(video.title)"
         case .playlist:
             return "탭하면 재생"
         case .video:
@@ -435,6 +435,34 @@ struct HomeView: View {
                 URL(string: "https://i.ytimg.com/vi/\($0)/mqdefault.jpg")
             }
         default:          return nil
+        }
+    }
+
+    /// 오늘 · 어제 · 3일 전 — not a bare date.
+    ///
+    /// WHY: 코너스톤 모닝워십 streams at six in the morning but YouTube only
+    /// publishes the archive around seven that evening, so for most of the
+    /// day the newest episode that EXISTS is yesterday's. The app was right
+    /// to show it and said so only as "Oct 7", which next to a card you
+    /// opened on the 8th reads as the app being a day behind rather than as
+    /// the recording not being up yet. 매일성경 has the opposite habit —
+    /// published days ahead — so the same label has to handle both
+    /// directions.
+    static func relativeDay(_ date: Date, from now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        let days = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: now),
+            to: calendar.startOfDay(for: date)
+        ).day ?? 0
+
+        switch days {
+        case 0:  return "오늘"
+        case 1:  return "내일"
+        case -1: return "어제"
+        case 2...6:    return "\(days)일 후"
+        case -6 ... -2: return "\(-days)일 전"
+        default: return date.formatted(.dateTime.month().day())
         }
     }
 
