@@ -316,16 +316,12 @@ struct PlayerStage: View {
                         Color.black
                         FocusPlayerView(videoId: current.id, coordinator: host.coordinator)
 
-                        // The end-screen guard, painted the instant ENDED
-                        // arrives so YouTube's suggestion grid never gets a
-                        // frame.
-                        if host.coordinator.didEnd,
-                           SolaPraiseConfig.endBehavior == .overlay, t < 0.5 {
-                            PlayerEndCard(host: host)
-                        }
-                        if let message = host.coordinator.errorMessage, t < 0.5 {
-                            PlayerErrorCard(host: host, message: message)
-                        }
+                        // Everything that reflects the COORDINATOR'S state,
+                        // in a view that observes the coordinator — see
+                        // CoordinatorOverlays for why that matters.
+                        CoordinatorOverlays(coordinator: host.coordinator,
+                                            host: host,
+                                            expanded: t < 0.5)
                     }
                     .frame(width: width, height: height)
                     .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
@@ -681,5 +677,88 @@ struct BottomChrome: ViewModifier {
 extension View {
     func bottomChrome() -> some View {
         modifier(BottomChrome())
+    }
+}
+
+
+/// The end card, the error card and the double-tap ripple.
+///
+/// They read the coordinator, and PlayerStage observes only PlayerHost — so
+/// when they lived inline there, nothing the coordinator published ever
+/// re-rendered them. The double-tap ripple never appeared. Worse, an error
+/// the watchdog had already WITHDRAWN stayed on screen, because nothing
+/// re-drew the card after errorMessage went back to nil; docking the player
+/// changed PlayerHost, forced a re-render and made it vanish — which is
+/// exactly how "the player comes back if I dock it and come back" looked.
+/// Observing the coordinator here makes each of them follow its state.
+private struct CoordinatorOverlays: View {
+    @ObservedObject var coordinator: PlayerCoordinator
+    let host: PlayerHost
+    let expanded: Bool
+
+    var body: some View {
+        // The end-screen guard, painted the instant ENDED arrives so
+        // YouTube's suggestion grid never gets a frame.
+        if coordinator.didEnd, SolaPraiseConfig.endBehavior == .overlay, expanded {
+            PlayerEndCard(host: host)
+        }
+        if let message = coordinator.errorMessage, expanded {
+            PlayerErrorCard(host: host, message: message)
+        }
+        // The ripple a double-tap leaves, as in YouTube. Never hit-testable:
+        // it is feedback, and the next tap has to reach the player under it.
+        if expanded {
+            SkipFlashView(flash: coordinator.skipFlash)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// YouTube's double-tap feedback: a pale half-disc against the tapped edge
+/// with the chevrons and the seconds skipped, fading out by itself.
+private struct SkipFlashView: View {
+    let flash: PlayerCoordinator.SkipFlash?
+    @State private var visible = false
+
+    var body: some View {
+        GeometryReader { geo in
+            if let flash, visible {
+                let width = geo.size.width / 3
+                ZStack {
+                    // A circle much larger than the band, clipped to it, so
+                    // the inner edge curves the way YouTube's does.
+                    Circle()
+                        .fill(Color.white.opacity(0.18))
+                        .frame(width: geo.size.height * 2.2, height: geo.size.height * 2.2)
+                        .offset(x: flash.forward ? geo.size.height * 0.75 : -geo.size.height * 0.75)
+
+                    VStack(spacing: 4) {
+                        Image(systemName: flash.forward ? "forward.fill" : "backward.fill")
+                            .font(.title3)
+                        Text("\(flash.seconds)초")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.white)
+                    .shadow(radius: 2)
+                }
+                .frame(width: width, height: geo.size.height)
+                .clipped()
+                .frame(maxWidth: .infinity,
+                       alignment: flash.forward ? .trailing : .leading)
+                .transition(.opacity)
+            }
+        }
+        .onChange(of: flash) { _, new in
+            guard new != nil else { return }
+            withAnimation(.easeOut(duration: 0.12)) { visible = true }
+            let stamp = new?.at
+            // Hidden only if no newer tap arrived meanwhile, so a run of
+            // double-taps keeps one ripple up while its count climbs.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                guard flash?.at == stamp else { return }
+                withAnimation(.easeIn(duration: 0.25)) { visible = false }
+            }
+        }
     }
 }

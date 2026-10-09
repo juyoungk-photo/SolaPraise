@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import UIKit
 import WebKit
 import Combine
 
@@ -110,6 +111,23 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         config.mediaTypesRequiringUserActionForPlayback = []
 
         let web = WKWebView(frame: .zero, configuration: config)
+
+        // Double-tap a side to skip ten seconds, as in YouTube's own app.
+        //
+        // On the web view itself rather than as a SwiftUI overlay. YouTube's
+        // controls inside the embed respond to a single tap — show the bar,
+        // pause — and an overlay would swallow every touch before the page
+        // saw it. This recognizer does not cancel touches and recognises
+        // alongside the page's own, so single taps still reach the player
+        // and only a double-tap on a side is taken.
+        let doubleTap = UITapGestureRecognizer(target: self,
+                                               action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.cancelsTouchesInView = false
+        doubleTap.delaysTouchesBegan = false
+        doubleTap.delaysTouchesEnded = false
+        doubleTap.delegate = self
+        web.addGestureRecognizer(doubleTap)
         web.scrollView.isScrollEnabled = false
         web.scrollView.bounces = false
         web.isOpaque = false
@@ -274,6 +292,52 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         run("player.seekTo(\(seconds), true);")
     }
 
+    /// Which side was double-tapped, and when — the view draws the ripple
+    /// from this and lets it fade on its own.
+    struct SkipFlash: Equatable {
+        let forward: Bool
+        /// Accumulated: tapping again within the window adds another ten,
+        /// the way YouTube shows 「20초」 after a second double-tap.
+        let seconds: Int
+        let at: Date
+    }
+    @Published private(set) var skipFlash: SkipFlash?
+
+    /// Ten seconds either way, clamped to the video.
+    func skip(forward: Bool) {
+        let step = 10.0
+        let target = forward
+            ? min(currentTime + step, max(duration - 1, 0))
+            : max(currentTime - step, 0)
+        seek(to: target)
+        // Optimistic, so a second double-tap a moment later measures from
+        // where the first one landed rather than from a `time` event that
+        // has not arrived yet — otherwise two quick taps skip ten, not
+        // twenty.
+        currentTime = target
+
+        let continuing = skipFlash.map {
+            $0.forward == forward && Date().timeIntervalSince($0.at) < 1.0
+        } ?? false
+        skipFlash = SkipFlash(forward: forward,
+                              seconds: continuing ? (skipFlash!.seconds + 10) : 10,
+                              at: Date())
+    }
+
+    @objc private func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+        guard let view = recognizer.view else { return }
+        let x = recognizer.location(in: view).x
+        let width = view.bounds.width
+        // Left and right thirds, as YouTube does. The middle is left to the
+        // player's own controls, where a double-tap would otherwise fight
+        // the play/pause button.
+        #if DEBUG
+        print("[FocusPlayer] double-tap at \(Int(x))/\(Int(width))")
+        #endif
+        if x < width / 3 { skip(forward: false) }
+        else if x > width * 2 / 3 { skip(forward: true) }
+    }
+
     func replay() {
         didEnd = false
         run("player.seekTo(0, true); player.playVideo();")
@@ -318,6 +382,30 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 // MARK: - Navigation
 
 extension PlayerCoordinator: WKNavigationDelegate {
+
+    /// Takes WebKit's own double-tap out of the way, once the page exists.
+    ///
+    /// WKWebView carries an internal double-tap recogniser for its zoom, on
+    /// a content view it builds only after a page loads. It claimed every
+    /// double-tap first, so the skip recogniser never fired — verified by
+    /// the log: a double-tap produced YouTube's control overlay and no seek
+    /// at all. The player page cannot be zoomed (its viewport forbids it),
+    /// so WebKit's double-tap had nothing to do anyway; disabling it lets
+    /// ours through, and single taps reach the player sooner as a side
+    /// effect, since they no longer wait to rule out a double.
+    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        Task { @MainActor in self.yieldDoubleTap(in: webView) }
+    }
+
+    private func yieldDoubleTap(in root: UIView) {
+        for recognizer in root.gestureRecognizers ?? [] {
+            guard let tap = recognizer as? UITapGestureRecognizer,
+                  tap.numberOfTapsRequired == 2,
+                  tap.delegate !== self else { continue }
+            tap.isEnabled = false
+        }
+        for child in root.subviews { yieldDoubleTap(in: child) }
+    }
 
     /// A refused connection to the loopback port produces no error page, just
     /// a black view — which is what a stale port looked like. Rebuild the
@@ -418,4 +506,13 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         default:           return "The player hit an unexpected error (\(code))."
         }
     }
+}
+
+
+extension PlayerCoordinator: UIGestureRecognizerDelegate {
+    /// Alongside the page's own recognisers, never instead of them.
+    nonisolated func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
 }
