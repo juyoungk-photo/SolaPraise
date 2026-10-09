@@ -636,11 +636,19 @@ struct HomeView: View {
         // processing. So "the newest upload" was regularly tomorrow's
         // reading, or yesterday's worship at breakfast. The title says which
         // day it is for; nothing else in the feed does.
-        let wanted = day ?? Calendar.current.date(
-            byAdding: .day, value: dayOffset,
-            to: Calendar.current.startOfDay(for: Date()))
-        if let wanted,
-           let exact = episodes.first(where: { EpisodeDate.inTitle($0.title) == wanted }) {
+        // TODAY, unless a caller names a day.
+        //
+        // This used to be today + `dayOffset`, and `dayOffset` is derived
+        // from the PSALM — `daily.chapter - scheduledChapter()`. So anyone
+        // whose psalm reading had drifted from the schedule, by pressing the
+        // 시편 card's arrows or simply by being a few days behind, had every
+        // channel card silently asking for a different day: 모닝워십 showed a
+        // sermon from last Thursday with nothing on screen saying why.
+        //
+        // Being behind in Psalms is not a request to watch an older sermon.
+        // The psalm steps the psalm, and 매일성경 has arrows of its own.
+        let wanted = day ?? Calendar.current.startOfDay(for: Date())
+        if let exact = episodes.first(where: { EpisodeDate.inTitle($0.title) == wanted }) {
             return exact
         }
 
@@ -654,28 +662,24 @@ struct HomeView: View {
         // honest answer — and because the subtitle now shows the day the
         // episode is FOR, it says plainly which day you are looking at
         // rather than implying it is today's.
-        if let wanted {
-            let dated = episodes.compactMap { video -> (CachedVideo, Date)? in
-                EpisodeDate.inTitle(video.title).map { (video, $0) }
+        let dated = episodes.compactMap { video -> (CachedVideo, Date)? in
+            EpisodeDate.inTitle(video.title).map { (video, $0) }
+        }
+        if !dated.isEmpty {
+            if let best = dated.filter({ $0.1 <= wanted }).max(by: { $0.1 < $1.1 }) {
+                return best.0
             }
-            if !dated.isEmpty {
-                if let best = dated.filter({ $0.1 <= wanted }).max(by: { $0.1 < $1.1 }) {
-                    return best.0
-                }
-                // Everything in hand is in the future — the channel
-                // publishes ahead and the older ones have fallen out of the
-                // cache. The earliest of them is the closest.
-                return dated.min { $0.1 < $1.1 }?.0
-            }
+            // Everything in hand is in the future — the channel publishes
+            // ahead and the older ones have fallen out of the cache. The
+            // earliest of them is the closest.
+            return dated.min { $0.1 < $1.1 }?.0
         }
 
         // No title here carries a date at all. Walk the uploads, which is
         // what this did before and is still right for a channel that simply
         // posts when it posts.
-        let offset = day.map {
-            Calendar.current.dateComponents(
-                [.day], from: Calendar.current.startOfDay(for: Date()), to: $0).day ?? 0
-        } ?? dayOffset
+        let offset = Calendar.current.dateComponents(
+            [.day], from: Calendar.current.startOfDay(for: Date()), to: wanted).day ?? 0
         guard offset != 0 else { return episodes.first }
 
         // Step through what exists rather than through the calendar: a channel
@@ -697,6 +701,11 @@ struct HomeView: View {
     /// number of days stepped — which means 시편 듣기 and the QT cards can
     /// follow it without a stepper of their own. Three sets of arrows that
     /// each moved a different card was the confusing part, not the stepping.
+    /// How far the psalm reading has drifted from the schedule.
+    ///
+    /// NOT a day offset for anything else. It once moved every channel card
+    /// too — see `episode(fromChannel:on:needingPassage:)` for why that was
+    /// wrong — and now only the psalm's own card reads it.
     private var dayOffset: Int {
         let today = DailyReading.scheduledChapter()
         var delta = daily.chapter - today
