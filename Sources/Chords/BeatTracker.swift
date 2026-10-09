@@ -115,32 +115,36 @@ enum BeatTracker {
         let maxLag = min(signal.count / 2, Int((60 / bpmRange.lowerBound) / hopSeconds))
         guard maxLag > minLag else { return nil }
 
-        // Autocorrelation on its own CANNOT pick the beat, and this is the
-        // trap the first two attempts fell into.
+        // Autocorrelation on its own CANNOT pick the beat, and getting
+        // this right took three attempts.
         //
         // A periodic pulse correlates with itself at every multiple of its
         // period, so a song at 120 peaks just as hard at 60, 40 and 30. Any
-        // rule of the form "prefer the slower one" therefore fires every
-        // time and halves the whole library; "prefer the faster one" locks
-        // onto the subdivision instead. The ambiguity is real in the signal,
-        // so it takes two things to resolve:
+        // rule of the form "prefer the slower one" fires every time and
+        // halves the whole library; "prefer the faster one" locks onto the
+        // subdivision. The ambiguity is real in the signal, and three things
+        // are needed to resolve it:
         //
-        // 1. A COMB over harmonics. A true beat period has peaks at p, 2p
-        //    and 3p; a spurious 2p has support at 2p and 4p but nothing at
-        //    p. Summing the correlation at multiples therefore favours the
-        //    fundamental. This is what finally fixed 140 BPM, which kept
-        //    coming back as 70: at a hop of 23ms the true period is 18.5
-        //    hops and lands between bins, while its double is an exact 37
-        //    and scored higher on its own.
-        // 2. A PRIOR over how fast music is. Tempo perception clusters near
-        //    two beats a second and falls off symmetrically in OCTAVES, so
-        //    a log-normal centred on 120 breaks ties the comb leaves.
+        // 1. FRACTIONAL periods. This was the one that mattered. At a 23ms
+        //    hop, 140 BPM is 18.43 hops — between bins — while its double is
+        //    very nearly the exact integer 37. Sampling only integer lags
+        //    therefore measured the fundamental at a depressed, off-peak
+        //    value and its harmonic at full height, and 140 came back as 70
+        //    no matter what weighting sat on top. Scanning in fractions of a
+        //    hop depresses a period and its harmonics equally, so the bias
+        //    cancels and the comparison becomes fair.
+        // 2. A COMB over harmonics. A true period has support at p, 2p and
+        //    3p; a spurious 2p has support at 2p and 4p but nothing at p.
+        // 3. A PRIOR over how fast music is. Tempo perception clusters near
+        //    two beats a second and falls off symmetrically in OCTAVES, so a
+        //    log-normal centred on 120 breaks what the comb leaves.
         let centreBPM = 120.0
         let octaveWidth = 0.9
 
         // Correlation out to four times the slowest candidate, so the comb
         // has harmonics to look at.
         let acfLimit = min(signal.count - 2, maxLag * 4)
+        guard acfLimit > minLag else { return nil }
         var acf = [Double](repeating: 0, count: acfLimit + 1)
         for lag in 1...acfLimit {
             var sum = 0.0
@@ -148,42 +152,46 @@ enum BeatTracker {
             acf[lag] = sum / Double(signal.count - lag)
         }
 
-        func comb(_ lag: Int) -> Double {
+        /// The correlation at a fractional lag.
+        ///
+        /// Quadratic through the three nearest samples rather than linear:
+        /// an autocorrelation peak is curved, and a straight line between
+        /// two samples either side of it reads well below the true value —
+        /// which is the very bias this is here to remove.
+        func acfAt(_ x: Double) -> Double {
+            guard x >= 1, x <= Double(acfLimit) else { return 0 }
+            let i = Int(x.rounded())
+            guard i >= 1, i <= acfLimit else { return 0 }
+            guard i > 1, i < acfLimit else { return acf[i] }
+            let d = x - Double(i)
+            let a = acf[i - 1], b = acf[i], c = acf[i + 1]
+            return b + 0.5 * d * (c - a) + 0.5 * d * d * (a - 2 * b + c)
+        }
+
+        func comb(_ period: Double) -> Double {
             var total = 0.0
             for harmonic in 1...4 {
-                let at = lag * harmonic
-                guard at <= acfLimit else { break }
-                total += acf[at] / Double(harmonic)
+                let at = period * Double(harmonic)
+                guard at <= Double(acfLimit) else { break }
+                total += acfAt(at) / Double(harmonic)
             }
             return total
         }
 
-        var bestLag = minLag
-        var bestScore = -1.0
-        for lag in minLag...maxLag {
-            let bpm = 60 / (Double(lag) * hopSeconds)
+        // A twentieth of a hop is about one millisecond — far finer than the
+        // tracker needs, and the whole scan is a few thousand operations.
+        let step = 0.05
+        var period = Double(minLag)
+        var best = -1.0
+        var candidate = Double(minLag)
+        while candidate <= Double(maxLag) {
+            let bpm = 60 / (candidate * hopSeconds)
             let octaves = log2(bpm / centreBPM) / octaveWidth
-            let score = comb(lag) * exp(-0.5 * octaves * octaves)
-            if score > bestScore { bestScore = score; bestLag = lag }
+            let score = comb(candidate) * exp(-0.5 * octaves * octaves)
+            if score > best { best = score; period = candidate }
+            candidate += step
         }
-        guard bestScore > 0 else { return nil }
-
-        // Sub-hop refinement.
-        //
-        // At a 23ms hop the lag next to 120 BPM is 21 or 22 hops — 123.0 or
-        // 117.5, and nothing in between. Fitting a parabola through the
-        // correlation either side of the peak recovers the fraction, which
-        // is the difference between a grid that stays with the song for
-        // three minutes and one that drifts a beat.
-        var period = Double(bestLag)
-        if bestLag > 1, bestLag + 1 <= acfLimit {
-            let before = acf[bestLag - 1], here = acf[bestLag], after = acf[bestLag + 1]
-            let denominator = before - 2 * here + after
-            if abs(denominator) > 1e-12 {
-                let shift = 0.5 * (before - after) / denominator
-                if abs(shift) < 1 { period += shift }
-            }
-        }
+        guard best > 0 else { return nil }
 
         // Confidence from the plain correlation: the comb and the prior are
         // there to choose between harmonics, not to make a flat curve look
@@ -191,7 +199,7 @@ enum BeatTracker {
         let candidates = (minLag...maxLag).map { acf[$0] }.sorted()
         let median = candidates[candidates.count / 2]
         let confidence = median > 0
-            ? min(1, max(0, (acf[bestLag] / median - 1) / 2))
+            ? min(1, max(0, (acfAt(period) / median - 1) / 2))
             : 1
 
         return (period, confidence)

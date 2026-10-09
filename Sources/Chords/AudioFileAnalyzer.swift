@@ -155,6 +155,14 @@ final class AudioFileAnalyzer: ObservableObject {
             let duration = Double(totalFrames) / sampleRate
             report(0, "코드 분석 중… 0:00 / \(Self.clock(duration))")
 
+            // Kept so the chords can be re-decided once the bar lines are
+            // known. ~43 frames a second × 12 floats is about 5MB for a
+            // forty-minute service, which is worth it: a chord placed on a
+            // bar line is readable and one placed at 0:47.3 is not.
+            let onset = OnsetDetector()
+            var flux: [Float] = []
+            var frames: [(time: TimeInterval, chroma: [Float])] = []
+
             var collected: [SessionChord] = []
             var lastChord: Chord?
             var framesRead: AVAudioFramePosition = 0
@@ -207,8 +215,11 @@ final class AudioFileAnalyzer: ObservableObject {
                     let position = TimeInterval(framesRead + AVAudioFramePosition(offset)) / sampleRate
                     offset += count
 
+                    flux.append(onset?.process(buffer: mono) ?? 0)
+
                     guard let pcp = chroma.process(buffer: mono) else { continue }
                     keyEstimator.add(chroma: pcp)
+                    frames.append((position, pcp))
 
                     let bassResult = bass.process(buffer: mono)
                     let similarities = detector.similarities(from: pcp)
@@ -242,8 +253,27 @@ final class AudioFileAnalyzer: ObservableObject {
                 }
             }
 
-            report(0.98, "정리 중…")
-            let collapsed = Self.collapseRuns(collected)
+            report(0.98, "박자 맞추는 중…")
+
+            // Put the chords on the bar lines.
+            //
+            // Until now a chart said "G at 0:47.3" — a time decided by when
+            // the analysis changed its mind, which corresponds to nothing a
+            // musician can find. You cannot count yourself in to 0:47.3. A
+            // chord belongs to a bar, so the bars are located and each one
+            // gets the single chord that best explains the whole bar.
+            //
+            // Falls back to the raw timeline when no pulse is found —
+            // through-composed, free-tempo or badly recorded audio should
+            // still produce a chart, just not a barred one.
+            let hop = Double(Self.hop) / sampleRate
+            let rhythm = BeatTracker.track(flux: flux, hopSeconds: hop)
+            let barred = rhythm.flatMap {
+                Self.chordsPerBar(frames: frames, rhythm: $0, detector: detector)
+            }
+
+            report(0.99, "정리 중…")
+            let collapsed = Self.collapseRuns(barred ?? collected)
             guard !collapsed.isEmpty else {
                 return .failure("코드를 찾지 못했습니다. 반주가 뚜렷한 구간이 있는 파일인지 확인해 주세요.")
             }
@@ -256,6 +286,57 @@ final class AudioFileAnalyzer: ObservableObject {
                 chords: collapsed
             ))
         }.value
+    }
+
+    /// One chord per bar, decided from the whole bar rather than from the
+    /// instant the detector happened to change its mind.
+    ///
+    /// Summing the chroma across a bar is also simply a better measurement:
+    /// four beats of evidence instead of one 23ms frame, which is why this
+    /// both reads better and guesses better. A bar whose audio is silent
+    /// contributes nothing and is skipped rather than being given whatever
+    /// chord best matches noise.
+    nonisolated private static func chordsPerBar(
+        frames: [(time: TimeInterval, chroma: [Float])],
+        rhythm: Rhythm,
+        detector: ChordDetector
+    ) -> [SessionChord]? {
+        guard !frames.isEmpty, rhythm.downbeats.count >= 2 else { return nil }
+
+        var out: [SessionChord] = []
+        var index = 0
+        for (position, start) in rhythm.downbeats.enumerated() {
+            let end = position + 1 < rhythm.downbeats.count
+                ? rhythm.downbeats[position + 1]
+                : start + rhythm.secondsPerBar
+
+            // The frames are in time order, so the cursor only moves forward.
+            while index < frames.count, frames[index].time < start { index += 1 }
+            var total = [Float](repeating: 0, count: 12)
+            var counted = 0
+            var scan = index
+            while scan < frames.count, frames[scan].time < end {
+                for i in 0..<12 { total[i] += frames[scan].chroma[i] }
+                counted += 1
+                scan += 1
+            }
+            guard counted > 0 else { continue }
+
+            let energy = total.reduce(0, +)
+            guard energy > 0 else { continue }
+            for i in 0..<12 { total[i] /= Float(counted) }
+
+            // similarities() returns a score per template, in chordSpace
+            // order — so the winner is an index, not a chord.
+            let similarities = detector.similarities(from: total)
+            let space = detector.chordSpace
+            guard similarities.count == space.count,
+                  let bestIndex = similarities.indices.max(by: {
+                      similarities[$0] < similarities[$1]
+                  }) else { continue }
+            out.append(SessionChord(chord: space[bestIndex], timestamp: start))
+        }
+        return out.isEmpty ? nil : out
     }
 
     nonisolated private static func clock(_ seconds: TimeInterval) -> String {

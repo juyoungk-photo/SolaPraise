@@ -929,23 +929,47 @@ struct WatchScreen: View {
             } else {
                 InputSourceBanner(audio: detection.audio, compact: true)
 
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(detection.currentChord?.symbol()
-                         ?? (detection.isStarting ? "준비 중…" : "듣는 중…"))
-                        .font(.system(size: 34, weight: .semibold, design: .rounded))
-                        .contentTransition(.numericText())
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let key = detection.detectedKey {
-                            Text("Key \(key)").font(.caption)
-                        }
-                        Text("\(detection.history.count)개 코드")
+                // Every number here says what it is.
+                //
+                // It used to read 「G」 in large type with 「Key G major」
+                // beside it in small type, and nothing explained that the
+                // first is the chord sounding right now while the second is
+                // the key of the whole song — two different things, one
+                // letter apart, sitting next to each other.
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("지금 코드")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                        Text(detection.currentChord?.symbol()
+                             ?? (detection.isStarting ? "준비 중…" : "듣는 중…"))
+                            .font(.system(size: 34, weight: .semibold, design: .rounded))
+                            .contentTransition(.numericText())
                     }
+
+                    if let key = detection.detectedKey {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("곡 조성(추정)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text(key)
+                                .font(.system(size: 20, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
                     Spacer()
-                    ProgressView(value: Double(detection.confidence))
-                        .frame(width: 60)
+
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("신뢰도")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        ProgressView(value: Double(detection.confidence))
+                            .frame(width: 60)
+                        Text("코드 \(detection.history.count)개")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
         }
