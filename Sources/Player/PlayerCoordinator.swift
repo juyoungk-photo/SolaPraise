@@ -19,6 +19,7 @@ import Foundation
 import UIKit
 import WebKit
 import Combine
+import AVKit
 
 /// What happens the instant a video reports ENDED.
 ///
@@ -98,17 +99,44 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// loaded". Nil when nothing has failed.
     @Published private(set) var errorCode: Int?
 
+    // MARK: Picture-in-Picture
+
+    /// Whether the video is showing in the system's floating window.
+    @Published private(set) var isPictureInPicture = false
+    /// Whether a PiP request has somewhere to go: the frame holding the
+    /// <video> has introduced itself, and the device supports PiP at all.
+    @Published private(set) var canPictureInPicture = false
+    /// The YouTube embed's frame. The <video> lives in there, cross-origin
+    /// to the page this app serves, so it is reached by evaluating script in
+    /// that frame directly rather than through the page.
+    private var mediaFrame: WKFrameInfo?
+    /// Called when a song ends while in PiP, so the queue can carry on in
+    /// the floating window rather than stopping on an end card nobody can
+    /// see. Returns false when there is nothing next.
+    var advanceInPictureInPicture: (() -> Bool)?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var backgroundPause: Task<Void, Never>?
+    /// Set when PiP was started by leaving the app, so returning can put
+    /// the video back where it was. A PiP the viewer started stays.
+    private var startedForLeaving = false
+
     /// Builds the player document, or returns the one already running.
     func hostedWebView() -> WKWebView {
         if let webView { return webView }
 
         let controller = WKUserContentController()
         controller.add(self, name: Self.messageName)
+        controller.addUserScript(WKUserScript(
+            source: Self.mediaFrameScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false))
+        observeLifecycle()
 
         let config = WKWebViewConfiguration()
         config.userContentController = controller
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsPictureInPictureMediaPlayback = true
 
         let web = WKWebView(frame: .zero, configuration: config)
 
@@ -376,6 +404,150 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         errorCode = nil
         errorWasWatchdog = false
         isEmbedBlocked = false
+        mediaFrame = nil
+        canPictureInPicture = false
+        isPictureInPicture = false
+        backgroundPause?.cancel()
+    }
+}
+
+// MARK: - Picture-in-Picture
+
+extension PlayerCoordinator {
+
+    /// Runs in every frame from the start of its document, and acts only in
+    /// YouTube's embed frame, where the <video> is.
+    ///
+    /// The player page cannot reach into that frame — it is cross-origin —
+    /// but a user script installed on the web view can, because WebKit
+    /// injects it into subframes regardless of origin. It does two things:
+    /// introduces the frame (so a PiP request can be sent to it) and
+    /// reports PiP starting and stopping, whoever started it — our button,
+    /// the system on leaving the app, or the floating window's own controls.
+    static let mediaFrameScript = """
+    (function () {
+      if (window.top === window) return;
+      if (!/(^|\\.)youtube(-nocookie)?\\.com$/.test(location.hostname)) return;
+      function post(p) {
+        try { window.webkit.messageHandlers.\(messageName).postMessage(p); } catch (e) {}
+      }
+      var hooked = null;
+      function scan() {
+        var v = document.querySelector('video');
+        if (!v || v === hooked) return;
+        hooked = v;
+        v.addEventListener('webkitpresentationmodechanged', function () {
+          post({ event: 'pip', mode: v.webkitPresentationMode });
+        });
+        // Whether the method exists, not webkitSupportsPresentationMode:
+        // that answers false until the video has loaded media, which is
+        // after this runs, and would hide the button for good.
+        post({ event: 'media',
+               pip: typeof v.webkitSetPresentationMode === 'function' });
+      }
+      new MutationObserver(scan).observe(document.documentElement,
+                                         { childList: true, subtree: true });
+      document.addEventListener('DOMContentLoaded', scan);
+      scan();
+    })();
+    """
+
+    /// The simulator answers no here, though WebKit's own PiP runs there;
+    /// trusting it would leave the path untestable anywhere but a device.
+    static var systemSupportsPictureInPicture: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        AVPictureInPictureController.isPictureInPictureSupported()
+        #endif
+    }
+
+    func togglePictureInPicture() {
+        setPictureInPicture(!isPictureInPicture)
+    }
+
+    /// Asks the embed's <video> to move into, or out of, the floating window.
+    ///
+    /// evaluateJavaScript runs with a user gesture, which is what WebKit
+    /// requires before a video may enter PiP.
+    func setPictureInPicture(_ on: Bool) {
+        guard let webView, let frame = mediaFrame else { return }
+        let mode = on ? "picture-in-picture" : "inline"
+        webView.evaluateJavaScript(
+            "var v = document.querySelector('video'); if (v) { v.webkitSetPresentationMode('\(mode)'); } true;",
+            in: frame, in: .page) { _ in }
+    }
+
+    /// Leaving the app: into PiP if a song is playing, otherwise paused.
+    ///
+    /// The rule this enforces is that sound never continues without the
+    /// video being visible. YouTube's terms forbid audio-only background
+    /// play, and the app declares background audio only so that the PiP
+    /// window may keep running. So:
+    ///
+    /// - on the way out (resign active), a playing video is moved to PiP;
+    /// - once in the background, anything not in PiP is paused.
+    ///
+    /// Resign-active also fires for Control Center and the notification
+    /// shade, which is why PiP is only *started* there — the pause waits
+    /// for an actual move to the background, and coming straight back
+    /// closes the window again.
+    func observeLifecycle() {
+        guard lifecycleObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.willResignActiveNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.willLeave() }
+            },
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.didLeave() }
+            },
+            center.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                               object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.didReturn() }
+            }
+        ]
+    }
+
+    /// Whether leaving the app should carry the video into PiP. On by
+    /// default, as in YouTube's own app; Settings can turn it off.
+    static let autoPictureInPictureKey = "player.autoPictureInPicture"
+    private var autoPictureInPicture: Bool {
+        UserDefaults.standard.object(forKey: Self.autoPictureInPictureKey) as? Bool ?? true
+    }
+
+    private func willLeave() {
+        guard state == .playing, !isPictureInPicture,
+              canPictureInPicture, autoPictureInPicture else { return }
+        startedForLeaving = true
+        setPictureInPicture(true)
+    }
+
+    private func didLeave() {
+        backgroundPause?.cancel()
+        // A moment's grace: PiP that was just requested reports itself a
+        // beat later, and pausing first would close it.
+        backgroundPause = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, !Task.isCancelled else { return }
+            guard UIApplication.shared.applicationState == .background else { return }
+            if !self.isPictureInPicture, self.state == .playing || self.state == .buffering {
+                #if DEBUG
+                print("[FocusPlayer] background without PiP — paused")
+                #endif
+                self.pause()
+            }
+        }
+    }
+
+    private func didReturn() {
+        backgroundPause?.cancel()
+        if startedForLeaving {
+            startedForLeaving = false
+            if isPictureInPicture { setPictureInPicture(false) }
+        }
     }
 }
 
@@ -443,11 +615,11 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         MainActor.assumeIsolated {
             guard let body = message.body as? [String: Any],
                   let event = body["event"] as? String else { return }
-            self.handle(event: event, body: body)
+            self.handle(event: event, body: body, frame: message.frameInfo)
         }
     }
 
-    private func handle(event: String, body: [String: Any]) {
+    private func handle(event: String, body: [String: Any], frame: WKFrameInfo) {
         #if DEBUG
         if event != "time" { print("[FocusPlayer] \(event) \(body)") }
         #endif
@@ -463,6 +635,12 @@ extension PlayerCoordinator: WKScriptMessageHandler {
             if let d = body["duration"] as? Double, d > 0 { duration = d }
 
             if state == .ended {
+                // In PiP the end card cannot be seen, and stopping would
+                // close the floating window. Carry on to the next song
+                // instead; YouTube's grid is drawn in the page, not in PiP.
+                if isPictureInPicture, advanceInPictureInPicture?() == true {
+                    return
+                }
                 // THE critical line. Stop before YouTube can paint its
                 // end-screen grid, then let SwiftUI cover the player.
                 stop()
@@ -476,6 +654,18 @@ extension PlayerCoordinator: WKScriptMessageHandler {
                 if t > 0 { noteAlive() }
             }
             if let d = body["duration"] as? Double, d > 0 { duration = d }
+
+        case "media":
+            // The embed's <video> exists; remember which frame holds it.
+            mediaFrame = frame
+            canPictureInPicture = (body["pip"] as? Bool ?? false)
+                && Self.systemSupportsPictureInPicture
+
+        case "pip":
+            isPictureInPicture = (body["mode"] as? String) == "picture-in-picture"
+            #if DEBUG
+            print("[FocusPlayer] pip \(isPictureInPicture)")
+            #endif
 
         case "error":
             let code = (body["code"] as? Int) ?? -1

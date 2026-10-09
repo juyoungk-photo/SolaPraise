@@ -13,9 +13,9 @@
 //  visible — which is both what YouTube's terms require of an embedded player
 //  and what makes the feature worth having: you can see what is playing.
 //
-//  System Picture-in-Picture is a different thing and is not available here:
-//  the video lives inside YouTube's cross-origin iframe, which does not expose
-//  its media element to the host app.
+//  Leaving the app is the one exception, and it keeps the same rule: the
+//  video moves into the system's Picture-in-Picture window, still visible.
+//  Without PiP it pauses. See PlayerCoordinator's Picture-in-Picture section.
 //
 
 import SwiftUI
@@ -36,6 +36,22 @@ final class PlayerHost: ObservableObject {
     /// One coordinator for the app's lifetime, so the web view it owns is
     /// never rebuilt by a change of presentation.
     let coordinator = PlayerCoordinator()
+
+    init() {
+        // A song ending in PiP moves on to the next one, so a 콘티 plays
+        // through in the floating window. Through the screen's own handler
+        // when it is installed, so the watch log records the song.
+        coordinator.advanceInPictureInPicture = { [weak self] in
+            guard let self, self.hasNext else { return false }
+            if let advance = self.onAdvance {
+                advance()
+            } else {
+                self.index += 1
+                if let next = self.current { self.coordinator.load(videoId: next.id) }
+            }
+            return true
+        }
+    }
 
     /// Where the tab bar starts, in global coordinates.
     ///

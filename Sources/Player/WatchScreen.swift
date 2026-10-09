@@ -574,6 +574,8 @@ struct WatchScreen: View {
                 .buttonStyle(.bordered)
             }
 
+            PictureInPictureButton(coordinator: player)
+
             // Recording while the video plays.
             //
             // Offered only with an interface connected, because it is only
@@ -1238,4 +1240,22 @@ struct ChannelRef: Identifiable {
 struct SearchRequest: Identifiable {
     let query: String
     var id: String { query }
+}
+
+/// Its own view so it observes the coordinator: WatchScreen observes the
+/// host, and would not redraw when the embed reports that PiP is possible.
+private struct PictureInPictureButton: View {
+    @ObservedObject var coordinator: PlayerCoordinator
+
+    var body: some View {
+        if coordinator.canPictureInPicture {
+            Button {
+                coordinator.togglePictureInPicture()
+            } label: {
+                Label("PiP", systemImage: coordinator.isPictureInPicture
+                      ? "pip.exit" : "pip.enter")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
 }
