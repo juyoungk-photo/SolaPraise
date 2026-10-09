@@ -257,6 +257,9 @@ final class TeamStore: ObservableObject {
     /// Songs-tab rows whose cells were written too far right — see
     /// shiftedRows. Shown as a warning with a repair, never fixed silently.
     @Published private(set) var damagedSongRows: [TeamSheet.ShiftedRow] = []
+    /// The same song entered more than once on a service — see
+    /// TeamSheet.duplicateSongRows. Shown with a tidy-up, never fixed silently.
+    @Published private(set) var duplicateSongs = TeamSheet.DuplicateSongs(rows: [], renumber: [])
 
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -342,6 +345,9 @@ final class TeamStore: ObservableObject {
         self.members = roster
         self.churchNotes = churchNotes
         self.attachments = attachments
+        if DebugHarness.seedDuplicates {
+            duplicateSongs = TeamSheet.DuplicateSongs(rows: [17, 18, 19], renumber: [])
+        }
         self.isReadOnly = false
         self.lastLoaded = Date()
     }
@@ -467,6 +473,7 @@ final class TeamStore: ObservableObject {
             playlistColumn = Self.schedulePlaylistColumn(schedule)
             songs = Self.parseSongs(songData)
             damagedSongRows = TeamSheet.shiftedRows(in: songData)
+            duplicateSongs = TeamSheet.duplicateSongRows(in: songData)
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
@@ -1242,6 +1249,18 @@ final class TeamStore: ObservableObject {
         let width = max(header.count, 7)
         let last = TeamSheet.columnLetter(width - 1)
 
+        // The row number is from the last load. If somebody has since
+        // deleted or inserted a row in the browser, it now points at a
+        // different line — and clearing it would remove someone else's
+        // song without a word. So the row must still hold this title.
+        let current = (try? await client.read(sheetId: sheetId,
+                                              range: "\(tab)!A\(row):\(last)\(row)"))?.first ?? []
+        let wanted = item.title.trimmingCharacters(in: .whitespaces)
+        guard current.contains(where: { $0.trimmingCharacters(in: .whitespaces) == wanted }) else {
+            await load(sheetId: sheetId)
+            return "시트가 그 사이에 바뀌어 지우지 않았습니다. 새로 불러왔으니 다시 확인해 주세요."
+        }
+
         do {
             isReadOnly = false
             try await client.write(
@@ -1424,18 +1443,55 @@ final class TeamStore: ObservableObject {
     /// through a playlist: add it there, pin the playlist, push the whole
     /// thing — which also overwrote whatever was already planned. Deciding
     /// on a single song is the common case and now takes one action.
+    /// What happened when a song was added, for the confirmation bubble.
+    enum AppendResult: Equatable {
+        case added
+        /// Already on that service — nothing written.
+        case alreadyThere
+        /// Written, but not where the 콘티 reads it.
+        case misplaced
+        case failed(String)
+    }
+
     func appendSong(
         title: String,
         videoId: String,
         key: String?,
         to service: TeamService,
         sheetId: String
-    ) async -> Bool {
-        guard let client else { return false }
+    ) async -> AppendResult {
+        #if DEBUG
+        // In memory, so the add, its bubble and the duplicate guard can be
+        // driven in a simulator without a sheet.
+        if isSample {
+            let day = Calendar.current.startOfDay(for: service.date)
+            if (plans[day] ?? []).contains(where: { $0.videoId == videoId }) { return .alreadyThere }
+            let order = ((plans[day] ?? []).map(\.order).max() ?? 0) + 1
+            plans[day, default: []].append(PlanItem(
+                order: order, kind: .song, title: title, minutes: nil, person: nil,
+                key: key, url: YouTubeID.watchURL(videoId), notes: nil, row: nil))
+            return .added
+        }
+        #endif
+        guard let client else { return .failed("시트에 연결되어 있지 않습니다.") }
         do {
             let existing = try await rawSongRows(sheetId: sheetId)
             let layout = SongLayout(header: existing.first ?? [])
             let day = Calendar.current.startOfDay(for: service.date)
+            let dayText = TeamSheet.dateFormatter.string(from: service.date)
+
+            // Never the same video twice on one service.
+            //
+            // There was no guard, and no sign on screen that an add had
+            // worked, so a song that did not appear was added again — one
+            // 콘티 ended up with the same video seven times. Checked against
+            // the whole row, not the parsed view, so a copy sitting in the
+            // wrong columns (invisible to the parser) still counts.
+            let already = existing.dropFirst().contains { row in
+                row.contains { TeamSheet.day($0).map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
+                    && row.contains { TeamSheet.videoKey($0) == videoId }
+            }
+            if already { return .alreadyThere }
 
             // Numbered from the sheet as it stands NOW, not from what this
             // device last loaded. The local copy was why three appends in a
@@ -1449,7 +1505,7 @@ final class TeamStore: ObservableObject {
                 sheetId: sheetId,
                 tab: TeamSheet.songsTab,
                 row: layout.row(
-                    date: TeamSheet.dateFormatter.string(from: service.date),
+                    date: dayText,
                     order: String(next),
                     title: title,
                     url: YouTubeID.watchURL(videoId)?.absoluteString ?? "",
@@ -1469,13 +1525,72 @@ final class TeamStore: ObservableObject {
             // CHANGE with the account, when in fact the reload was the first
             // honest look at the sheet. What is shown is now always what the
             // sheet holds.
-            songs = Self.parseSongs(try await rawSongRows(sheetId: sheetId))
-            damagedSongRows = TeamSheet.shiftedRows(in: try await rawSongRows(sheetId: sheetId))
+            let after = try await rawSongRows(sheetId: sheetId)
+            songs = Self.parseSongs(after)
+            damagedSongRows = TeamSheet.shiftedRows(in: after)
+            duplicateSongs = TeamSheet.duplicateSongRows(in: after)
             errorMessage = nil
-            return true
+
+            // And checked: the song must now be in the 콘티 as the app reads
+            // it. If it is not, saying so is the whole difference between a
+            // person retrying blindly and a person seeing the warning above.
+            let landed = (songs[day] ?? []).contains {
+                $0.url.flatMap { TeamSheet.videoKey($0.absoluteString) } == videoId
+            }
+            return landed ? .added : .misplaced
         } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            return false
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorMessage = message
+            return .failed(message)
+        }
+    }
+
+    /// Clears every repeated copy and renumbers the services they were on.
+    ///
+    /// Only from a button, like the shifted-row repair. Recomputed from a
+    /// fresh read immediately before writing, so a row somebody changed in
+    /// the meantime is judged as it is now, not as it was on screen. Rows
+    /// are cleared, not deleted: deleting would move every row below, and
+    /// another member's app may be holding those row numbers.
+    func repairDuplicateSongs(sheetId: String) async -> String? {
+        #if DEBUG
+        if isSample {
+            duplicateSongs = TeamSheet.DuplicateSongs(rows: [], renumber: [])
+            return nil
+        }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        do {
+            let rows = try await rawSongRows(sheetId: sheetId)
+            let found = TeamSheet.duplicateSongRows(in: rows)
+            guard !found.isEmpty else {
+                duplicateSongs = found
+                return nil
+            }
+            let layout = SongLayout(header: rows.first ?? [])
+            let width = max(rows.first?.count ?? 0, layout.width)
+            let last = TeamSheet.columnLetter(width - 1)
+            let orderColumn = TeamSheet.columnLetter(layout.order)
+
+            var updates: [(range: String, rows: [[String]])] = found.rows.map {
+                ("\(TeamSheet.songsTab)!A\($0):\(last)\($0)",
+                 [[String](repeating: "", count: width)])
+            }
+            updates += found.renumber.map {
+                ("\(TeamSheet.songsTab)!\(orderColumn)\($0.row)", [[String($0.order)]])
+            }
+            try await client.batchWrite(sheetId: sheetId, updates: updates)
+
+            let fresh = try await rawSongRows(sheetId: sheetId)
+            songs = Self.parseSongs(fresh)
+            damagedSongRows = TeamSheet.shiftedRows(in: fresh)
+            duplicateSongs = TeamSheet.duplicateSongRows(in: fresh)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 정리하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -1507,6 +1622,9 @@ final class TeamStore: ObservableObject {
             let fresh = try await rawSongRows(sheetId: sheetId)
             songs = Self.parseSongs(fresh)
             damagedSongRows = TeamSheet.shiftedRows(in: fresh)
+            // Moving rows back can reveal copies that were hidden while
+            // they sat in the wrong columns.
+            duplicateSongs = TeamSheet.duplicateSongRows(in: fresh)
             return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

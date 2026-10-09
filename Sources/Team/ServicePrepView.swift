@@ -107,6 +107,8 @@ struct ServicePrepView: View {
     /// Set by the List's ScrollViewReader so opening a row can bring it into
     /// view — a row near the bottom would otherwise unfold off screen.
     @State private var scrollTo: ((Date) -> Void)?
+    @State private var scrollToHealth: (() -> Void)?
+    private static let healthAnchor = "sheet-health"
 
     /// What the switch was asked to be, per service, while the write is in
     /// flight — see answerControl.
@@ -464,6 +466,18 @@ struct ServicePrepView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
+
+            // Pinned, because the warnings themselves sit at the top of the
+            // list and the list opens scrolled to the next service — below
+            // them. A sheet problem the screen opens past is one nobody sees.
+            if let summary = sheetHealthSummary {
+                Button { scrollToHealth?() } label: {
+                    Label(summary, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -511,6 +525,54 @@ struct ServicePrepView: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    /// The same song more than once on a service.
+    @ViewBuilder
+    private var duplicateSongsWarning: some View {
+        if !team.duplicateSongs.isEmpty, let sheetId {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("같은 곡이 두 번 이상 들어간 줄이 \(team.duplicateSongs.rows.count)개 있습니다",
+                          systemImage: "square.on.square")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Songs 탭 \(team.duplicateSongs.rows.map(String.init).joined(separator: ", "))번 줄은 같은 날 같은 영상이 이미 위에 있습니다. 정리하면 처음 것만 남기고 이 줄들을 비운 뒤, 그 예배의 순서를 1번부터 다시 매깁니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Task {
+                            repairing = true
+                            if let failure = await team.repairDuplicateSongs(sheetId: sheetId) {
+                                pushNote = failure
+                            } else {
+                                Toast.shared.show("중복된 곡을 정리했습니다")
+                            }
+                            repairing = false
+                        }
+                    } label: {
+                        if repairing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("중복 정리", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(repairing || team.isReadOnly)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    /// "시트 확인 필요 · 칸 밀림 2 · 중복 6 — 눌러서 보기", or nil when clean.
+    private var sheetHealthSummary: String? {
+        var parts: [String] = []
+        if !team.damagedSongRows.isEmpty { parts.append("칸 밀림 \(team.damagedSongRows.count)") }
+        if !team.duplicateSongs.isEmpty { parts.append("중복 \(team.duplicateSongs.rows.count)") }
+        guard !parts.isEmpty else { return nil }
+        return "시트 확인 필요 · " + parts.joined(separator: " · ") + " — 눌러서 보기"
     }
 
     private var rowList: String {
@@ -589,7 +651,11 @@ struct ServicePrepView: View {
                 // a second, unrelated screen and selecting a row changed
                 // something off screen. Every service is now a row that opens
                 // where it is, and the next one is open to begin with.
-                damagedRowsWarning
+                Group {
+                    damagedRowsWarning
+                    duplicateSongsWarning
+                }
+                .id(Self.healthAnchor)
 
                 scheduleSection
 
@@ -611,6 +677,9 @@ struct ServicePrepView: View {
             .safeAreaInset(edge: .top, spacing: 0) { accountBar }
             .onAppear {
                 scrollTo = { id in proxy.scrollTo(id, anchor: .top) }
+                scrollToHealth = {
+                    withAnimation { proxy.scrollTo(Self.healthAnchor, anchor: .top) }
+                }
                 // Land on the next service, not on the oldest one.
                 //
                 // With past weeks above, opening the tab would otherwise

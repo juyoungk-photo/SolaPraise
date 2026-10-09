@@ -66,6 +66,7 @@ struct SolaPraiseApp: App {
     var body: some Scene {
         WindowGroup {
             rootView
+                .overlay { ToastOverlay() }
                 .environmentObject(auth)
                 .environmentObject(quota)
                 .environmentObject(daily)

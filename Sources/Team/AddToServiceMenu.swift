@@ -19,7 +19,6 @@ struct AddToServiceMenu<Label: View>: View {
     @ViewBuilder var label: Label
 
     @EnvironmentObject private var team: TeamStore
-    @State private var note: String?
 
     var body: some View {
         let services = team.services.filter { !$0.isPast && !$0.isRehearsal }.prefix(8)
@@ -41,9 +40,26 @@ struct AddToServiceMenu<Label: View>: View {
 
     private func add(to service: TeamService) async {
         guard let sheetId = TeamSheetSource.current else { return }
-        _ = await team.appendSong(
+        let name = service.date.formatted(.dateTime.month(.defaultDigits).day())
+            + " " + service.title
+        let result = await team.appendSong(
             title: title, videoId: videoId, key: key,
             to: service, sheetId: sheetId
         )
+        // Said where the person is looking. The 콘티 is on another tab, and
+        // an add with no visible result was being made again and again.
+        switch result {
+        case .added:
+            Toast.shared.show("\(name) 콘티에 추가했습니다")
+        case .alreadyThere:
+            Toast.shared.show("이미 \(name) 콘티에 있습니다",
+                              symbol: "info.circle.fill", tint: .blue)
+        case .misplaced:
+            Toast.shared.show("시트의 다른 칸에 들어갔습니다 — 예배 준비에서 확인하세요",
+                              symbol: "exclamationmark.triangle.fill", tint: .orange)
+        case .failed(let message):
+            Toast.shared.show("추가하지 못했습니다: \(message)",
+                              symbol: "xmark.octagon.fill", tint: .red)
+        }
     }
 }

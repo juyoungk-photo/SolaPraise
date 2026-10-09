@@ -85,6 +85,9 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// Show the repeated-songs warning in the sample team: -uiTestDuplicates
+    static var seedDuplicates: Bool { args.contains("-uiTestDuplicates") }
+
     /// Mark today's reading gate as already seen: -uiTestSkipGate
     static var skipReadingGate: Bool { args.contains("-uiTestSkipGate") }
 

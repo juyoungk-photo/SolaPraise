@@ -235,6 +235,89 @@ enum TeamSheet {
         return out
     }
 
+    // MARK: Songs entered more than once
+
+    /// The same song more than once on one service, and how to tidy it.
+    struct DuplicateSongs: Equatable {
+        struct Renumber: Equatable { let row: Int; let order: Int }
+        /// 1-based rows to clear: every copy after the first.
+        let rows: [Int]
+        /// Order cells to rewrite so each affected service runs 1…n again.
+        let renumber: [Renumber]
+        var isEmpty: Bool { rows.isEmpty }
+    }
+
+    /// Every copy after the first of a song on the same date.
+    ///
+    /// A song is the same when its video is the same; without a link, when
+    /// its title is. The first copy — the highest on the sheet — is the one
+    /// kept, because it is the one somebody added deliberately.
+    ///
+    /// WHY THIS EXISTS: a real 콘티 ended up with one video seven times, its
+    /// Order cells reading 4, 5, 4, 5, 4, 6, 7. Each add was made while the
+    /// earlier copies were invisible — written into the wrong columns — so
+    /// each looked like the first, and nothing on screen said otherwise.
+    ///
+    /// The renumbering only touches numeric Order cells. A 헌금찬양 written
+    /// in the Order column is a label the team chose, not a position.
+    static func duplicateSongRows(in rows: [[String]]) -> DuplicateSongs {
+        guard let header = rows.first else { return DuplicateSongs(rows: [], renumber: []) }
+        let dateColumn = column(header, ["date", "날짜"]) ?? 0
+        let orderColumn = column(header, ["order", "순서", "#"]) ?? 1
+        let titleColumn = column(header, ["title", "곡", "곡명", "찬양"]) ?? 2
+        let urlColumn = column(header, ["youtubeurl", "url", "link", "링크", "영상"])
+
+        func cell(_ cells: [String], _ index: Int?) -> String {
+            guard let index, cells.indices.contains(index) else { return "" }
+            return cells[index].trimmingCharacters(in: .whitespaces)
+        }
+
+        var seen: Set<String> = []
+        var duplicates: [Int] = []
+        var kept: [String: [(row: Int, order: Int?)]] = [:]
+        var affected: Set<String> = []
+
+        for (offset, cells) in rows.enumerated() where offset > 0 {
+            guard let date = day(cell(cells, dateColumn)) else { continue }
+            let title = cell(cells, titleColumn)
+            guard !title.isEmpty else { continue }
+            let dayKey = dateFormatter.string(from: date)
+            let song = videoKey(cell(cells, urlColumn))
+                ?? title.lowercased().filter { !$0.isWhitespace }
+            let row = offset + 1
+            if seen.insert(dayKey + "|" + song).inserted {
+                kept[dayKey, default: []].append((row, Int(cell(cells, orderColumn))))
+            } else {
+                duplicates.append(row)
+                affected.insert(dayKey)
+            }
+        }
+
+        var renumber: [DuplicateSongs.Renumber] = []
+        for dayKey in affected.sorted() {
+            let numbered = (kept[dayKey] ?? [])
+                .compactMap { entry in entry.order.map { (row: entry.row, order: $0) } }
+                .sorted { $0.order != $1.order ? $0.order < $1.order : $0.row < $1.row }
+            for (index, entry) in numbered.enumerated() where entry.order != index + 1 {
+                renumber.append(.init(row: entry.row, order: index + 1))
+            }
+        }
+        return DuplicateSongs(rows: duplicates, renumber: renumber.sorted { $0.row < $1.row })
+    }
+
+    /// The YouTube video id in a link, in any of the shapes links take.
+    static func videoKey(_ link: String) -> String? {
+        let patterns = ["[?&]v=([A-Za-z0-9_-]{11})", "youtu\\.be/([A-Za-z0-9_-]{11})",
+                        "/(?:shorts|embed|live)/([A-Za-z0-9_-]{11})"]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: link, range: NSRange(link.startIndex..., in: link)),
+                  let range = Range(match.range(at: 1), in: link) else { continue }
+            return String(link[range])
+        }
+        return nil
+    }
+
     /// Finds a column by any of its accepted names, case-insensitively.
     ///
     /// Every tab is read this way now. A person adds a column, renames one,

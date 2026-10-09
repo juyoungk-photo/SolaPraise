@@ -21,7 +21,8 @@
 //
 //  Run:
 //      swiftc -O -o /tmp/shiftcheck \
-//          Sources/Team/TeamSheet.swift Tools/check-shifted-rows.swift
+//          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
+//          Tools/check-shifted-rows.swift
 //      /tmp/shiftcheck
 //
 

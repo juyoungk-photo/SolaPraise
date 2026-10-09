@@ -19,6 +19,7 @@
 //  Run:
 //      swiftc -O -o /tmp/churchcheck \
 //          Sources/Team/TeamSheet.swift \
+//          Sources/Team/SheetTidy.swift \
 //          Sources/Team/ChurchSheet.swift \
 //          Tools/check-church-sheet.swift
 //      /tmp/churchcheck
