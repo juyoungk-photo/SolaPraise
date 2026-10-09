@@ -37,6 +37,7 @@ struct AttachmentMenu<Content: View>: View {
     @State private var showFiles = false
     @State private var isUploading = false
     @State private var note: String?
+    @State private var stand: ScoreStandItem?
 
     private var existing: [Attachment] {
         song.isEmpty ? team.attachments(for: service).filter(\.belongsToService)
@@ -48,8 +49,22 @@ struct AttachmentMenu<Content: View>: View {
             if !existing.isEmpty {
                 Section("첨부된 파일") {
                     ForEach(existing) { item in
-                        Button { openURL(item.url) } label: {
-                            Label(item.name, systemImage: "doc")
+                        // A song's chart opens on the stand, in the team's
+                        // key. The service's combined PDF is a document to
+                        // read, and opens as one.
+                        Button {
+                            if item.belongsToService { openURL(item.url) }
+                            else { stand = standItem(item) }
+                        } label: {
+                            Label(item.name, systemImage: item.belongsToService
+                                  ? "doc" : "music.note.list")
+                        }
+                    }
+                    if !song.isEmpty {
+                        ForEach(existing) { item in
+                            Button { openURL(item.url) } label: {
+                                Label("\(item.name) 원본 링크", systemImage: "arrow.up.right.square")
+                            }
                         }
                     }
                 }
@@ -116,11 +131,36 @@ struct AttachmentMenu<Content: View>: View {
             guard let item else { return }
             Task { await upload(from: item) }
         }
+        .fullScreenCover(item: $stand) { item in
+            ScoreStandView(items: [item],
+                           uploadTransposed: canUpload ? { item, data, name in
+                               await sendTransposed(item, data: data, name: name)
+                           } : nil)
+        }
         .alert("첨부", isPresented: .constant(note != nil)) {
             Button("확인") { note = nil }
         } message: {
             Text(note ?? "")
         }
+    }
+
+    // MARK: - Stand
+
+    private func standItem(_ item: Attachment) -> ScoreStandItem {
+        ScoreStandItem(attachment: item, song: song,
+                       teamKey: team.plan(for: service).first { $0.title == song }?.key)
+    }
+
+    private var canUpload: Bool { team.canAttach && sheetId != nil }
+
+    /// A transposed chart becomes another attachment on the same song, so
+    /// the team sees the version in their key without each person making
+    /// it again.
+    private func sendTransposed(_ item: ScoreStandItem, data: Data, name: String) async -> String? {
+        guard let sheetId else { return "시트가 연결되어 있지 않습니다." }
+        let who = team.actingEmail(auth: auth, planning: planning) ?? ""
+        return await team.attach(data: data, name: name, mimeType: "application/pdf",
+                                 song: song, to: service, sheetId: sheetId, by: who)
     }
 
     // MARK: - Uploading

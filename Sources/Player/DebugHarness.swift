@@ -66,6 +66,25 @@ enum DebugHarness {
         return Int(args[i + 1])
     }
 
+    /// Open a local score on the 악보 stand, with the 순서's key, so reading
+    /// and transposing can be checked without uploading anything:
+    ///   -uiTestScore /path/to/score.pdf -uiTestScoreKey A
+    static var scorePath: String? {
+        guard let i = args.firstIndex(of: "-uiTestScore"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    /// Attach a local score to the sample team's songs (with -uiTestTeam).
+    static var sampleScorePath: String? {
+        guard let i = args.firstIndex(of: "-uiTestSampleScore"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    static var scoreTeamKey: String? {
+        guard let i = args.firstIndex(of: "-uiTestScoreKey"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
     /// Mark today's reading gate as already seen: -uiTestSkipGate
     static var skipReadingGate: Bool { args.contains("-uiTestSkipGate") }
 

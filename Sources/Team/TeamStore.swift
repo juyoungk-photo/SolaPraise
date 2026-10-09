@@ -330,7 +330,8 @@ final class TeamStore: ObservableObject {
     func installSample(services: [TeamService], roles: [TeamRole],
                        signups: [Date: [TeamSignup]], plans: [Date: [PlanItem]],
                        members: Set<String>, roster: [Member] = [],
-                       churchNotes: [Date: ChurchNote] = [:]) {
+                       churchNotes: [Date: ChurchNote] = [:],
+                       attachments: [Date: [Attachment]] = [:]) {
         isSample = true
         sampleActingEmail = members.sorted().first
         self.services = services
@@ -340,6 +341,7 @@ final class TeamStore: ObservableObject {
         self.memberEmails = members
         self.members = roster
         self.churchNotes = churchNotes
+        self.attachments = attachments
         self.isReadOnly = false
         self.lastLoaded = Date()
     }

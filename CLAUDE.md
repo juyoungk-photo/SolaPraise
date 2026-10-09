@@ -53,7 +53,9 @@ found by the user rather than by me:
 - Prefer a runnable check over an assertion for anything that parses or
   builds a string — those fail silently and look like "no data yet". See
   `Tools/check-sheet-urls.swift`, `check-church-sheet.swift`,
-  `check-episode-date.swift`, `check-song-structure.swift`.
+  `check-episode-date.swift`, `check-song-structure.swift`, and
+  `check-score-ocr.swift`, which draws a score page and runs the real
+  chord recogniser on it.
 - Report what was actually verified and what was only reasoned about. Rotation
   and microphone behaviour cannot be driven from here; say so rather than
   implying they were tested.

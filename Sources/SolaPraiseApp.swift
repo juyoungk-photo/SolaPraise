@@ -103,6 +103,14 @@ struct SolaPraiseApp: App {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
+        } else if let path = DebugHarness.scorePath {
+            ScoreStandView(items: [ScoreStandItem(
+                attachment: Attachment(date: Date(), song: "Debug score",
+                                       name: (path as NSString).lastPathComponent,
+                                       fileId: path, url: URL(fileURLWithPath: path),
+                                       addedBy: ""),
+                song: "Debug score",
+                teamKey: DebugHarness.scoreTeamKey)])
         } else if let debugId = DebugHarness.videoId {
             WatchScreen()
                 .task {

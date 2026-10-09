@@ -162,6 +162,23 @@ enum TeamSampleData {
                                                  sermonTitle: "다시 세우시는 하나님")
         }
 
+        // A local score on two songs of every Sunday, when one is given —
+        // so the 악보 stand can be opened from the real paperclip menu and
+        // the service's 연주모드 button without uploading anything:
+        //   -uiTestTeam -uiTestSampleScore /path/to/score.pdf
+        var attachments: [Date: [Attachment]] = [:]
+        if let path = DebugHarness.sampleScorePath {
+            for service in services where !service.isRehearsal {
+                let day = calendar.startOfDay(for: service.date)
+                attachments[day] = ["주의 약속하신 말씀 위에 서", "주님 뜻대로 살기로 했네"]
+                    .enumerated().map { index, song in
+                        Attachment(date: day, song: song, name: "\(song).pdf",
+                                   fileId: "sample-\(index)-\(day.timeIntervalSince1970)",
+                                   url: URL(fileURLWithPath: path), addedBy: "")
+                    }
+            }
+        }
+
         store.installSample(
             services: services,
             roles: roles,
@@ -175,7 +192,8 @@ enum TeamSampleData {
                 TeamStore.Member(email: person.1, name: person.0,
                                  isActive: true, row: index + 2)
             },
-            churchNotes: churchNotes
+            churchNotes: churchNotes,
+            attachments: attachments
         )
     }
 }

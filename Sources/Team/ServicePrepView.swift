@@ -131,6 +131,8 @@ struct ServicePrepView: View {
     /// The service whose 찬양 are being filled from a playlist.
     @State private var fillingFrom: TeamService?
     @State private var buildingPDF = false
+    /// The service whose 악보 are open on the stand.
+    @State private var standService: TeamService?
     @State private var repairing = false
     @State private var reordering: TeamService?
 
@@ -240,6 +242,9 @@ struct ServicePrepView: View {
                 .environmentObject(team)
             }
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
+            .fullScreenCover(item: $standService) { service in
+                ScoreStandView(items: standItems(service))
+            }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
             .sheet(item: $reordering) { service in
@@ -942,6 +947,14 @@ struct ServicePrepView: View {
                     if buildingPDF { ProgressView().controlSize(.small) }
                 }
 
+                // Every chart in the order it is played, each in the key
+                // the 순서 gives it — the set, on one stand.
+                if !pieces.isEmpty {
+                    Button { standService = service } label: {
+                        Label("악보 연주모드", systemImage: "music.note.list")
+                    }
+                }
+
                 if let built {
                     Button { openURL(built.url) } label: {
                         Label("콘티 PDF 열기", systemImage: "doc.richtext")
@@ -956,6 +969,22 @@ struct ServicePrepView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The service's song charts in 순서 order, each with the key the 순서
+    /// gives that song.
+    private func standItems(_ service: TeamService) -> [ScoreStandItem] {
+        let plan = team.plan(for: service)
+        let order = plan.enumerated().reduce(into: [String: Int]()) { out, pair in
+            out[pair.element.title] = pair.offset
+        }
+        return team.attachments(for: service)
+            .filter { !$0.belongsToService }
+            .sorted { (order[$0.song] ?? .max) < (order[$1.song] ?? .max) }
+            .map { item in
+                ScoreStandItem(attachment: item, song: item.song,
+                               teamKey: plan.first { $0.title == item.song }?.key)
+            }
     }
 
     private func buildServicePDF(_ service: TeamService) async {
@@ -976,7 +1005,11 @@ struct ServicePrepView: View {
 
         var sources: [ServicePDF.Source] = []
         for item in pieces {
-            guard let data = try? Data(contentsOf: item.url.directDownload) else { continue }
+            // URLSession, not Data(contentsOf:): that blocked the main
+            // thread for every download in turn, freezing the screen for
+            // as long as the slowest chart took.
+            guard let (data, _) = try? await URLSession.shared.data(from: item.url.directDownload)
+            else { continue }
             sources.append(.init(name: item.name, song: item.song, data: data))
         }
         guard !sources.isEmpty else {
