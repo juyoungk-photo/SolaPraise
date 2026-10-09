@@ -237,6 +237,14 @@ final class CachedPlaylist {
     /// it is never written into the app's source.
     var inviteURLString: String?
 
+    /// When the channel created the playlist. Optional so stores from
+    /// before it existed migrate without a step; filled on the next refresh.
+    ///
+    /// It is what "current" means for a 말씀 channel: a sermon series is a
+    /// playlist made when the series starts, so the newest playlist is the
+    /// series being preached now.
+    var publishedAt: Date?
+
     init(playlistId: String, channelId: String, title: String,
          thumbnailURLString: String? = nil, itemCount: Int = 0,
          purpose: Purpose? = nil, isPinned: Bool = false,

@@ -24,6 +24,9 @@ import Foundation
 enum AudioSources {
 
     struct Source: Identifiable, Hashable {
+        static func == (l: Source, r: Source) -> Bool { l.id == r.id }
+        func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
         let name: String
         let detail: String
         let domain: String?
@@ -31,8 +34,13 @@ enum AudioSources {
         let sellsFiles: Bool
         var id: String { name }
 
+        /// A search page of the site's own, when it has one that takes a
+        /// query in the URL. Otherwise a site-restricted web search.
+        var searchURL: ((String) -> URL?)? = nil
+
         func url(for title: String) -> URL? {
             let cleaned = SheetMusicSources.clean(title)
+            if let searchURL { return searchURL(cleaned) }
             let query = domain.map { "\(cleaned) site:\($0)" } ?? "\(cleaned) 음원 MR 다운로드"
             guard let encoded = query.addingPercentEncoding(
                 withAllowedCharacters: .urlQueryAllowed
@@ -55,5 +63,32 @@ enum AudioSources {
         Source(name: "iTunes Store", detail: "곡 구매 (다운로드)",
                domain: "music.apple.com", sellsFiles: true),
         Source(name: "MR 전체 검색", detail: "반주 음원 찾기", domain: nil, sellsFiles: true)
+    ]
+
+    /// Recordings that may be downloaded for nothing, legally.
+    ///
+    /// For 찬송가 and public-domain hymns only. Modern Korean CCM is almost
+    /// all KOMCA-administered, and there is no free source for it that is
+    /// not piracy, so none is pretended here.
+    ///
+    /// "The hymn is public domain" is not the same as "this file is free":
+    /// the tune and original text may be, while a recording, an arrangement
+    /// or a Korean translation is somebody's. Every one of these sites
+    /// states a licence per file, and the sheet says to read it.
+    static let free: [Source] = [
+        Source(name: "공유마당", detail: "한국저작권위원회 · 만료·공개 저작물",
+               domain: "gongu.copyright.or.kr", sellsFiles: false),
+        Source(name: "Internet Archive", detail: "공개 음원 · 오래된 찬송 녹음",
+               domain: "archive.org", sellsFiles: false,
+               searchURL: { query in
+                   var parts = URLComponents(string: "https://archive.org/search")
+                   parts?.queryItems = [URLQueryItem(name: "query", value: query),
+                                        URLQueryItem(name: "mediatype", value: "audio")]
+                   return parts?.url
+               }),
+        Source(name: "Musopen", detail: "퍼블릭 도메인 녹음 · 클래식·찬송 선율",
+               domain: "musopen.org", sellsFiles: false),
+        Source(name: "hymnal.net", detail: "영어 찬송가 원곡 · 무료 MP3",
+               domain: "hymnal.net", sellsFiles: false)
     ]
 }

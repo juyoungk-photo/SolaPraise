@@ -193,14 +193,25 @@ final class FeedStore: ObservableObject {
             guard let playlists = try? await client.channelPlaylists(channelId: channel.youtubeChannelId) else {
                 continue
             }
-            for playlist in playlists where !known.contains(playlist.id) {
-                context.insert(CachedPlaylist(
+            for playlist in playlists {
+                // Known ones are refreshed rather than skipped: a series
+                // grows week by week, and a count frozen at the day it was
+                // first seen made a live series look abandoned.
+                if let cached = existing.first(where: { $0.playlistId == playlist.id }) {
+                    cached.itemCount = playlist.itemCount
+                    cached.publishedAt = playlist.snippet?.publishedAt
+                    continue
+                }
+                guard !known.contains(playlist.id) else { continue }
+                let cached = CachedPlaylist(
                     playlistId: playlist.id,
                     channelId: channel.youtubeChannelId,
                     title: playlist.title,
                     thumbnailURLString: playlist.thumbnailURL?.absoluteString,
                     itemCount: playlist.itemCount
-                ))
+                )
+                cached.publishedAt = playlist.snippet?.publishedAt
+                context.insert(cached)
                 known.insert(playlist.id)
             }
         }

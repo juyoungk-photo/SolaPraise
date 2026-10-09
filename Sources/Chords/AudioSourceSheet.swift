@@ -40,6 +40,28 @@ struct AudioSourceSheet: View {
     @State private var showImporter = false
     @State private var importedFile: URL?
 
+    private func sourceRow(_ source: AudioSources.Source) -> some View {
+        Button {
+            if let url = source.url(for: term.isEmpty ? title : term) {
+                openURL(url)
+            }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(source.name).foregroundStyle(Color.primary)
+                    Text(source.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .foregroundStyle(.tint)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -97,30 +119,24 @@ struct AudioSourceSheet: View {
 
                 Section {
                     ForEach(AudioSources.all) { source in
-                        Button {
-                            if let url = source.url(for: term.isEmpty ? title : term) {
-                                openURL(url)
-                            }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(source.name).foregroundStyle(Color.primary)
-                                    Text(source.detail)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.up.right.square")
-                                    .foregroundStyle(.tint)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                        sourceRow(source)
                     }
                 } header: {
                     Text("직접 판매하는 곳")
                 } footer: {
                     Text("찬양팀이 직접 파는 MR과 스템은 스토어에 없는 경우가 많습니다.")
+                }
+
+                // Apart from the paid sources, and saying what they are
+                // not: a way to get 찬송가 and old hymns, never modern CCM.
+                Section {
+                    ForEach(AudioSources.free) { source in
+                        sourceRow(source)
+                    }
+                } header: {
+                    Text("무료 · 공개 라이선스")
+                } footer: {
+                    Text("찬송가와 저작권이 끝난 곡만 해당합니다. 곡이 퍼블릭 도메인이어도 녹음·편곡·한국어 번역은 따로 권리가 있으니, 파일마다 표시된 라이선스를 확인하세요. 최신 CCM은 무료로 받을 수 있는 합법적인 곳이 없습니다.")
                 }
 
                 Section {

@@ -500,7 +500,7 @@ struct ChannelSection: View {
             .buttonStyle(.plain)
 
             VStack(spacing: 6) {
-                ForEach(playlists.prefix(Self.previewCount)) { playlist in
+                ForEach(Self.preview(playlists)) { playlist in
                     Button { onSelectPlaylist?(playlist) } label: {
                         PlaylistBar(playlist: playlist)
                     }
@@ -518,5 +518,46 @@ struct ChannelSection: View {
     }
 
     private static let previewCount = 3
+
+    /// The three a reader most likely wants: pinned ones first, then the
+    /// newest, leaving out what is not worth opening.
+    ///
+    /// These used to be the first three by title, because the cache is
+    /// sorted by title for the full list — so a channel's preview was
+    /// whatever began with 「1」 or 「가」: an old book index, a finished
+    /// series, a Shorts list. For a church the newest playlist is the
+    /// series being preached now, which is the one people come for.
+    static func preview(_ playlists: [CachedPlaylist]) -> [CachedPlaylist] {
+        // Three items at least: checked against the live channels, the
+        // newest list was often a one-video stub made that week, which is
+        // new but not yet anything to open.
+        let worth = playlists.filter { playlist in
+            guard playlist.isPinned || playlist.itemCount >= 3 else { return false }
+            let title = playlist.title.lowercased()
+            return !skippedMarkers.contains { title.contains($0) }
+        }
+        let ranked = worth.sorted { a, b in
+            if a.isPinned != b.isPinned { return a.isPinned }
+            switch (a.publishedAt, b.publishedAt) {
+            case let (x?, y?) where x != y: return x > y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return a.title < b.title
+            }
+        }
+        // Topped up from the rest when the filter leaves fewer than three,
+        // so a small channel still shows what it has.
+        var picked = Array(ranked.prefix(previewCount))
+        for playlist in playlists where picked.count < previewCount
+            && !picked.contains(where: { $0.playlistId == playlist.playlistId }) {
+            picked.append(playlist)
+        }
+        return picked
+    }
+
+    /// Lists that are not 말씀: short clips, notices, promotion, chat, and
+    /// members-only lists most readers cannot open.
+    private static let skippedMarkers = ["shorts", "쇼츠", "광고", "홍보", "공지", "안내", "teaser",
+                                         "잡담", "회원", "멤버십", "members"]
 }
 
