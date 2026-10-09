@@ -36,12 +36,6 @@ struct ServicePrepView: View {
     /// something pinned in the 찬양 tab, wrong for one the picker just found
     /// in the account or created a moment ago, neither of which is in the
     /// store.
-    private struct Push: Identifiable {
-        let playlistId: String
-        let title: String
-        var id: String { playlistId }
-    }
-    @State private var pending: Push?
     @State private var isPushing = false
     @State private var pushNote: String?
     @State private var live: TeamService?
@@ -219,7 +213,16 @@ struct ServicePrepView: View {
                     pinned: pinnedPlaylists,
                     sheetId: sheetId
                 ) { playlistId, title in
-                    pending = Push(playlistId: playlistId, title: title)
+                    // Straight in, against THIS service.
+                    //
+                    // It used to raise a confirmation that then pushed to
+                    // `service` — "whichever row is expanded" — rather than
+                    // to the one the picker was opened from. With 주일예배 and
+                    // 팀연습 on the same day, `.day` matching returns the
+                    // first of them, so a 콘티 could land on the wrong
+                    // service entirely. The service is right here in the
+                    // closure; there is no reason to go looking for it.
+                    Task { await push(playlistId, title: title, to: service) }
                 }
                 .environmentObject(auth)
                 .environmentObject(quota)
@@ -251,27 +254,6 @@ struct ServicePrepView: View {
                       let title = analysing else { return }
                 StudioInbox.shared.submit(url: url, title: title)
                 analysing = nil
-            }
-            // An alert, not a confirmationDialog. On iPad the latter is a
-            // popover anchored to whatever presented it, and anchored to a
-            // row inside a List it was drawn clipped — the buttons were
-            // there and invisible. An alert is centred and identical on both.
-            .alert(
-                "이 예배의 콘티를 덮어씁니다",
-                isPresented: Binding(
-                    get: { pending != nil },
-                    set: { if !$0 { pending = nil } }
-                ),
-                presenting: pending
-            ) { push in
-                Button("채우기") {
-                    if let service {
-                        Task { await self.push(push.playlistId, title: push.title, to: service) }
-                    }
-                }
-                Button("취소", role: .cancel) { pending = nil }
-            } message: { push in
-                Text("「\(push.title)」의 곡으로 이 날짜의 목록이 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
             }
         }
     }
@@ -972,7 +954,6 @@ struct ServicePrepView: View {
 
     private func push(_ playlistId: String, title: String, to service: TeamService) async {
         guard let sheetId else { return }
-        pending = nil
         isPushing = true
         pushNote = nil
         defer { isPushing = false }
