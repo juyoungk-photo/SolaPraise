@@ -131,6 +131,7 @@ struct ServicePrepView: View {
     /// The service whose 찬양 are being filled from a playlist.
     @State private var fillingFrom: TeamService?
     @State private var buildingPDF = false
+    @State private var repairing = false
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -300,7 +301,7 @@ struct ServicePrepView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("교회 계정으로 전환") {
+                    Button("다른 계정·드라이브 권한 연결") {
                         Task {
                             await planning.signIn()
                             team.configure(auth: auth, planning: planning)
@@ -412,12 +413,12 @@ struct ServicePrepView: View {
 
                 Menu {
                     if planning.isSignedIn {
-                        Button("교회 계정 연결 해제") {
+                        Button("추가 연결 해제") {
                             planning.signOut()
                             team.configure(auth: auth, planning: planning)
                         }
                     } else {
-                        Button("교회 계정으로 전환") {
+                        Button("다른 계정·드라이브 권한 연결") {
                             Task {
                                 await planning.signIn()
                                 team.configure(auth: auth, planning: planning)
@@ -456,6 +457,55 @@ struct ServicePrepView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    /// Songs the sheet holds but nothing can read.
+    ///
+    /// Shown at the very top, before the schedule, because what it
+    /// describes is songs MISSING from that schedule — and a warning below a
+    /// list of services is read as being about the last of them.
+    @ViewBuilder
+    private var damagedRowsWarning: some View {
+        if !team.damagedSongRows.isEmpty, let sheetId {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("시트에 칸이 밀린 찬양 \(team.damagedSongRows.count)곡이 있습니다",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Songs 탭 \(rowList)번 줄의 내용이 오른쪽으로 \(team.damagedSongRows.first?.shift ?? 0)칸 밀려 있어서 콘티에 보이지 않습니다. 내용은 그대로 남아 있으니 제자리로 옮기면 됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Task {
+                            repairing = true
+                            if let failure = await team.repairDamagedSongRows(sheetId: sheetId) {
+                                pushNote = failure
+                            }
+                            repairing = false
+                        }
+                    } label: {
+                        if repairing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("제자리로 옮기기", systemImage: "arrow.left.to.line")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(repairing || team.isReadOnly)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var rowList: String {
+        let rows = team.damagedSongRows.map(\.row)
+        guard let first = rows.first, let last = rows.last else { return "" }
+        // A contiguous run reads as a range; anything else as a list.
+        return rows == Array(first...last) && rows.count > 2
+            ? "\(first)–\(last)" : rows.map(String.init).joined(separator: ", ")
     }
 
     /// The way out to the sheet itself.
@@ -498,6 +548,8 @@ struct ServicePrepView: View {
                 // a second, unrelated screen and selecting a row changed
                 // something off screen. Every service is now a row that opens
                 // where it is, and the next one is open to begin with.
+                damagedRowsWarning
+
                 scheduleSection
 
                 if let message = team.errorMessage {

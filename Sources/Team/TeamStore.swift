@@ -254,6 +254,9 @@ final class TeamStore: ObservableObject {
     @Published private(set) var hasLeaderColumn = false
     /// 0-based Playlist column on the Schedule tab, when the sheet has one.
     @Published private(set) var playlistColumn: Int?
+    /// Songs-tab rows whose cells were written too far right — see
+    /// shiftedRows. Shown as a warning with a repair, never fixed silently.
+    @Published private(set) var damagedSongRows: [TeamSheet.ShiftedRow] = []
 
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -461,6 +464,7 @@ final class TeamStore: ObservableObject {
             roleColumns = Self.scheduleRoleColumns(schedule)
             playlistColumn = Self.schedulePlaylistColumn(schedule)
             songs = Self.parseSongs(songData)
+            damagedSongRows = TeamSheet.shiftedRows(in: songData)
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
@@ -1336,8 +1340,14 @@ final class TeamStore: ObservableObject {
             let existing = try await rawSongRows(sheetId: sheetId)
             let layout = SongLayout(header: existing.first ?? [])
             let day = Calendar.current.startOfDay(for: service.date)
-            // Appended after whatever is already planned, not over it.
-            let next = (songs[day]?.map(\.order).max() ?? 0) + 1
+
+            // Numbered from the sheet as it stands NOW, not from what this
+            // device last loaded. The local copy was why three appends in a
+            // row all came out as order 4 — none of them could see the
+            // others, because each one landed somewhere the parser did not
+            // read and never made it back into `songs`.
+            let fresh = Self.parseSongs(existing)[day] ?? []
+            let next = (fresh.map(\.order).max() ?? 0) + 1
 
             try await client.append(
                 sheetId: sheetId,
@@ -1353,16 +1363,57 @@ final class TeamStore: ObservableObject {
                     existing: nil
                 )
             )
-            songs[day, default: []].append(
-                TeamSong(order: next, title: title,
-                         url: YouTubeID.watchURL(videoId),
-                         key: key, transpose: 0, notes: nil)
-            )
+            // Re-read rather than patch in place.
+            //
+            // Appending to the local copy showed the song immediately — and
+            // went on showing it even when the write had landed in the wrong
+            // columns and the sheet no longer agreed. The screen and the
+            // sheet then disagreed until something forced a reload, and
+            // switching account was what forced it: the 순서 appeared to
+            // CHANGE with the account, when in fact the reload was the first
+            // honest look at the sheet. What is shown is now always what the
+            // sheet holds.
+            songs = Self.parseSongs(try await rawSongRows(sheetId: sheetId))
+            damagedSongRows = TeamSheet.shiftedRows(in: try await rawSongRows(sheetId: sheetId))
             errorMessage = nil
             return true
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             return false
+        }
+    }
+
+    // MARK: - Rows written in the wrong columns
+
+    /// Moves every shifted row back into place.
+    ///
+    /// Only ever run from a button. It rewrites the team's own document,
+    /// and a person should see the count and choose — but the data in those
+    /// rows is correct, only misplaced, so the fix is a move and nothing is
+    /// guessed. The full original width is written so the stray cells at
+    /// the far right are cleared rather than left behind as a second copy.
+    func repairDamagedSongRows(sheetId: String) async -> String? {
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        do {
+            let rows = try await rawSongRows(sheetId: sheetId)
+            let damaged = TeamSheet.shiftedRows(in: rows)
+            let headerWidth = rows.first?.count ?? 8
+            for item in damaged {
+                let width = max(rows[item.row - 1].count, headerWidth)
+                let cells = item.repaired
+                    + [String](repeating: "", count: max(0, width - item.repaired.count))
+                try await client.write(
+                    sheetId: sheetId,
+                    range: "\(TeamSheet.songsTab)!A\(item.row):\(TeamSheet.columnLetter(width - 1))\(item.row)",
+                    row: cells
+                )
+            }
+            let fresh = try await rawSongRows(sheetId: sheetId)
+            songs = Self.parseSongs(fresh)
+            damagedSongRows = TeamSheet.shiftedRows(in: fresh)
+            return nil
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

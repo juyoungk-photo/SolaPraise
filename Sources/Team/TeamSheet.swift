@@ -202,6 +202,39 @@ enum TeamSheet {
         return letters
     }
 
+    /// A row whose contents sit too far to the right.
+    struct ShiftedRow: Equatable, Identifiable {
+        let row: Int            // 1-based
+        let shift: Int          // columns too far right
+        let repaired: [String]  // the same cells, moved back
+        var id: Int { row }
+    }
+
+    /// Rows that hold a date, but not in the Date column.
+    ///
+    /// The fingerprint of the append bug: everything to the left of the
+    /// date is empty and the date is where it should not be. Such a row is
+    /// invisible to every parser — they all read the date from its own
+    /// column — so its song is gone from the 콘티 with no error anywhere.
+    /// Detecting it is what turns silent loss into something a person can
+    /// see and fix.
+    static func shiftedRows(in rows: [[String]]) -> [ShiftedRow] {
+        guard let header = rows.first else { return [] }
+        let dateColumn = column(header, ["date", "날짜"]) ?? 0
+        var out: [ShiftedRow] = []
+        for (offset, cells) in rows.enumerated() where offset > 0 {
+            if cells.count > dateColumn, day(cells[dateColumn]) != nil { continue }
+            guard let first = cells.firstIndex(where: {
+                !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            }), first > dateColumn, day(cells[first]) != nil else { continue }
+
+            let shift = first - dateColumn
+            out.append(ShiftedRow(row: offset + 1, shift: shift,
+                                  repaired: Array(cells.dropFirst(shift))))
+        }
+        return out
+    }
+
     /// Finds a column by any of its accepted names, case-insensitively.
     ///
     /// Every tab is read this way now. A person adds a column, renames one,
@@ -346,21 +379,43 @@ actor SheetsClient {
     /// a no-op. Google returns it in `updates.updatedRange`.
     @discardableResult
     func append(sheetId: String, tab: String, row: [String]) async throws -> Int? {
-        guard let url = valuesURL(sheetId: sheetId, suffix: "\(tab):append"),
-              var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { throw SheetsError.badRange(tab) }
-        comps.queryItems = [
-            .init(name: "valueInputOption", value: "USER_ENTERED"),
-            .init(name: "insertDataOption", value: "INSERT_ROWS")
-        ]
-        struct Body: Encodable { let values: [[String]] }
-        let data = try await send(url: comps.url!, method: "POST", body: Body(values: [row]))
-        let decoded = try? JSONDecoder().decode(AppendResponse.self, from: data)
-        // "Signups!A7:F7" — the first run of digits is the row.
-        guard let range = decoded?.updates?.updatedRange,
-              let match = range.range(of: "[0-9]+", options: .regularExpression)
-        else { return nil }
-        return Int(range[match])
+        // NOT values:append. That call writes "starting with the first
+        // column of the TABLE" it detects — not at column A — and its
+        // detection is thrown off by blank rows in the middle of a tab.
+        // Once one row landed in column C, the detected table started at C
+        // and every later append followed it: the team's Songs tab ended up
+        // with nine songs whose date sat in the Order column, two columns
+        // right, where nothing reads it. They simply vanished from the
+        // 콘티, and switching account looked like it changed the 순서 only
+        // because the reload exposed what the sheet really held.
+        //
+        // So the line is computed here and written to an explicit range
+        // anchored at A. The values API trims trailing empty rows, so the
+        // count of what comes back is the last line in use; interior blank
+        // rows are left alone rather than refilled, which keeps every
+        // existing row number stable.
+        //
+        // The cost is a race INSERT_ROWS did not have: two people appending
+        // to the same tab in the same second could pick the same line. The
+        // target is re-checked immediately before writing to make that
+        // window as narrow as one round trip, and for a worship team it is
+        // a far smaller risk than silent, self-perpetuating column drift.
+        let lastColumn = TeamSheet.columnLetter(max(row.count, 1) - 1)
+        for _ in 0..<4 {
+            let existing = try await read(sheetId: sheetId, range: tab)
+            let target = max(existing.count, 1) + 1
+            let range = "\(tab)!A\(target):\(lastColumn)\(target)"
+
+            let occupant = try await read(sheetId: sheetId, range: range)
+            let taken = occupant.first?.contains {
+                !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            } ?? false
+            guard !taken else { continue }
+
+            try await write(sheetId: sheetId, range: range, row: row)
+            return target
+        }
+        throw SheetsError.badRange("\(tab): no free row after several tries")
     }
 
     func write(sheetId: String, range: String, row: [String]) async throws {
@@ -474,10 +529,6 @@ private struct SheetsFailure: Decodable {
 }
 
 
-private struct AppendResponse: Decodable {
-    struct Updates: Decodable { let updatedRange: String? }
-    let updates: Updates?
-}
 
 // MARK: - Playlist ids
 

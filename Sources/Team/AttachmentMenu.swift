@@ -75,18 +75,26 @@ struct AttachmentMenu<Content: View>: View {
                         Label("파일에서 추가", systemImage: "folder")
                     }
                 } else {
-                    // Not a failure to hide. Google refuses youtube and
-                    // drive.file in one grant, so uploading needs the sheet
-                    // account connected — the same one a team using a
-                    // church account for the sheet already connects.
+                    // A PERMISSION, not an account.
+                    //
+                    // The first wording said "시트 계정 연결", which is wrong
+                    // for the common case and confusing in every case: the
+                    // reader is already signed in — possibly as the very
+                    // account being asked for — and is being told to
+                    // connect an account they are looking at the name of.
+                    //
+                    // What is actually missing is Drive permission, which
+                    // Google will not grant in the same breath as YouTube.
+                    // The same account is fine; it is one extra sign-in.
                     Button {
                         Task {
                             await planning.signIn()
                             team.configure(auth: auth, planning: planning)
                         }
                     } label: {
-                        Label("첨부하려면 시트 계정 연결", systemImage: "person.badge.key")
+                        Label("구글 드라이브 권한 연결", systemImage: "externaldrive.badge.plus")
                     }
+                    Text("악보를 올리려면 드라이브 권한이 필요합니다. 지금 쓰는 계정 그대로 한 번 더 로그인하면 됩니다 — 구글이 유튜브 권한과 드라이브 권한을 한 번에 주지 않습니다.")
                 }
             }
         } label: {
