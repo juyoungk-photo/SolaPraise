@@ -73,6 +73,23 @@ enum AppSecrets {
         return trimmed
     }
 
+    /// Addresses that see features still under development.
+    ///
+    /// Out of the gitignored config rather than the source: the repository
+    /// is public and these are real people's addresses. Empty everywhere
+    /// but the developer's own build, which is correct.
+    static var devAccounts: Set<String> {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "DevAccounts") as? String
+        else { return [] }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return [] }
+        return Set(
+            trimmed.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+    }
+
     static var teamSheetId: String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: "TeamSheetId") as? String
         else { return nil }

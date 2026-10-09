@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 struct PlaylistLibraryView: View {
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var planning: PlanningAuth
 
     @Environment(\.modelContext) private var modelContext
     @StateObject private var state = LoadState<[YTPlaylist]>()
@@ -142,6 +143,8 @@ struct PlaylistLibraryView: View {
                 }
             }
 
+            // Chord analysis is still under development — see DevGate.
+            if DevGate.isUnlocked(auth: auth, planning: planning) {
             Section {
                 NavigationLink {
                     StudioView()
@@ -182,6 +185,7 @@ struct PlaylistLibraryView: View {
                 Text("작업실")
             } footer: {
                 Text("내가 가진 오디오 파일(예배 실황 녹음 등)에서 코드를 분석합니다. 유튜브 오디오는 분석할 수 없습니다.")
+            }
             }
 
             Section {

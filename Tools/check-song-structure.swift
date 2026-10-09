@@ -2,31 +2,30 @@
 //  check-song-structure.swift
 //  SolaPraise
 //
-//  Checks that SongStructure.detect labels a song the SAME way every run.
+//  Checks SongStructure against chord streams shaped like real detection
+//  output, not like a tidy chart.
 //
-//  WHY THIS EXISTS: the chorus was picked with `max` over a dictionary of
-//  progression counts. Swift seeds dictionary hashing per process, so when
-//  two progressions tied — which is the ordinary case, not an edge case,
-//  since in A-B-A-B-C the verse and the chorus both occur twice — the winner
-//  changed between launches. The same recording came back as
-//  「절 1 · 후렴 · 절 2 · 후렴」 one time and 「후렴 · 섹션 B · 후렴 · 섹션 B」
-//  the next, and because each run looks perfectly reasonable on its own,
-//  nothing about it reads as a bug until you happen to analyse the same song
-//  twice. Twelve runs of the old code gave two different answers, 8 to 4.
+//  WHY THIS EXISTS: the first version of the detector found no repeats at
+//  all on real songs — every section got its own letter and 곡의 흐름 showed
+//  six differently-coloured blocks for a two-part song. Nothing crashed and
+//  nothing logged; it simply produced confident nonsense. The three causes
+//  are all invisible from a tidy test:
 //
-//  A single run proves nothing here. Run it several times:
+//    1. Seventeen chord qualities, and `history` appends on ANY change — so
+//       one sustained G arrives as G, Gmaj7, G6, Gadd9, G.
+//    2. Chunking counts EVENTS, so one spurious event shifts every boundary
+//       after it and a perfectly repeated chorus never lines up twice.
+//    3. A 0.3-second flicker weighed as much as a four-bar chord.
 //
-//      swiftc -O -o /tmp/structcheck \
+//  So every case here feeds the flicker in deliberately. A suite of clean
+//  four-chord phrases would have passed against the broken code.
+//
+//  Run:
+//      swiftc -O -o /tmp/sscheck \
 //          Sources/Chords/ChordModels.swift \
 //          Sources/Chords/SongStructure.swift \
 //          Tools/check-song-structure.swift
-//      for i in $(seq 12); do /tmp/structcheck; done | sort | uniq -c
-//
-//  Expected: one line, twelve times.
-//
-//      12 A:절 1 | B:후렴 | A:절 2 | B:후렴 | C:섹션 C
-//
-//  Two or more distinct lines means the tie-break has come undone again.
+//      /tmp/sscheck
 //
 
 import Foundation
@@ -34,33 +33,109 @@ import Foundation
 @main
 struct CheckSongStructure {
 
-    private static func chord(_ root: Int, _ quality: ChordQuality,
-                              at time: TimeInterval) -> SessionChord {
-        SessionChord(chord: Chord(root: root, quality: quality), timestamp: time)
+    /// Builds a chord stream the way the detector reports one.
+    struct Builder {
+        var out: [SessionChord] = []
+        var t: TimeInterval = 0
+
+        /// A chord held for `bars` bars, optionally flickering to another
+        /// quality partway through — which is what really comes out.
+        mutating func play(_ root: Int, _ q: ChordQuality,
+                           bars: Double = 1, flickerTo: ChordQuality? = nil) {
+            let dur = bars * 2.0
+            guard let f = flickerTo else {
+                out.append(SessionChord(chord: Chord(root: root, quality: q), timestamp: t))
+                t += dur
+                return
+            }
+            out.append(SessionChord(chord: Chord(root: root, quality: q), timestamp: t))
+            t += dur * 0.45
+            out.append(SessionChord(chord: Chord(root: root, quality: f), timestamp: t))
+            t += dur * 0.10
+            out.append(SessionChord(chord: Chord(root: root, quality: q), timestamp: t))
+            t += dur * 0.45
+        }
     }
 
-    /// The shape that breaks it: verse and chorus each twice, then a bridge.
-    ///   G G/B C Dsus4 | Em7 Cmaj7 G D7 | G G/B C Dsus4 | Em7 Cmaj7 G D7 | Am Esus2 C D
-    private static let progression: [(root: Int, quality: ChordQuality)] = [
-        (7, .major), (7, .major), (0, .major), (2, .sus4),
-        (4, .minor7), (0, .major7), (7, .major), (2, .dominant7),
-        (7, .major), (7, .major), (0, .major), (2, .sus4),
-        (4, .minor7), (0, .major7), (7, .major), (2, .dominant7),
-        (9, .minor), (4, .sus2), (0, .major), (2, .major)
-    ]
+    // G D Em Am  /  C G F D — four-chord phrases that do not share a seam.
+    static func verse(_ b: inout Builder) {
+        b.play(7, .major, flickerTo: .major7); b.play(2, .major)
+        b.play(4, .minor); b.play(9, .minor)
+    }
+    static func chorus(_ b: inout Builder) {
+        b.play(0, .major); b.play(7, .major, flickerTo: .sixth)
+        b.play(5, .major); b.play(2, .major)
+    }
+    static func bridge(_ b: inout Builder) {
+        b.play(9, .minor); b.play(5, .major); b.play(0, .major); b.play(7, .major)
+    }
 
     static func main() {
-        let chords = progression.enumerated().map { index, step in
-            chord(step.root, step.quality, at: TimeInterval(index) * 4)
-        }
+        var failures = 0
 
-        let sections = SongStructure.detect(chords: chords)
-        print(sections.map { "\($0.patternKey):\($0.label)" }.joined(separator: " | "))
+        // The shape nearly every worship song has.
+        var song = Builder()
+        for _ in 0..<2 { verse(&song); chorus(&song) }
+        bridge(&song); chorus(&song)
+        let result = SongStructure.analyse(chords: song.out)
+        let letters = result.sections.map(\.patternKey).joined()
+        let labels = result.sections.map(\.label)
 
-        // The chorus must be the part the verse leads to, not the opening.
-        if let chorus = sections.first(where: { $0.label == "후렴" }), chorus.startIndex == 0 {
-            FileHandle.standardError.write(
-                Data("warning: the opening phrase was labelled 후렴\n".utf8))
-        }
+        check(&failures, "A B A B C B recovered from flicker",
+              letters == "ABABCB", "got \(letters)")
+        check(&failures, "the repeated verse is 절, not a new section",
+              labels.filter { $0.hasPrefix("절") }.count == 2, "got \(labels)")
+        check(&failures, "the chorus is named 후렴",
+              labels.filter { $0 == "후렴" }.count == 3, "got \(labels)")
+        check(&failures, "flicker was dropped",
+              result.quality.dropped > 0 && result.quality.events < result.quality.rawEvents,
+              "raw \(result.quality.rawEvents), kept \(result.quality.events)")
+        check(&failures, "most of the song is in a repeated part",
+              result.quality.repeatedShare >= 0.7,
+              "repeated \(result.quality.repeatedShare)")
+
+        // One chord genuinely misheard in a repeat must not split the section.
+        var slip = Builder()
+        verse(&slip); chorus(&slip); verse(&slip)
+        slip.play(0, .major); slip.play(7, .major); slip.play(5, .major); slip.play(3, .major)
+        bridge(&slip); chorus(&slip)
+        let slipped = SongStructure.analyse(chords: slip.out)
+        check(&failures, "one wrong chord still matches its section",
+              slipped.sections.map(\.patternKey).joined() == "ABABCB",
+              "got \(slipped.sections.map(\.patternKey).joined())")
+
+        // Input too thin to say anything must SAY so rather than invent.
+        var thin = Builder()
+        verse(&thin)
+        let thinResult = SongStructure.analyse(chords: thin.out)
+        check(&failures, "a single verse reports no repetition",
+              thinResult.quality.findings.contains(.noRepetition),
+              "findings \(thinResult.quality.findings)")
+        check(&failures, "a single verse is not trustworthy",
+              !thinResult.quality.isTrustworthy, "it claimed to be")
+
+        var junk = Builder()
+        for i in 0..<40 { junk.play((i * 5) % 12, .major, bars: 0.12) }
+        let junkResult = SongStructure.analyse(chords: junk.out)
+        check(&failures, "pure flicker is reported as too few chords",
+              junkResult.quality.findings.contains(.tooFewChords),
+              "findings \(junkResult.quality.findings)")
+
+        // Determinism: dictionary order is randomised per process, and the
+        // chorus pick once changed between launches for the same song.
+        let again = SongStructure.analyse(chords: song.out)
+        check(&failures, "same input, same labels",
+              again.sections.map(\.label) == labels, "labels moved")
+
+        print(failures == 0
+              ? "\nall song structure checks passed"
+              : "\n\(failures) failure(s)")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    static func check(_ failures: inout Int, _ name: String,
+                      _ ok: Bool, _ detail: @autoclosure () -> String) {
+        print("\(ok ? "ok  " : "FAIL") \(name)")
+        if !ok { print("       \(detail())"); failures += 1 }
     }
 }

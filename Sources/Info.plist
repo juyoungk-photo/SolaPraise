@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ESVAPIKey</key>
 	<string>$(ESV_API_KEY)</string>
+	<key>DevAccounts</key>
+	<string>$(DEV_ACCOUNTS)</string>
 	<key>ChurchSheetId</key>
 	<string>$(CHURCH_SHEET_ID)</string>
 	<key>TeamSheetId</key>

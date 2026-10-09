@@ -71,7 +71,10 @@ struct LeadSheetView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    SongMapView(sections: song.sections) { jump(to: $0, with: proxy) }
+                    SongMapView(sections: song.sections,
+                                quality: SongStructure.quality(chords: song.chords)) {
+                        jump(to: $0, with: proxy)
+                    }
                         .padding(.horizontal, 20)
 
                     transposeCard
@@ -103,7 +106,9 @@ struct LeadSheetView: View {
     private func mapRow(_ onSelect: @escaping (SongSection) -> Void) -> some View {
         if !song.sections.isEmpty {
             Section {
-                SongMapView(sections: song.sections, onSelect: onSelect)
+                SongMapView(sections: song.sections,
+                            quality: SongStructure.quality(chords: song.chords),
+                            onSelect: onSelect)
                     .padding(.vertical, 6)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                     .listRowSeparator(.hidden)

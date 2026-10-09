@@ -23,6 +23,10 @@ import SwiftUI
 
 struct SongMapView: View {
     let sections: [SongSection]
+    /// How much the detection is worth trusting. Shown when it is not much:
+    /// a map that presents six guesses as structure is worse than no map,
+    /// because it looks like an answer.
+    var quality: StructureQuality? = nil
     /// Tapping a block jumps the sheet to that section.
     var onSelect: (SongSection) -> Void = { _ in }
 
@@ -41,6 +45,7 @@ struct SongMapView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                qualityNote
             }
         }
     }
@@ -157,6 +162,30 @@ struct SongMapView: View {
         }) else { return legend }
 
         return "\(legend) · \(best[0].label) \(best.count)번 반복"
+    }
+
+    // MARK: - How much to trust it
+
+    /// What went wrong with the input, in the words of the thing to do about
+    /// it. Detection is a guess; this is the map admitting when the guess
+    /// was made from very little.
+    @ViewBuilder
+    private var qualityNote: some View {
+        if let quality, !quality.findings.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(quality.findings, id: \.rawValue) { finding in
+                    Label(finding.message, systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                if quality.noiseShare > 0.3 {
+                    Text("코드 \(quality.rawEvents)개 중 \(quality.dropped)개는 순간적인 흔들림으로 보고 제외했습니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.top, 2)
+        }
     }
 
     // MARK: - Colour

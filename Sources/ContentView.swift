@@ -45,7 +45,14 @@ struct ContentView: View {
     /// read a chart. iPhone keeps it inside 보관함 rather than pushing the tab
     /// bar to five items.
     private var showsStudioTab: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
+        UIDevice.current.userInterfaceIdiom == .pad && showsChordAnalysis
+    }
+
+    /// Chord analysis is still being worked on — see DevGate. It is hidden
+    /// rather than disabled, because a half-finished chart is worse than no
+    /// chart: somebody would play it on Sunday.
+    private var showsChordAnalysis: Bool {
+        DevGate.isUnlocked(auth: auth, planning: planning)
     }
 
     /// The tabs that exist right now, in order. The `TabView` and the

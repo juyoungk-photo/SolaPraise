@@ -89,6 +89,7 @@ struct WatchScreen: View {
     @StateObject private var detection = DetectionSession()
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var planning: PlanningAuth
     @Environment(\.modelContext) private var context
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
@@ -529,7 +530,8 @@ struct WatchScreen: View {
 
             // 코드 is for 찬양. A QT or a psalm reading has nothing to
             // detect, and the button only invited a pointless wait there.
-            if showsChordButton {
+            // It is also still under development — see DevGate.
+            if showsChordButton, DevGate.isUnlocked(auth: auth, planning: planning) {
                 Button {
                     if detection.isStarting {
                         detection.cancelStart()
