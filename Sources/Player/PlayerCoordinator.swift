@@ -92,6 +92,10 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// than reported by YouTube. Only a watchdog error may be withdrawn:
     /// a real 150 does not stop being true because a `time` event arrived.
     private var errorWasWatchdog = false
+    /// YouTube's own code for the last failure, so a caller can tell "this
+    /// video is gone" from "this video will not embed" from "the page never
+    /// loaded". Nil when nothing has failed.
+    @Published private(set) var errorCode: Int?
 
     /// Builds the player document, or returns the one already running.
     func hostedWebView() -> WKWebView {
@@ -201,6 +205,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     func retryLoad() {
         guard let videoId = loadedVideoId else { return }
         errorMessage = nil
+        errorCode = nil
         errorWasWatchdog = false
         canRetryLoad = false
         isReady = false
@@ -245,6 +250,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     func load(videoId: String) {
         didEnd = false
         errorMessage = nil
+        errorCode = nil
         errorWasWatchdog = false
         isEmbedBlocked = false
         maxTimeReached = 0
@@ -303,6 +309,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         currentTime = 0
         duration = 0
         errorMessage = nil
+        errorCode = nil
         errorWasWatchdog = false
         isEmbedBlocked = false
     }
@@ -385,6 +392,7 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         case "error":
             let code = (body["code"] as? Int) ?? -1
             errorMessage = Self.describeError(code)
+            errorCode = code
             errorWasWatchdog = false
             isEmbedBlocked = [101, 150, 152].contains(code)
             // YouTube has answered, so the watchdog has nothing left to

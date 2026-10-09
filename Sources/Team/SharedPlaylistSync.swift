@@ -68,6 +68,14 @@ enum SharedPlaylistSync {
         return "\(day) \(service.title)"
     }
 
+    /// Pins one playlist to the 찬양 tab. Used for the service playlists
+    /// above and for the archive, which is the team's standing collection
+    /// rather than any one Sunday's.
+    static func pin(id: String, title: String, context: ModelContext) {
+        pinPlaylist(id: id, title: title, context: context)
+        try? context.save()
+    }
+
     private static func pinPlaylist(id: String, title: String, context: ModelContext) {
         let existing = try? context.fetch(
             FetchDescriptor<CachedPlaylist>(

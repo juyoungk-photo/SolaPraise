@@ -144,6 +144,25 @@ struct WatchScreen: View {
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
         }
+        // A video the player can never show should stop being offered.
+        //
+        // FeedStore has no prune: a 찬양 upload that is later deleted, made
+        // private, or set to block embedding stays in the cache for good,
+        // and its thumbnail keeps resolving from Google's CDN — so the feed
+        // shows a perfectly normal card that says "Video unavailable" the
+        // moment it is pressed, every time, forever. Checked against the
+        // live channels: embeddable=true and no region or age restriction on
+        // 45 recent uploads, which leaves the stale cache entry as the thing
+        // actually producing this.
+        //
+        // Dropped on the player's own verdict rather than by polling every
+        // cached video's status, which would be a call per fifty videos per
+        // refresh to catch something that happens rarely.
+        .onChange(of: host.coordinator.errorCode) { _, code in
+            guard let code, [100, 101, 150, 152].contains(code),
+                  let id = current?.id else { return }
+            dropFromFeed(id)
+        }
         .onChange(of: player.isReady) { _, ready in
             #if DEBUG
             guard ready, DebugHarness.seeksToEnd, player.duration > DebugHarness.tailSeconds else { return }
@@ -690,6 +709,21 @@ struct WatchScreen: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Removes a video the player has just refused from the cached feed.
+    ///
+    /// The cache only, never the playlist or the sheet: this says "the app
+    /// cannot show this", which is not the same as "the team did not choose
+    /// it". A 콘티 row keeps its song, and the next feed refresh will bring
+    /// the video back if YouTube was simply having a bad minute.
+    private func dropFromFeed(_ videoId: String) {
+        let descriptor = FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.videoId == videoId }
+        )
+        guard let stale = try? modelContext.fetch(descriptor), !stale.isEmpty else { return }
+        for video in stale { modelContext.delete(video) }
+        try? modelContext.save()
     }
 
     private func delete(_ song: SavedSong) {

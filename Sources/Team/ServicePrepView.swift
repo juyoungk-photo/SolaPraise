@@ -18,6 +18,7 @@ struct ServicePrepView: View {
     @EnvironmentObject private var host: PlayerHost
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
+    @Environment(\.modelContext) private var modelContext
 
     @Query(sort: [SortDescriptor(\SavedSong.createdAt, order: .reverse)])
     private var sheets: [SavedSong]
@@ -1074,11 +1075,25 @@ struct ServicePrepView: View {
         let entries = songs.compactMap { item in
             item.videoId.map { ServiceArchive.Song(videoId: $0, title: item.title) }
         }
-        _ = await archiveStore.archive(
+        let outcome = await archiveStore.archive(
             entries,
             of: service,
             using: AppServices.client(auth: auth, quota: quota)
         )
+        // Pin it to 찬양 the moment its id is known.
+        //
+        // The archive is created per account by findOrCreate, so there is no
+        // fixed id to ship as a default — the first archive is the first
+        // time anyone can know it. It is the team's standing collection of
+        // what has actually been sung, which is exactly the thing worth
+        // having at the top of the 찬양 tab beside the week's 콘티.
+        if let outcome {
+            SharedPlaylistSync.pin(
+                id: outcome.playlistId,
+                title: ServiceArchive.playlistTitle,
+                context: modelContext
+            )
+        }
     }
 
     /// Today counts. A service is archivable from its own morning, because
