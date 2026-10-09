@@ -29,9 +29,16 @@ struct ServicePrepView: View {
 
     /// A push waiting on confirmation, because it rewrites the sheet the
     /// team reads on Sunday morning.
+    /// A playlist waiting to be pushed, as plain values.
+    ///
+    /// It used to be a CachedPlaylist, which is a SwiftData model — fine for
+    /// something pinned in the 찬양 tab, wrong for one the picker just found
+    /// in the account or created a moment ago, neither of which is in the
+    /// store.
     private struct Push: Identifiable {
-        let playlist: CachedPlaylist
-        var id: String { playlist.playlistId }
+        let playlistId: String
+        let title: String
+        var id: String { playlistId }
     }
     @State private var pending: Push?
     @State private var isPushing = false
@@ -126,6 +133,8 @@ struct ServicePrepView: View {
     @State private var analysing: String?
     /// The chip a leader tapped, and what it was about.
     @State private var assigning: AssignmentTarget?
+    /// The service whose 찬양 are being filled from a playlist.
+    @State private var fillingFrom: TeamService?
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -202,6 +211,18 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(item: $fillingFrom) { service in
+                FillFromPlaylistSheet(
+                    service: service,
+                    pinned: pinnedPlaylists,
+                    sheetId: sheetId
+                ) { playlistId, title in
+                    pending = Push(playlistId: playlistId, title: title)
+                }
+                .environmentObject(auth)
+                .environmentObject(quota)
+                .environmentObject(team)
+            }
             .sheet(item: $assigning) { target in
                 AssignRoleSheet(
                     service: target.service,
@@ -242,11 +263,13 @@ struct ServicePrepView: View {
                 presenting: pending
             ) { push in
                 Button("채우기") {
-                    if let service { Task { await self.push(push.playlist, to: service) } }
+                    if let service {
+                        Task { await self.push(push.playlistId, title: push.title, to: service) }
+                    }
                 }
                 Button("취소", role: .cancel) { pending = nil }
             } message: { push in
-                Text("「\(push.playlist.title)」의 곡으로 이 날짜의 목록이 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
+                Text("「\(push.title)」의 곡으로 이 날짜의 목록이 바뀝니다. 이미 적어 둔 키와 메모는 앱이 아는 값이 있을 때만 채워집니다.")
             }
         }
     }
@@ -668,24 +691,21 @@ struct ServicePrepView: View {
             }
             .disabled(team.isReadOnly)
 
-            if pinnedPlaylists.isEmpty {
-                Text("찬양 탭에 재생목록을 고정하면 여기로 보낼 수 있습니다.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                Menu {
-                    ForEach(pinnedPlaylists) { playlist in
-                        Button(playlist.title) { pending = Push(playlist: playlist) }
-                    }
-                } label: {
-                    HStack {
-                        Label("재생목록에서 찬양 채우기", systemImage: "square.and.arrow.down")
-                        Spacer()
-                        if isPushing { ProgressView().controlSize(.small) }
-                    }
+            // A sheet rather than a menu. The menu could only list the
+            // playlists pinned in the 찬양 tab — two, on most devices — and
+            // the one a leader wants is usually the one they just built and
+            // never pinned. The sheet lists everything in the account, and
+            // carries the + that makes this service its own.
+            Button {
+                fillingFrom = service
+            } label: {
+                HStack {
+                    Label("재생목록에서 찬양 채우기", systemImage: "square.and.arrow.down")
+                    Spacer()
+                    if isPushing { ProgressView().controlSize(.small) }
                 }
-                .disabled(isPushing)
             }
+            .disabled(isPushing)
 
             if let note = pushNote {
                 Text(note).font(.caption).foregroundStyle(.secondary)
@@ -808,7 +828,7 @@ struct ServicePrepView: View {
 
     // MARK: - Pushing the 콘티
 
-    private func push(_ playlist: CachedPlaylist, to service: TeamService) async {
+    private func push(_ playlistId: String, title: String, to service: TeamService) async {
         guard let sheetId else { return }
         pending = nil
         isPushing = true
@@ -816,7 +836,7 @@ struct ServicePrepView: View {
         defer { isPushing = false }
 
         let client = AppServices.client(auth: auth, quota: quota)
-        guard let items = try? await client.playlistItems(playlistId: playlist.playlistId) else {
+        guard let items = try? await client.playlistItems(playlistId: playlistId) else {
             pushNote = "재생목록을 불러오지 못했습니다."
             return
         }

@@ -165,6 +165,11 @@ struct TeamService: Identifiable, Hashable {
     let notes: String?
     /// Role name → assigned member, as filled in on the Schedule tab.
     let assignments: [String: String]
+    /// The service's shared 찬양 playlist, from the Schedule tab's Playlist
+    /// column. One per service, written once by whoever creates it and read
+    /// by everybody — which is what makes it the team's playlist rather than
+    /// one person's.
+    var playlistId: String? = nil
     /// 1-based row on the Schedule tab, so an assignment knows where to
     /// write. nil for a service that did not come from a sheet — the DEBUG
     /// sample — and assignment is refused rather than guessed in that case.
@@ -220,6 +225,8 @@ final class TeamStore: ObservableObject {
     @Published private(set) var roleColumns: [String: Int] = [:]
     /// Whether the Members tab names who the leaders are.
     @Published private(set) var hasLeaderColumn = false
+    /// 0-based Playlist column on the Schedule tab, when the sheet has one.
+    @Published private(set) var playlistColumn: Int?
 
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -411,6 +418,7 @@ final class TeamStore: ObservableObject {
             roles = Self.parseRoles(roleData)
             services = Self.parseSchedule(schedule, roles: roles)
             roleColumns = Self.scheduleRoleColumns(schedule)
+            playlistColumn = Self.schedulePlaylistColumn(schedule)
             songs = Self.parseSongs(songData)
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
@@ -774,6 +782,66 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Records a service's shared playlist on the Schedule tab.
+    ///
+    /// Written to the sheet rather than kept on the device, because the
+    /// point is that it is the TEAM's playlist: one person makes it, and
+    /// everybody else's app finds it on the next load. A copy held locally
+    /// would be a playlist only its author could see.
+    func setPlaylist(
+        _ playlistId: String,
+        for service: TeamService,
+        sheetId: String
+    ) async -> String? {
+        #if DEBUG
+        if isSample { applyPlaylistLocally(playlistId, service: service); return nil }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let row = service.row, row >= 2 else {
+            return "이 예배가 시트의 몇 번째 줄인지 알 수 없습니다. 새로 고친 뒤 다시 시도해 주세요."
+        }
+        guard let column = playlistColumn else {
+            // Adding a column shifts every column to its right in a document
+            // the team shares, so this says what to do instead of doing it.
+            return "Schedule 탭에 「재생목록」 열을 추가한 뒤 새로 고쳐 주세요."
+        }
+
+        let cell = "\(TeamSheet.scheduleTab)!\(TeamSheet.columnLetter(column))\(row)"
+        do {
+            isReadOnly = false
+            try await client.write(
+                sheetId: sheetId, range: cell,
+                row: [YouTubePlaylistID.url(playlistId)?.absoluteString ?? playlistId]
+            )
+            applyPlaylistLocally(playlistId, service: service)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 저장하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func applyPlaylistLocally(_ playlistId: String, service: TeamService) {
+        guard let index = services.firstIndex(where: { $0.id == service.id }) else { return }
+        var updated = services[index]
+        updated.playlistId = playlistId
+        services[index] = updated
+    }
+
+    /// Every shared playlist the schedule names, newest service first.
+    ///
+    /// What the home screen and the 찬양 tab subscribe to, so a playlist one
+    /// person created for Sunday reaches the whole team.
+    var sharedPlaylists: [(service: TeamService, playlistId: String)] {
+        services
+            .sorted { $0.date > $1.date }
+            .compactMap { service in
+                service.playlistId.map { (service, $0) }
+            }
+    }
+
     /// Reflects the write without a four-round-trip reload.
     private func applyAssignmentLocally(role: String, value: String, service: TeamService) {
         guard let index = services.firstIndex(where: { $0.id == service.id }) else { return }
@@ -1100,6 +1168,11 @@ final class TeamStore: ObservableObject {
         return result
     }
 
+    static func schedulePlaylistColumn(_ rows: [[String]]) -> Int? {
+        guard let header = rows.first else { return nil }
+        return TeamSheet.column(header, TeamSheet.playlistColumnNames)
+    }
+
     private static func reservedScheduleColumns(_ header: [String]) -> [Int] {
         func column(_ names: [String]) -> Int? {
             header.firstIndex {
@@ -1111,7 +1184,10 @@ final class TeamStore: ObservableObject {
             column(["title", "service", "구분", "type", "예배", "행사", "예배명"]),
             column(["time", "시간"]),
             column(["location", "장소"]),
-            column(["note", "notes", "비고", "메모"])
+            column(["note", "notes", "비고", "메모"]),
+            // Not a part. Without this the column became a role called
+            // Playlist, and the roster grew a phantom member holding a URL.
+            column(TeamSheet.playlistColumnNames)
         ].compactMap { $0 }
     }
 
@@ -1132,8 +1208,11 @@ final class TeamStore: ObservableObject {
         let timeCol = column(["time", "시간"])
         let locationCol = column(["location", "장소"])
         let notesCol = column(["note", "notes", "비고", "메모"])
+        let playlistCol = column(TeamSheet.playlistColumnNames)
 
-        let reserved = Set([dateCol, titleCol, timeCol, locationCol, notesCol].compactMap { $0 })
+        let reserved = Set(
+            [dateCol, titleCol, timeCol, locationCol, notesCol, playlistCol]
+                .compactMap { $0 })
         let roleColumns = header.enumerated()
             .filter { !reserved.contains($0.offset) }
             .map { ($0.offset, $0.element.trimmingCharacters(in: .whitespaces)) }
@@ -1161,6 +1240,10 @@ final class TeamStore: ObservableObject {
                 location: cell(locationCol),
                 notes: cell(notesCol),
                 assignments: assignments,
+                // A pasted Sheets URL reduces to its id, the same way the
+                // team sheet's own address does — a leader pasting the whole
+                // link is the normal case, not a mistake.
+                playlistId: cell(playlistCol).flatMap(YouTubePlaylistID.from),
                 // +2: one for the header, one because sheets count from 1.
                 row: offset + 2
             )

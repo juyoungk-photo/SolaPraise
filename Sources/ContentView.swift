@@ -152,6 +152,10 @@ struct ContentView: View {
                   let sheetId = TeamSheetSource.current,
                   team.services.isEmpty else { return }
             await team.load(sheetId: sheetId)
+            // The other half of a shared 콘티: one person writes the
+            // playlist into the Schedule tab, and every other member's app
+            // puts it on their 홈 and 찬양 tab from here.
+            SharedPlaylistSync.run(services: team.sharedPlaylists, context: modelContext)
         }
         // The once-a-day gate: today's psalm comes up before anything else,
         // and only once — dismissing it leaves the normal tabs alone.

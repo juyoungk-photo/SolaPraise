@@ -72,6 +72,13 @@ enum TeamSheet {
     /// Where the service currently is. One row per date.
     static let liveTab     = "Live"
 
+    /// The Schedule tab's shared-playlist column, however it is spelled.
+    ///
+    /// Optional: a sheet without it simply has no shared playlist, and the
+    /// app offers to create one, which adds the column's value for that row
+    /// only — it never inserts a column into somebody else's document.
+    static let playlistColumnNames = ["playlist", "재생목록", "콘티", "플레이리스트"]
+
     enum Schedule { static let date = 0, title = 1, notes = 2, fixedColumns = 3 }
     enum Roles    { static let name = 0, order = 1, active = 2 }
     enum Songs    { static let date = 0, order = 1, title = 2, url = 3, key = 4, transpose = 5, notes = 6 }
@@ -421,4 +428,23 @@ private struct SheetsFailure: Decodable {
 private struct AppendResponse: Decodable {
     struct Updates: Decodable { let updatedRange: String? }
     let updates: Updates?
+}
+
+// MARK: - Playlist ids
+
+/// A YouTube playlist id out of whatever a leader pasted into the cell.
+enum YouTubePlaylistID {
+    static func from(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        // A bare id: PL…, UU…, LL…, FL…, OLAK5uy_…
+        if !text.contains("/"), !text.contains(" ") { return text }
+        guard let range = text.range(of: "[?&]list=([A-Za-z0-9_-]+)",
+                                     options: .regularExpression) else { return nil }
+        return String(text[range].drop(while: { $0 != "=" }).dropFirst())
+    }
+
+    static func url(_ id: String) -> URL? {
+        URL(string: "https://www.youtube.com/playlist?list=\(id)")
+    }
 }
