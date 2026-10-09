@@ -456,6 +456,75 @@ actor SheetsClient {
         _ = try await send(url: url, method: "POST", body: body)
     }
 
+    /// Each tab's id, size, frozen rows and existing colour rules, plus the
+    /// header row of every tab SheetTidy knows — what it needs to decide
+    /// what to change and what is already there.
+    func tidyTabs(sheetId: String) async throws -> [SheetTidy.Tab] {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("tidy") }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)"
+        comps.queryItems = [.init(
+            name: "fields",
+            value: "sheets(properties(sheetId,title,gridProperties(frozenRowCount,columnCount)),conditionalFormats(booleanRule(condition(values(userEnteredValue)))))")]
+        guard let url = comps.url else { throw SheetsError.badRange("tidy") }
+
+        struct Spreadsheet: Decodable {
+            struct Sheet: Decodable {
+                struct Properties: Decodable {
+                    struct Grid: Decodable { let frozenRowCount: Int?; let columnCount: Int? }
+                    let sheetId: Int
+                    let title: String
+                    let gridProperties: Grid?
+                }
+                struct Format: Decodable {
+                    struct Rule: Decodable {
+                        struct Condition: Decodable {
+                            struct Value: Decodable { let userEnteredValue: String? }
+                            let values: [Value]?
+                        }
+                        let condition: Condition?
+                    }
+                    let booleanRule: Rule?
+                }
+                let properties: Properties
+                let conditionalFormats: [Format]?
+            }
+            let sheets: [Sheet]?
+        }
+        let data = try await send(url: url, method: "GET", body: Optional<String>.none)
+        let decoded = try JSONDecoder().decode(Spreadsheet.self, from: data)
+
+        var tabs: [SheetTidy.Tab] = []
+        for sheet in decoded.sheets ?? [] where SheetTidy.knownTabs.contains(sheet.properties.title) {
+            let header = (try? await read(sheetId: sheetId,
+                                          range: "\(sheet.properties.title)!1:1"))?.first ?? []
+            let formulas = (sheet.conditionalFormats ?? []).flatMap {
+                ($0.booleanRule?.condition?.values ?? []).compactMap(\.userEnteredValue)
+            }
+            tabs.append(SheetTidy.Tab(
+                gid: sheet.properties.sheetId,
+                title: sheet.properties.title,
+                header: header,
+                columnCount: sheet.properties.gridProperties?.columnCount ?? header.count,
+                frozenRows: sheet.properties.gridProperties?.frozenRowCount ?? 0,
+                existingFormulas: Set(formulas)))
+        }
+        return tabs
+    }
+
+    /// Formatting-only batchUpdate. The requests are built by SheetTidy as
+    /// JSON objects, since they are a mix of shapes Codable would need a
+    /// type apiece for.
+    func formatUpdate(sheetId: String, requests: [[String: Any]]) async throws {
+        guard !requests.isEmpty else { return }
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("tidy") }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId):batchUpdate"
+        guard let url = comps.url else { throw SheetsError.badRange("tidy") }
+        let body = try JSONSerialization.data(withJSONObject: ["requests": requests])
+        _ = try await send(url: url, method: "POST", rawBody: body)
+    }
+
     /// Several ranges in one request.
     ///
     /// Pushing a 콘티 rewrites one row per song, and doing that as separate
@@ -490,6 +559,11 @@ actor SheetsClient {
     // MARK: - Transport
 
     private func send<B: Encodable>(url: URL, method: String, body: B?) async throws -> Data {
+        try await send(url: url, method: method,
+                       rawBody: body.flatMap { try? JSONEncoder().encode($0) })
+    }
+
+    private func send(url: URL, method: String, rawBody: Data?) async throws -> Data {
         let token: String
         do { token = try await tokenProvider() }
         catch { throw SheetsError.notSignedIn }
@@ -498,9 +572,9 @@ actor SheetsClient {
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body {
+        if let rawBody {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONEncoder().encode(body)
+            req.httpBody = rawBody
         }
 
         let data: Data

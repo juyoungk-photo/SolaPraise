@@ -842,6 +842,31 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Formats the team sheet for reading — see SheetTidy. Touches no data.
+    /// Returns a sentence for the person who pressed it.
+    func tidySheet(sheetId: String) async -> String {
+        #if DEBUG
+        if isSample { return "샘플 모드에서는 시트를 바꾸지 않습니다." }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        do {
+            let tabs = try await client.tidyTabs(sheetId: sheetId)
+            guard !tabs.isEmpty else { return "정리할 탭을 찾지 못했습니다." }
+            let requests = SheetTidy.requests(for: tabs)
+            try await client.formatUpdate(sheetId: sheetId, requests: requests)
+            let added = requests.filter { $0["addConditionalFormatRule"] != nil }.count
+            let names = tabs.map(\.title).joined(separator: ", ")
+            return added == 0
+                ? "\(names) 탭의 머리글을 다시 맞췄습니다. 색 규칙은 이미 있습니다."
+                : "\(names) 탭을 정리했습니다. 색 규칙 \(added)개를 더했습니다."
+        } catch {
+            if case SheetsClient.SheetsError.http(403, _) = error {
+                return "이 계정은 시트를 볼 수만 있습니다. 편집 권한이 있는 계정으로 정리하세요."
+            }
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     /// Creates the Attachments tab the first time one is needed.
     ///
     /// Reading a tab that does not exist throws, which is how this knows.

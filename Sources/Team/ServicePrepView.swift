@@ -133,6 +133,9 @@ struct ServicePrepView: View {
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
+    @State private var confirmTidy = false
+    @State private var tidying = false
+    @State private var tidyNote: String?
     @State private var repairing = false
     @State private var reordering: TeamService?
 
@@ -539,8 +542,36 @@ struct ServicePrepView: View {
                         Label("교회 정보 시트 열기", systemImage: "building.columns")
                     }
                 }
+                // Asked, not done: it changes how a shared document looks
+                // for everyone, so the person pressing it should know.
+                if sheetId != nil, !team.isReadOnly {
+                    Button { confirmTidy = true } label: {
+                        Label(tidying ? "정리하는 중…" : "시트 보기 좋게 정리",
+                              systemImage: "paintbrush")
+                    }
+                    .disabled(tidying)
+                }
             } footer: {
                 Text("시트에서 바꾼 내용은 이 화면을 아래로 당겨 새로 고치면 반영됩니다.")
+            }
+            .confirmationDialog("팀 시트를 정리할까요?", isPresented: $confirmTidy,
+                                titleVisibility: .visible) {
+                Button("정리하기") {
+                    guard let sheetId else { return }
+                    Task {
+                        tidying = true
+                        tidyNote = await team.tidySheet(sheetId: sheetId)
+                        tidying = false
+                    }
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("모양만 바꿉니다. 탭마다 머리글 고정·굵게, 이번 주 줄 강조, 지난 날짜 흐리게, 응답(가능·미정·어려움·자리비움)에 색을 입힙니다. 내용은 하나도 바뀌거나 지워지지 않고, 여러 번 눌러도 규칙이 겹쳐 쌓이지 않습니다.")
+            }
+            .alert("시트 정리", isPresented: .constant(tidyNote != nil)) {
+                Button("확인") { tidyNote = nil }
+            } message: {
+                Text(tidyNote ?? "")
             }
         }
     }

@@ -24,9 +24,17 @@
 //  account. Several people uploading simply means files in several Drives,
 //  all linked from one 콘티.
 //
-//  A Shared Drive is not required. If the team would rather everything sat
-//  in one place, the files can be moved there afterwards by hand — a Drive
-//  link survives the move.
+//  WHERE THE FILES GO: into one folder, 「SolaPraise 악보」, which the app
+//  creates the first time. Moving that folder into the church's Shared
+//  drive, once and by hand, moves the archive there — and because the app
+//  created the folder, drive.file still covers it after the move, so every
+//  later upload lands in the Shared drive too. A file in a Shared drive
+//  belongs to the church rather than to whoever uploaded it, which is the
+//  point of archiving there. A Drive link survives the move.
+//
+//  The app cannot do the move itself, nor be pointed at an existing Shared
+//  drive folder: drive.file only reaches what the app made or what the user
+//  picked in Google's picker, and the picker has no native iOS form.
 //
 
 import Foundation
@@ -56,6 +64,17 @@ actor DriveClient {
     private let tokenProvider: () async throws -> String
     private let session = URLSession(configuration: .default)
 
+    /// Where the folder's id is kept on this device.
+    static let folderKey = "drive.scoreFolderId"
+    static let folderName = "SolaPraise 악보"
+    private var folderId: String?
+
+    /// The folder in Drive's web UI, for Settings to link to.
+    static var folderURL: URL? {
+        UserDefaults.standard.string(forKey: folderKey)
+            .flatMap { URL(string: "https://drive.google.com/drive/folders/\($0)") }
+    }
+
     init(tokenProvider: @escaping () async throws -> String) {
         self.tokenProvider = tokenProvider
     }
@@ -71,8 +90,13 @@ actor DriveClient {
         let boundary = "solapraise-\(UUID().uuidString)"
         var body = Data()
 
-        struct Metadata: Encodable { let name: String }
-        let metadata = try JSONEncoder().encode(Metadata(name: name))
+        // Into the 악보 folder when it can be had. A folder that cannot be
+        // created is not a reason to refuse the upload: the file goes to
+        // the Drive root, as it always used to.
+        let parent = try? await scoreFolder()
+        struct Metadata: Encodable { let name: String; let parents: [String]? }
+        let metadata = try JSONEncoder().encode(
+            Metadata(name: name, parents: parent.map { [$0] }))
 
         func append(_ text: String) { body.append(Data(text.utf8)) }
         append("--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n")
@@ -109,6 +133,53 @@ actor DriveClient {
         let link = created.webViewLink.flatMap(URL.init(string:))
             ?? URL(string: "https://drive.google.com/file/d/\(created.id)/view")!
         return Uploaded(fileId: created.id, link: link)
+    }
+
+    // MARK: - Folder
+
+    /// The 악보 folder's id, created the first time it is needed.
+    ///
+    /// Checked before reuse rather than trusted: a folder somebody trashed,
+    /// or one another account made, would otherwise swallow every upload
+    /// with a 404 that reads like the file being the problem.
+    func scoreFolder() async throws -> String {
+        if let cached = folderId ?? UserDefaults.standard.string(forKey: Self.folderKey),
+           await isUsableFolder(cached) {
+            folderId = cached
+            return cached
+        }
+        struct NewFolder: Encodable {
+            let name: String
+            let mimeType = "application/vnd.google-apps.folder"
+        }
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        components.queryItems = [
+            .init(name: "fields", value: "id"),
+            .init(name: "supportsAllDrives", value: "true")
+        ]
+        struct Created: Decodable { let id: String }
+        let created: Created = try await send(
+            url: components.url!, method: "POST",
+            body: try JSONEncoder().encode(NewFolder(name: Self.folderName)),
+            contentType: "application/json")
+        folderId = created.id
+        UserDefaults.standard.set(created.id, forKey: Self.folderKey)
+        return created.id
+    }
+
+    private func isUsableFolder(_ id: String) async -> Bool {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(id)")!
+        components.queryItems = [
+            .init(name: "fields", value: "id,trashed"),
+            .init(name: "supportsAllDrives", value: "true")
+        ]
+        guard let token = try? await tokenProvider() else { return false }
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        struct State: Decodable { let trashed: Bool? }
+        return (try? JSONDecoder().decode(State.self, from: data))?.trashed != true
     }
 
     private func shareByLink(fileId: String) async throws {

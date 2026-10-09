@@ -292,6 +292,17 @@ struct SettingsView: View {
                 }
             }
 
+            // Appears once the first 악보 has been uploaded from this device,
+            // which is when the folder exists.
+            if let folder = DriveClient.folderURL {
+                Link(destination: folder) {
+                    Label("드라이브의 「\(DriveClient.folderName)」 폴더", systemImage: "folder")
+                }
+                Text("이 폴더를 교회 공유 드라이브로 한 번 옮겨 두면, 앞으로 올리는 악보도 그곳에 저장되어 교회 자료로 남습니다. 옮겨도 이미 올린 링크는 그대로 열립니다.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             // The tab's absence used to be unexplained, and the thing that
             // explains it lives behind the tab.
             if TeamSheetSource.current == nil {
