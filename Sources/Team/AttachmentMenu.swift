@@ -65,18 +65,36 @@ struct AttachmentMenu<Content: View>: View {
             }
 
             Section {
-                // PhotosPicker cannot live inside a Menu, so the menu sets a
-                // flag and the picker is attached to the label below.
-                Button { showPhotos = true } label: {
-                    Label("사진에서 추가", systemImage: "photo")
-                }
-                Button { showFiles = true } label: {
-                    Label("파일에서 추가", systemImage: "folder")
+                if team.canAttach {
+                    // PhotosPicker cannot live inside a Menu, so the menu
+                    // sets a flag and the picker is attached to the label.
+                    Button { showPhotos = true } label: {
+                        Label("사진에서 추가", systemImage: "photo")
+                    }
+                    Button { showFiles = true } label: {
+                        Label("파일에서 추가", systemImage: "folder")
+                    }
+                } else {
+                    // Not a failure to hide. Google refuses youtube and
+                    // drive.file in one grant, so uploading needs the sheet
+                    // account connected — the same one a team using a
+                    // church account for the sheet already connects.
+                    Button {
+                        Task {
+                            await planning.signIn()
+                            team.configure(auth: auth, planning: planning)
+                        }
+                    } label: {
+                        Label("첨부하려면 시트 계정 연결", systemImage: "person.badge.key")
+                    }
                 }
             }
         } label: {
             label
         }
+        // Never disabled outright: opening an attachment needs no account
+        // at all, so a member without the second grant must still be able
+        // to tap through to what the team has put up.
         .disabled(isUploading || sheetId == nil)
         .photosPicker(isPresented: $showPhotos, selection: $photo,
                       matching: .any(of: [.images]))

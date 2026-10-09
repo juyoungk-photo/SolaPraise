@@ -351,14 +351,15 @@ final class TeamStore: ObservableObject {
                 ? try await planning.token()
                 : try await auth.accessToken()
         }
-        // Drive follows the same account as the sheet. Attachments and the
-        // rows that index them belong together, and a file uploaded by one
-        // account but indexed by another is a link nobody can trace back.
-        drive = DriveClient {
-            wantsPlanning
-                ? try await planning.token()
-                : try await auth.accessToken()
-        }
+        // Drive ONLY through the planning grant.
+        //
+        // Google refuses youtube and drive.file in one authorization
+        // request, so the main sign-in cannot carry Drive at all. This
+        // grant has no YouTube scope and can. `canAttach` is what the UI
+        // asks before offering to upload.
+        drive = planning.isSignedIn
+            ? DriveClient { try await planning.token() }
+            : nil
     }
 
     /// The address writes will be attributed to.
@@ -762,6 +763,13 @@ final class TeamStore: ObservableObject {
         }
         attachments = out
     }
+
+    /// Whether this device can upload an attachment.
+    ///
+    /// Reading one never needs this — every file is shared by link — so a
+    /// member without the second grant still opens everything the team has
+    /// attached. Only putting a new file up requires it.
+    var canAttach: Bool { drive != nil }
 
     func attachments(for service: TeamService) -> [Attachment] {
         attachments[Calendar.current.startOfDay(for: service.date)] ?? []

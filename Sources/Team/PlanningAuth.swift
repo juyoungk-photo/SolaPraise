@@ -31,8 +31,18 @@ final class PlanningAuth: NSObject, ObservableObject {
     @Published private(set) var isSignedIn = false
     @Published var lastError: String?
 
+    /// This grant carries NO YouTube scope, and that is why Drive lives
+    /// here.
+    ///
+    /// Google refuses youtube and drive.file in the same authorization
+    /// request — "This request contains scopes that cannot be requested
+    /// together" — and it fails the whole sign-in, not just the feature.
+    /// Two grants, two tokens, no conflict. It costs a second sign-in for
+    /// anyone who wants to attach 악보, which is the same sign-in a team
+    /// using a church account for the sheet already does.
     static let scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file",
         "openid", "email"
     ]
 
