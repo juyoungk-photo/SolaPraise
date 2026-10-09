@@ -424,7 +424,9 @@ final class YouTubeAPIClient {
     /// costs 1. Either way it happens once, when the channel is added.
     func channel(for ref: YouTubeID.ChannelRef) async throws -> YTChannel? {
         var query: [URLQueryItem] = [
-            .init(name: "part", value: "snippet,contentDetails")
+            // statistics and brandingSettings for the channel page. Still
+            // one unit: channels.list is priced per call, not per part.
+            .init(name: "part", value: "snippet,contentDetails,statistics,brandingSettings")
         ]
         switch ref {
         case .channelId(let id):  query.append(.init(name: "id", value: id))

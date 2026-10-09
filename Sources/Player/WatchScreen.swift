@@ -94,6 +94,12 @@ struct WatchScreen: View {
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var leadSheet: SavedSong?
+    /// A channel whose page is open, from tapping its name.
+    @State private var channelPage: ChannelRef?
+    /// A search a suggestion chip asked for.
+    @State private var searching: SearchRequest?
+    /// Descriptions fetched for videos that were not in the cache, by id.
+    @State private var fetchedDescription: [String: String] = [:]
     /// A whole set handed to the music stand, identified so fullScreenCover
     /// can key off it.
     private struct PerformanceSet: Identifiable {
@@ -178,6 +184,24 @@ struct WatchScreen: View {
             #endif
         }
         .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
+        // Sheets with their own NavigationStack: the player is an overlay on
+        // the stage, not inside any tab's navigation, so a NavigationLink
+        // from here would have nowhere to push.
+        .sheet(item: $channelPage) { ref in
+            NavigationStack {
+                ChannelPageView(channelId: ref.id, fallbackTitle: ref.title)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("닫기") { channelPage = nil }
+                        }
+                    }
+            }
+        }
+        // The same two-tier search the 찬양 tab uses: your channels first,
+        // free and instant, then all of YouTube on a deliberate tap.
+        .sheet(item: $searching) { request in
+            HomeSearchSheet(initialQuery: request.query)
+        }
         .sheet(item: $leadSheet) { song in
             NavigationStack { LeadSheetView(song: song) }
         }
@@ -362,7 +386,25 @@ struct WatchScreen: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         if let channel = current.channelTitle {
-                            Text(channel).font(.subheadline)
+                            // The way to "what else have they done". Hearing a
+                            // version you like is how you find a team you did
+                            // not know, and the answer used to mean leaving
+                            // for the YouTube app and the song behind.
+                            if let channelId = current.channelId {
+                                Button {
+                                    channelPage = ChannelRef(id: channelId, title: channel)
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Text(channel).font(.subheadline)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 9, weight: .semibold))
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.tint)
+                            } else {
+                                Text(channel).font(.subheadline)
+                            }
                         }
                         metaLine(current)
                     }
@@ -371,6 +413,8 @@ struct WatchScreen: View {
             }
 
             actionRow
+
+            if showsChordButton { searchSuggestionRow }
 
             // Unfolds directly under the player the moment 코드 is pressed.
             //
@@ -408,6 +452,68 @@ struct WatchScreen: View {
         guard let channel = channels.first(where: { $0.youtubeChannelId == channelId })
         else { return true }
         return channel.purpose == .worship
+    }
+
+    // MARK: - Where this song leads
+
+    /// 다른 버전 · 찬송가 · 중심 가사 · 첫소절 · 말씀 — see SongSearchSuggestions.
+    ///
+    /// Only on 찬양: a sermon or a reading has no "other version" to find,
+    /// and the same rule already keeps 코드 off them.
+    @ViewBuilder
+    private var searchSuggestionRow: some View {
+        if let current {
+            let suggestions = SongSearchSuggestions.make(
+                title: current.title, description: descriptionForSuggestions)
+            if !suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(suggestions) { suggestion in
+                            Button {
+                                searching = SearchRequest(query: suggestion.query)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(suggestion.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(suggestion.label)
+                                        .lineLimit(1)
+                                }
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Color(.secondarySystemBackground)))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .task(id: current.id) { await loadDescriptionIfNeeded() }
+            }
+        }
+    }
+
+    /// The description, from the cache when the video is cached, otherwise
+    /// fetched once. One unit, and only for 찬양 being played — the lyrics
+    /// in it are what 중심 가사 and 첫소절 are read from.
+    private var descriptionForSuggestions: String? {
+        guard let current else { return nil }
+        if let fetched = fetchedDescription[current.id] { return fetched }
+        let id = current.id
+        return (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.videoId == id }
+        )).first)?.descriptionText
+    }
+
+    private func loadDescriptionIfNeeded() async {
+        guard let current, descriptionForSuggestions == nil,
+              fetchedDescription[current.id] == nil else { return }
+        let client = AppServices.client(auth: auth, quota: quota)
+        guard let video = try? await client.videos(ids: [current.id]).first else { return }
+        fetchedDescription[current.id] = video.snippet?.description ?? ""
     }
 
     /// The facts that separate one upload of a worship song from another.
@@ -1119,4 +1225,17 @@ struct WatchScreen: View {
         )
         try? modelContext.save()
     }
+}
+
+
+// MARK: - Small identifiable wrappers for the sheets above
+
+struct ChannelRef: Identifiable {
+    let id: String
+    let title: String
+}
+
+struct SearchRequest: Identifiable {
+    let query: String
+    var id: String { query }
 }

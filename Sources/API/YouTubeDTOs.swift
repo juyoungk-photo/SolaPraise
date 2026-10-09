@@ -185,6 +185,36 @@ struct YTChannel: Decodable, Identifiable {
     let id: String
     let snippet: Snippet?
     let contentDetails: ContentDetails?
+    /// For the channel page: how big the channel is, and its banner. Both
+    /// come back from the same channels.list call — extra parts cost no
+    /// extra quota.
+    let statistics: Statistics?
+    let brandingSettings: Branding?
+
+    struct Statistics: Decodable {
+        let subscriberCount: String?
+        let videoCount: String?
+        /// A channel can hide its count, in which case the number above is
+        /// absent and showing "0" would be a lie.
+        let hiddenSubscriberCount: Bool?
+    }
+    struct Branding: Decodable {
+        struct Image: Decodable { let bannerExternalUrl: String? }
+        let image: Image?
+    }
+
+    var subscribers: Int? {
+        guard statistics?.hiddenSubscriberCount != true else { return nil }
+        return statistics?.subscriberCount.flatMap(Int.init)
+    }
+    var videoCount: Int? { statistics?.videoCount.flatMap(Int.init) }
+    /// The banner, sized for a phone's width. The raw URL is the full
+    /// 2560-wide master; YouTube serves a cropped, smaller one with the
+    /// =w parameter.
+    var bannerURL: URL? {
+        brandingSettings?.image?.bannerExternalUrl
+            .flatMap { URL(string: $0 + "=w1280-fcrop64=1,00005a57ffffa5a8-k-c0xffffffff-no-nd-rj") }
+    }
 
     struct Snippet: Decodable {
         let title: String?
