@@ -136,6 +136,7 @@ struct ServicePrepView: View {
     @State private var assigning: AssignmentTarget?
     /// The service whose 찬양 are being filled from a playlist.
     @State private var fillingFrom: TeamService?
+    @State private var buildingPDF = false
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -642,7 +643,7 @@ struct ServicePrepView: View {
                     SwipeToRemoveRow {
                         Task { await removeItem(item, from: service) }
                     } content: {
-                        planRow(item, startsAt: times[item.id])
+                        planRow(item, startsAt: times[item.id], in: service)
                     }
                 }
 
@@ -704,6 +705,8 @@ struct ServicePrepView: View {
             }
             .disabled(team.isReadOnly)
 
+            servicePDFRow(service)
+
             // A sheet rather than a menu. The menu could only list the
             // playlists pinned in the 찬양 tab — two, on most devices — and
             // the one a leader wants is usually the one they just built and
@@ -752,7 +755,8 @@ struct ServicePrepView: View {
         return f
     }()
 
-    private func planRow(_ item: PlanItem, startsAt: Date?) -> some View {
+    private func planRow(_ item: PlanItem, startsAt: Date?,
+                         in service: TeamService) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .trailing, spacing: 2) {
                 if let startsAt {
@@ -826,6 +830,28 @@ struct ServicePrepView: View {
                 .buttonStyle(.plain)
             }
 
+            // Songs only. 악보 belong to a song; a 대표기도 or a 광고 line
+            // has nothing to attach, and a clip on every row turned the
+            // 순서 into a column of identical icons.
+            if item.kind == .song {
+            AttachmentMenu(service: service, song: item.title, sheetId: sheetId) {
+                let count = team.attachments(for: service, song: item.title).count
+                HStack(spacing: 2) {
+                    Image(systemName: count > 0 ? "paperclip.circle.fill" : "paperclip")
+                    if count > 1 {
+                        Text("\(count)").font(.caption2.monospacedDigit())
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(count > 0 ? Color.accentColor : .secondary)
+                .frame(minWidth: 30, minHeight: 40)
+                .contentShape(Rectangle())
+            }
+            .environmentObject(team)
+            .environmentObject(auth)
+            .environmentObject(planning)
+            }
+
             if let id = item.videoId {
                 Button {
                     host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
@@ -837,6 +863,101 @@ struct ServicePrepView: View {
             }
         }
         .padding(.vertical, 3)
+    }
+
+    /// One document for the Sunday: the 순서, then every 악보 behind it.
+    ///
+    /// On a music stand you want one thing to swipe through, not eleven
+    /// links. Rebuilt rather than cached, because the attachments change
+    /// right up to Saturday night and a stale PDF is worse than none — the
+    /// whole point is that whoever opens it has the current one.
+    @ViewBuilder
+    private func servicePDFRow(_ service: TeamService) -> some View {
+        let built = team.attachments(for: service).first(where: \.belongsToService)
+        let pieces = team.attachments(for: service).filter { !$0.belongsToService }
+
+        // Shown as soon as the service has songs, not only once something
+        // has been attached. Gating it on attachments made the one line
+        // that explains the feature unreachable until you had already
+        // worked the feature out.
+        if team.plan(for: service).contains(where: { $0.kind == .song }) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await buildServicePDF(service) }
+                    } label: {
+                        Label(built == nil ? "콘티 PDF 만들기" : "콘티 PDF 다시 만들기",
+                              systemImage: "doc.badge.arrow.up")
+                    }
+                    .disabled(buildingPDF || pieces.isEmpty)
+
+                    if buildingPDF { ProgressView().controlSize(.small) }
+                }
+
+                if let built {
+                    Button { openURL(built.url) } label: {
+                        Label("콘티 PDF 열기", systemImage: "doc.richtext")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+
+                Text(pieces.isEmpty
+                     ? "곡에 악보를 첨부하면 한 파일로 묶을 수 있습니다."
+                     : "악보 \(pieces.count)개를 순서대로 묶습니다. 팀원은 링크로 바로 봅니다.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func buildServicePDF(_ service: TeamService) async {
+        guard let sheetId else { return }
+        buildingPDF = true
+        pushNote = nil
+        defer { buildingPDF = false }
+
+        let plan = team.plan(for: service)
+        let order = plan.enumerated().reduce(into: [String: Int]()) { out, pair in
+            out[pair.element.title] = pair.offset
+        }
+        // Behind the 순서 they are played in, not the order they happened to
+        // be uploaded — the document is for reading top to bottom.
+        let pieces = team.attachments(for: service)
+            .filter { !$0.belongsToService }
+            .sorted { (order[$0.song] ?? .max) < (order[$1.song] ?? .max) }
+
+        var sources: [ServicePDF.Source] = []
+        for item in pieces {
+            guard let data = try? Data(contentsOf: item.url.directDownload) else { continue }
+            sources.append(.init(name: item.name, song: item.song, data: data))
+        }
+        guard !sources.isEmpty else {
+            pushNote = "첨부 파일을 불러오지 못했습니다."
+            return
+        }
+
+        guard let pdf = ServicePDF.build(
+            service: service, plan: plan,
+            note: team.churchNote(for: service), sources: sources
+        ) else {
+            pushNote = "PDF를 만들지 못했습니다."
+            return
+        }
+
+        let day = TeamSheet.dateFormatter.string(from: service.date)
+        let who = team.actingEmail(auth: auth, planning: planning) ?? ""
+
+        // Replace rather than accumulate: a service has one current 콘티 PDF
+        // and a list of five dated ones is a list nobody reads.
+        if let old = team.attachments(for: service).first(where: \.belongsToService) {
+            _ = await team.removeAttachment(old, sheetId: sheetId)
+        }
+        if let failure = await team.attach(
+            data: pdf, name: "\(day)-콘티.pdf", mimeType: "application/pdf",
+            song: "", to: service, sheetId: sheetId, by: who
+        ) {
+            pushNote = failure
+        }
     }
 
     private func removeItem(_ item: PlanItem, from service: TeamService) async {

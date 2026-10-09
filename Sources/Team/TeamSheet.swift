@@ -372,6 +372,35 @@ actor SheetsClient {
         _ = try await send(url: comps.url!, method: "PUT", body: Body(values: [row]))
     }
 
+    /// Adds a tab.
+    ///
+    /// A new TAB is safe where a new COLUMN is not: a column insert shifts
+    /// everything to its right in a document the whole team edits by hand,
+    /// while a tab cannot disturb anything that already exists. This is why
+    /// attachments get their own tab rather than a column on Songs.
+    ///
+    /// batchUpdate, not the values API — creating a sheet is structure, not
+    /// content.
+    func addSheet(sheetId: String, title: String) async throws {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange(title) }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId):batchUpdate"
+        guard let url = comps.url else { throw SheetsError.badRange(title) }
+
+        struct Request: Encodable {
+            struct AddSheet: Encodable {
+                struct Properties: Encodable { let title: String }
+                let properties: Properties
+            }
+            struct Item: Encodable { let addSheet: AddSheet }
+            let requests: [Item]
+        }
+        let body = Request(requests: [
+            .init(addSheet: .init(properties: .init(title: title)))
+        ])
+        _ = try await send(url: url, method: "POST", body: body)
+    }
+
     /// Several ranges in one request.
     ///
     /// Pushing a 콘티 rewrites one row per song, and doing that as separate

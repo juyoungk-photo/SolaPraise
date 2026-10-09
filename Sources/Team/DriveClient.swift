@@ -176,3 +176,31 @@ actor DriveClient {
         return (try? JSONDecoder().decode(Envelope.self, from: data))?.error?.message
     }
 }
+
+// MARK: - Reading a file back
+
+extension URL {
+    /// The bytes behind a Drive link.
+    ///
+    /// A webViewLink points at Drive's viewer PAGE — fetching it returns
+    /// HTML, so building a combined PDF from those links produced a document
+    /// of error pages. The uc?export=download form returns the file itself,
+    /// and works without a token because every attachment is shared by link.
+    var directDownload: URL {
+        guard host?.contains("drive.google.com") == true,
+              let id = Self.driveFileId(in: absoluteString),
+              let direct = URL(string: "https://drive.google.com/uc?export=download&id=\(id)")
+        else { return self }
+        return direct
+    }
+
+    private static func driveFileId(in text: String) -> String? {
+        if let range = text.range(of: "/d/([A-Za-z0-9_-]+)", options: .regularExpression) {
+            return String(text[range].dropFirst(3))
+        }
+        if let range = text.range(of: "[?&]id=([A-Za-z0-9_-]+)", options: .regularExpression) {
+            return String(text[range].drop(while: { $0 != "=" }).dropFirst())
+        }
+        return nil
+    }
+}

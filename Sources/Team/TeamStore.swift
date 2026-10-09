@@ -29,6 +29,25 @@ struct TeamRole: Identifiable, Hashable {
     var isCore: Bool { PartAliases.isCore(name) }
 }
 
+/// A file attached to a service, or to one song in it.
+///
+/// The bytes live in Drive; this is the index row on the sheet that points
+/// at them. `song` empty means the file belongs to the whole service — the
+/// combined 콘티 PDF is filed that way.
+struct Attachment: Identifiable, Hashable {
+    let date: Date
+    let song: String
+    let name: String
+    let fileId: String
+    let url: URL
+    let addedBy: String
+    /// 1-based row on the Attachments tab, so it can be cleared.
+    var row: Int?
+
+    var id: String { fileId }
+    var belongsToService: Bool { song.trimmingCharacters(in: .whitespaces).isEmpty }
+}
+
 struct TeamSong: Identifiable, Hashable {
     let order: Int
     let title: String
@@ -258,6 +277,11 @@ final class TeamStore: ObservableObject {
     @Published var needsAuthorization = false
 
     private var client: SheetsClient?
+    private var drive: DriveClient?
+
+    /// Attachments by service day. Empty for a sheet with no Attachments
+    /// tab, which is every sheet until someone attaches something.
+    @Published private(set) var attachments: [Date: [Attachment]] = [:]
 
     /// Which account reaches the sheet.
     ///
@@ -323,6 +347,14 @@ final class TeamStore: ObservableObject {
         guard client == nil || wantsPlanning != usingPlanningAccount else { return }
         usingPlanningAccount = wantsPlanning
         client = SheetsClient {
+            wantsPlanning
+                ? try await planning.token()
+                : try await auth.accessToken()
+        }
+        // Drive follows the same account as the sheet. Attachments and the
+        // rows that index them belong together, and a file uploaded by one
+        // account but indexed by another is a link nobody can trace back.
+        drive = DriveClient {
             wantsPlanning
                 ? try await planning.token()
                 : try await auth.accessToken()
@@ -432,6 +464,7 @@ final class TeamStore: ObservableObject {
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             await loadChurchNotes(client: client)
+            await loadAttachments(sheetId: sheetId, client: client)
             lastLoaded = Date()
             needsAuthorization = false
         } catch SheetsClient.SheetsError.http(403, let message) {
@@ -689,6 +722,149 @@ final class TeamStore: ObservableObject {
             errorMessage = "이 시트에 편집 권한이 없어 사인업을 저장하지 못했습니다. 시트 주인에게 이 계정을 편집자로 추가해 달라고 요청하세요."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // MARK: - Attachments
+
+    /// The Attachments tab, if the sheet has one.
+    ///
+    /// Optional like Plan: a team that has never attached anything has no
+    /// such tab, and that is not an error. The tab is created on the first
+    /// upload rather than demanded up front.
+    private func loadAttachments(sheetId: String, client: SheetsClient) async {
+        guard let rows = try? await client.read(
+            sheetId: sheetId, range: TeamSheet.attachmentsTab
+        ), rows.count > 1 else { attachments = [:]; return }
+
+        let header = rows[0]
+        let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? TeamSheet.Attachments.date
+        let songCol = TeamSheet.column(header, ["song", "곡", "찬양"]) ?? TeamSheet.Attachments.song
+        let nameCol = TeamSheet.column(header, ["name", "이름", "파일"]) ?? TeamSheet.Attachments.name
+        let idCol = TeamSheet.column(header, ["fileid", "파일id"]) ?? TeamSheet.Attachments.fileId
+        let urlCol = TeamSheet.column(header, ["url", "link", "링크"]) ?? TeamSheet.Attachments.url
+        let byCol = TeamSheet.column(header, ["addedby", "올린사람", "작성자"])
+
+        var out: [Date: [Attachment]] = [:]
+        for (offset, row) in rows.enumerated() where offset > 0 {
+            func cell(_ i: Int?) -> String {
+                guard let i, row.count > i else { return "" }
+                return row[i].trimmingCharacters(in: .whitespaces)
+            }
+            guard let date = TeamSheet.day(cell(dateCol)) else { continue }
+            let link = cell(urlCol)
+            guard let url = URL(string: link), !cell(idCol).isEmpty else { continue }
+            out[Calendar.current.startOfDay(for: date), default: []].append(
+                Attachment(date: date, song: cell(songCol), name: cell(nameCol),
+                           fileId: cell(idCol), url: url, addedBy: cell(byCol),
+                           row: offset + 1)
+            )
+        }
+        attachments = out
+    }
+
+    func attachments(for service: TeamService) -> [Attachment] {
+        attachments[Calendar.current.startOfDay(for: service.date)] ?? []
+    }
+
+    /// Files attached to one song, matched on the title the 콘티 shows.
+    func attachments(for service: TeamService, song: String) -> [Attachment] {
+        let key = song.trimmingCharacters(in: .whitespaces)
+        return attachments(for: service).filter { $0.song == key }
+    }
+
+    /// Uploads a file and records it against a service, or one of its songs.
+    ///
+    /// Two writes that must both land: the bytes go to Drive and a row goes
+    /// on the sheet. If the row fails the file is removed again, because a
+    /// Drive file nothing points at is litter in somebody's Drive that they
+    /// will never find to delete.
+    func attach(
+        data: Data,
+        name: String,
+        mimeType: String,
+        song: String,
+        to service: TeamService,
+        sheetId: String,
+        by email: String
+    ) async -> String? {
+        guard let client, let drive else { return "구글 계정에 연결되어 있지 않습니다." }
+
+        let uploaded: DriveClient.Uploaded
+        do {
+            uploaded = try await drive.upload(data: data, name: name, mimeType: mimeType)
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+
+        let row = [
+            TeamSheet.dateFormatter.string(from: service.date),
+            song,
+            name,
+            uploaded.fileId,
+            uploaded.link.absoluteString,
+            email,
+            ISO8601DateFormatter().string(from: Date())
+        ]
+
+        do {
+            try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            let written = try await client.append(
+                sheetId: sheetId, tab: TeamSheet.attachmentsTab, row: row
+            )
+            let day = Calendar.current.startOfDay(for: service.date)
+            attachments[day, default: []].append(
+                Attachment(date: service.date, song: song, name: name,
+                           fileId: uploaded.fileId, url: uploaded.link,
+                           addedBy: email, row: written)
+            )
+            errorMessage = nil
+            return nil
+        } catch {
+            // The sheet refused, so take the orphan back out of Drive.
+            try? await drive.delete(fileId: uploaded.fileId)
+            if case SheetsClient.SheetsError.http(403, _) = error { isReadOnly = true }
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Creates the Attachments tab the first time one is needed.
+    ///
+    /// Reading a tab that does not exist throws, which is how this knows.
+    /// Adding a TAB is safe where adding a COLUMN is not: a new tab cannot
+    /// shift anything the team already has.
+    private func ensureAttachmentsTab(sheetId: String, client: SheetsClient) async throws {
+        if let rows = try? await client.read(
+            sheetId: sheetId, range: "\(TeamSheet.attachmentsTab)!1:1"
+        ), !(rows.first ?? []).isEmpty {
+            return
+        }
+        try await client.addSheet(sheetId: sheetId, title: TeamSheet.attachmentsTab)
+        _ = try await client.append(
+            sheetId: sheetId, tab: TeamSheet.attachmentsTab,
+            row: TeamSheet.Attachments.header
+        )
+    }
+
+    /// Removes an attachment from the sheet and from Drive.
+    func removeAttachment(_ item: Attachment, sheetId: String) async -> String? {
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let row = item.row, row >= 2 else { return "줄 번호를 알 수 없습니다." }
+        do {
+            try await client.write(
+                sheetId: sheetId,
+                range: "\(TeamSheet.attachmentsTab)!A\(row):\(TeamSheet.columnLetter(TeamSheet.Attachments.width - 1))\(row)",
+                row: [String](repeating: "", count: TeamSheet.Attachments.width)
+            )
+            // Best effort: the file may belong to another member's Drive,
+            // where this account cannot touch it. The index row is what the
+            // app reads, so clearing that is what actually removes it.
+            try? await drive?.delete(fileId: item.fileId)
+            let day = Calendar.current.startOfDay(for: item.date)
+            attachments[day]?.removeAll { $0.fileId == item.fileId }
+            return nil
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
