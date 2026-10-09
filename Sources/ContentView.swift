@@ -128,12 +128,29 @@ struct ContentView: View {
         // Beneath the player on purpose: the expanded player covers the
         // whole stage, bar included, and the docked one ends exactly where
         // this bar begins.
+        .overlay { PlayerStage(host: playerHost) }
+        // The bar sits ABOVE the player on iPad, and under it on iPhone.
+        //
+        // A phone playing a video has nothing else to offer, so the expanded
+        // player taking the whole screen is right there. An iPad does: the
+        // player is a window on a large screen, and burying the only way out
+        // of it meant a 재생목록 that filled everything with no visible way
+        // back to 예배 준비. Keeping the bar reachable also makes switching
+        // tabs mean something — see onChange below, where it docks.
         .overlay(alignment: .bottom) {
             if AppLayout.usesCustomTabBar {
                 BottomTabBar(selection: $selection, items: tabItems)
             }
         }
-        .overlay { PlayerStage(host: playerHost) }
+        // Leaving for another tab docks the player rather than closing it.
+        //
+        // The song keeps playing and the bar keeps it one tap away, which is
+        // what pressing a different tab while something is playing means:
+        // "show me that", not "stop this".
+        .onChange(of: selection) { _, _ in
+            guard AppLayout.usesCustomTabBar, playerHost.mode == .full else { return }
+            withAnimation(WatchScreen.stageAnimation) { playerHost.minimize() }
+        }
         // 음원 찾기 can be opened from four places, none of them 작업실. When
         // it hands over a file, this is what takes you to where it is
         // analysed — on iPhone 작업실 lives inside 보관함, so that is the tab.
