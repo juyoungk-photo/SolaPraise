@@ -178,11 +178,15 @@ final class PlanningAuth: NSObject, ObservableObject {
             .init(name: "grant_type", value: "refresh_token")
         ]
         guard let response: TokenResponse = await post(body) else {
-            // A refresh token is revoked by the user or expires after the
-            // app sits in Testing for a week. Either way it is gone, and
-            // pretending otherwise just fails on every later call.
-            signOut()
-            throw SheetsClient.SheetsError.notSignedIn
+            // Signed out only when Google says the grant is gone — revoked,
+            // or a Testing-mode token past its week. A timeout or a 503
+            // used to land here too and delete the refresh token, so a
+            // moment offline meant signing in to the church account again.
+            if lastFailure == .revoked {
+                signOut()
+                throw SheetsClient.SheetsError.notSignedIn
+            }
+            throw SheetsClient.SheetsError.transport(URLError(.cannotConnectToHost))
         }
         accessToken = response.access_token
         expiry = Date().addingTimeInterval(TimeInterval(response.expires_in ?? 3000))
@@ -195,7 +199,12 @@ final class PlanningAuth: NSObject, ObservableObject {
         let expires_in: Int?
     }
 
+    /// How the last failed token call failed, so a refresh can tell a
+    /// revoked grant from a bad connection.
+    private var lastFailure: OAuthRefresh.Outcome?
+
     private func post(_ body: URLComponents) async -> TokenResponse? {
+        lastFailure = nil
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded",
@@ -206,11 +215,14 @@ final class PlanningAuth: NSObject, ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode
+                lastFailure = OAuthRefresh.classify(status: status, body: data)
                 lastError = String(data: data, encoding: .utf8)?.prefix(160).description
                 return nil
             }
             return try JSONDecoder().decode(TokenResponse.self, from: data)
         } catch {
+            lastFailure = .transient
             lastError = error.localizedDescription
             return nil
         }

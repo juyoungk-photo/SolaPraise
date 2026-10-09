@@ -496,12 +496,29 @@ final class TeamStore: ObservableObject {
     /// has to keep working when it is missing, renamed, unshared or simply
     /// not configured — a 403 here is not the team's problem to see.
     private func loadChurchNotes(client: SheetsClient) async {
+        churchSheetProblem = nil
         guard let id = ChurchSheetSource.current,
               let range = ChurchSheet.encodedRange else { churchNotes = [:]; return }
-        guard let rows = try? await client.readEncoded(sheetId: id, encodedRange: range)
-        else { churchNotes = [:]; return }
-        churchNotes = ChurchSheet.notes(from: rows)
+        do {
+            let rows = try await client.readEncoded(sheetId: id, encodedRange: range)
+            churchNotes = ChurchSheet.notes(from: rows)
+        } catch {
+            churchNotes = [:]
+            // Said, not swallowed. 설교제목 and 헌신찬양 simply vanishing is
+            // indistinguishable from the office not having filled them in,
+            // and the usual cause — reading with an account the church
+            // sheet is not shared with — has a one-tap fix.
+            if case SheetsClient.SheetsError.http(let code, _) = error, code == 403 || code == 404 {
+                churchSheetProblem = "교회 정보 시트를 이 계정으로 열 수 없습니다. 위의 「계정 변경」에서 교회 계정을 연결하세요."
+            } else {
+                churchSheetProblem = "교회 정보 시트를 불러오지 못했습니다."
+            }
+        }
     }
+
+    /// Why the church sheet's 설교제목 and 헌신찬양 are missing, when they
+    /// are missing because of a failure rather than an empty week.
+    @Published private(set) var churchSheetProblem: String?
 
     /// What the church sheet says about a service, if anything.
     func churchNote(for service: TeamService) -> ChurchNote? {

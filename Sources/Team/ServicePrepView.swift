@@ -603,6 +603,11 @@ struct ServicePrepView: View {
                     Button { openURL(url) } label: {
                         Label("교회 정보 시트 열기", systemImage: "building.columns")
                     }
+                    if let problem = team.churchSheetProblem {
+                        Text(problem)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
                 // Asked, not done: it changes how a shared document looks
                 // for everyone, so the person pressing it should know.

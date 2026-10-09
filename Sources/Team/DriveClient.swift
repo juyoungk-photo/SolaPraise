@@ -44,6 +44,7 @@ actor DriveClient {
     enum DriveError: LocalizedError {
         case http(Int, String?)
         case badResponse
+        case linkSharingBlocked
 
         var errorDescription: String? {
             switch self {
@@ -51,6 +52,8 @@ actor DriveClient {
             case .http(403, let m):  return m ?? "드라이브에 올릴 권한이 없습니다."
             case .http(let code, let m): return m ?? "드라이브 오류 (\(code))"
             case .badResponse:       return "드라이브 응답을 읽지 못했습니다."
+            case .linkSharingBlocked:
+                return "이 계정의 드라이브는 '링크가 있는 모든 사용자' 공유를 막고 있어, 팀원이 열 수 없는 파일이 됩니다. 올리지 않았습니다. 교회 Google Workspace 관리자에게 외부 링크 공유 허용을 요청하거나, 개인 계정으로 드라이브 권한을 연결하세요."
             }
         }
     }
@@ -128,7 +131,18 @@ actor DriveClient {
         // anything and without signing in. These are 악보 for a Sunday
         // service, not private documents — and the alternative is granting
         // each member individually and maintaining that list forever.
-        try await shareByLink(fileId: created.id)
+        //
+        // A church Workspace can forbid link sharing outside the domain,
+        // and then this is refused AFTER the file exists. It used to leave
+        // that file behind, unlinked from anything, and report a raw
+        // permission error. Now the file is taken back out and the reason
+        // is said in words the person can take to whoever runs the domain.
+        do {
+            try await shareByLink(fileId: created.id)
+        } catch {
+            try? await delete(fileId: created.id)
+            throw DriveError.linkSharingBlocked
+        }
 
         let link = created.webViewLink.flatMap(URL.init(string:))
             ?? URL(string: "https://drive.google.com/file/d/\(created.id)/view")!

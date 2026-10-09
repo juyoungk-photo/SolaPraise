@@ -29,10 +29,16 @@ struct ContentView: View {
         #endif
         // Shown while the scope is missing too, so the tab is where the fix
         // is rather than vanishing and leaving nowhere to grant it.
+        //
+        // Judged by the account that ACTS on the sheet — the church account
+        // when one is connected — exactly as ServicePrepView judges it. This
+        // used the YouTube sign-in alone, so somebody who connected only a
+        // church account had no 예배 tab at all, while the screen behind it
+        // would have let them in.
         return TeamAccess.evaluate(
             sheetId: TeamSheetSource.current,
-            email: auth.email,
-            displayName: auth.displayName,
+            email: team.actingEmail(auth: auth, planning: planning),
+            displayName: planning.isSignedIn ? planning.email : auth.displayName,
             roster: team.memberEmails
         )
     }
