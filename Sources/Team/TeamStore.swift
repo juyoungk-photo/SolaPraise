@@ -985,6 +985,61 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// Takes one line out of a service's 순서.
+    ///
+    /// Blanked rather than deleted. Deleting a row outright needs the tab's
+    /// numeric id and a batchUpdate, and it would renumber every row below
+    /// it — including rows belonging to other Sundays, since one tab holds
+    /// the whole season. parsePlan and parseSongs both skip a row with no
+    /// readable date, so an empty row is read by nothing.
+    ///
+    /// Writes to whichever tab the item was read from: a sheet with no Plan
+    /// tab shows its Songs as an order of service, and those rows live in
+    /// Songs. Blanking the wrong tab would wipe an unrelated line.
+    func removePlanItem(
+        _ item: PlanItem,
+        from service: TeamService,
+        sheetId: String
+    ) async -> String? {
+        let day = Calendar.current.startOfDay(for: service.date)
+
+        #if DEBUG
+        if isSample {
+            plans[day]?.removeAll { $0.id == item.id }
+            return nil
+        }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let row = item.row, row >= 2 else {
+            return "이 순서가 시트의 몇 번째 줄인지 알 수 없습니다. 새로 고친 뒤 다시 시도해 주세요."
+        }
+
+        let tab = hasPlanTab ? TeamSheet.planTab : TeamSheet.songsTab
+        let header = (try? await client.read(sheetId: sheetId, range: "\(tab)!1:1"))?.first ?? []
+        let width = max(header.count, 7)
+        let last = TeamSheet.columnLetter(width - 1)
+
+        do {
+            isReadOnly = false
+            try await client.write(
+                sheetId: sheetId,
+                range: "\(tab)!A\(row):\(last)\(row)",
+                row: [String](repeating: "", count: width)
+            )
+            plans[day]?.removeAll { $0.id == item.id }
+            if !hasPlanTab {
+                songs[day]?.removeAll { $0.order == item.order && $0.title == item.title }
+            }
+            errorMessage = nil
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 지우지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     // MARK: - Pushing a 콘티 into the sheet
 
     struct PushResult {

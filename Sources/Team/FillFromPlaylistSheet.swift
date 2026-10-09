@@ -129,7 +129,7 @@ struct FillFromPlaylistSheet: View {
                 // Said plainly, because both halves surprise people: it is
                 // made under YOUR account, and it is visible to anyone with
                 // the link rather than to the world's search results.
-                Text("내 계정에 공개(링크 공유) 재생목록으로 만들고, 시트에 기록해 팀 전체의 홈·찬양 탭에 올립니다.")
+                Text("내 계정에 공개(링크 공유) 재생목록으로 만들고, 시트에 기록해 팀 전체의 홈·찬양 탭에 올립니다. 만든 뒤 유튜브나 「콘티에 추가」로 곡을 넣고, 다시 여기서 채우면 됩니다.")
             } else {
                 Text("재생목록을 만들려면 Google 로그인이 필요합니다.")
             }
@@ -172,7 +172,14 @@ struct FillFromPlaylistSheet: View {
                     errorMessage = "재생목록은 만들었지만 시트에 기록하지 못했습니다. \(failure)"
                     return
                 }
-                onPick(playlist.id, playlist.title)
+                // Created and recorded — and that is the whole job.
+                //
+                // It used to hand the new playlist straight to the caller,
+                // which opened 「이 예배의 콘티를 덮어씁니다」 and would have
+                // replaced a real 콘티 with the contents of a playlist made
+                // one second ago: nothing. A playlist you have just created
+                // is empty by definition, so there is nothing to fill from
+                // and nothing left to do on this screen.
                 dismiss()
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription

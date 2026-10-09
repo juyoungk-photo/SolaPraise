@@ -631,7 +631,19 @@ struct ServicePrepView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(items) { item in
-                    planRow(item, startsAt: times[item.id])
+                    // Swipe a line out of the 순서.
+                    //
+                    // .swipeActions is a List feature and these rows live in
+                    // a VStack inside a row of the schedule, so it does
+                    // nothing here — the same reason the player's queue
+                    // needed this. Never a full swipe: removing a song from
+                    // Sunday by brushing the screen is not a mistake worth
+                    // allowing, so the button has to be tapped.
+                    SwipeToRemoveRow {
+                        Task { await removeItem(item, from: service) }
+                    } content: {
+                        planRow(item, startsAt: times[item.id])
+                    }
                 }
 
                 let songs = items.filter { $0.kind == .song && $0.videoId != nil }
@@ -825,6 +837,14 @@ struct ServicePrepView: View {
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private func removeItem(_ item: PlanItem, from service: TeamService) async {
+        guard let sheetId else { return }
+        pushNote = nil
+        if let failure = await team.removePlanItem(item, from: service, sheetId: sheetId) {
+            pushNote = failure
+        }
     }
 
     // MARK: - Pushing the 콘티
