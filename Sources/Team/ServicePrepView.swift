@@ -132,6 +132,7 @@ struct ServicePrepView: View {
     @State private var fillingFrom: TeamService?
     @State private var buildingPDF = false
     @State private var repairing = false
+    @State private var reordering: TeamService?
 
     /// iPad has room for the chips beside the service; a phone does not, and
     /// on a phone they stay on a second line.
@@ -241,6 +242,10 @@ struct ServicePrepView: View {
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
+            .sheet(item: $reordering) { service in
+                ReorderPlanSheet(service: service, sheetId: sheetId)
+                    .environmentObject(team)
+            }
             .navigationDestination(item: $openChart) { LeadSheetView(song: $0) }
             // Picking a file here hands it to 작업실 with the song's name
             // already attached, so the chart comes out labelled rather than
@@ -738,6 +743,15 @@ struct ServicePrepView: View {
                 Label("순서 추가", systemImage: "plus.circle")
             }
             .disabled(team.isReadOnly)
+
+            if items.count > 1 {
+                Button {
+                    reordering = service
+                } label: {
+                    Label("순서 바꾸기", systemImage: "arrow.up.arrow.down")
+                }
+                .disabled(team.isReadOnly)
+            }
 
             servicePDFRow(service)
 
@@ -1521,6 +1535,18 @@ struct ServicePrepView: View {
                     // at once: the 순서 belongs to the service above it, and
                     // seeing it unroll from there is what says so.
                     serviceDetail(upcoming)
+                        // One tap, one action.
+                        //
+                        // Every action under a service — 찬양만 이어 듣기, 순서
+                        // 추가, 순서 바꾸기, 채우기 — sits inside a single row
+                        // of the schedule List, and a List treats default-
+                        // style Buttons in one row as one tap target: they
+                        // ALL fired, and the last sheet set won. Pressing
+                        // 순서 바꾸기 opened 재생목록에서 채우기; pressing 순서
+                        // 추가 also started a song. Borderless makes each
+                        // button its own target, and propagates to every one
+                        // inside, including those added later.
+                        .buttonStyle(.borderless)
                         .padding(.leading, isWide ? 62 : 54)
                         .transition(.asymmetric(
                             insertion: .move(edge: .top)

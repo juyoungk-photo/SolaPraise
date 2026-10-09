@@ -45,7 +45,7 @@ struct AddPlanItemSheet: View {
                         Text("분").foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text("맨 뒤에 추가됩니다. 순서를 옮기는 것은 시트에서 하세요.")
+                    Text("맨 뒤에 추가됩니다. 자리를 옮기려면 「순서 바꾸기」를 쓰세요.")
                 }
 
                 if let message = team.errorMessage {

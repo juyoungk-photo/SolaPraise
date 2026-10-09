@@ -116,7 +116,7 @@ struct PlanItem: Identifiable, Hashable {
         }
     }
 
-    let order: Int
+    var order: Int
     let kind: Kind
     let title: String
     /// Planned length. Nil means nobody has estimated it, which is different
@@ -1231,6 +1231,75 @@ final class TeamStore: ObservableObject {
         } catch SheetsClient.SheetsError.http(403, _) {
             isReadOnly = true
             return "이 시트에 편집 권한이 없어 지우지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Writes a new running order for a service.
+    ///
+    /// Only the Order cell of each row is touched. The rows stay where they
+    /// are on the sheet — nothing is moved, inserted or deleted — so every
+    /// other service's rows, and every row number the app holds, are exactly
+    /// as they were. Reordering is a renumbering, which is also what a
+    /// leader would do by hand.
+    ///
+    /// Through whichever tab the items came from, for the same reason as
+    /// removePlanItem: a sheet with no Plan tab shows its Songs as the
+    /// order of service.
+    func reorder(_ items: [PlanItem],
+                 in service: TeamService,
+                 sheetId: String) async -> String? {
+        let day = Calendar.current.startOfDay(for: service.date)
+
+        #if DEBUG
+        if isSample {
+            let renumbered = items.enumerated().map { index, item -> PlanItem in
+                var copy = item; copy.order = index + 1; return copy
+            }
+            if hasPlanTab { plans[day] = renumbered }
+            else {
+                songs[day] = renumbered.map {
+                    TeamSong(order: $0.order, title: $0.title, url: $0.url,
+                             key: $0.key, transpose: 0, notes: $0.notes, row: $0.row)
+                }
+            }
+            return nil
+        }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+
+        let tab = hasPlanTab ? TeamSheet.planTab : TeamSheet.songsTab
+        do {
+            let header = (try await client.read(sheetId: sheetId, range: "\(tab)!1:1")).first ?? []
+            guard let orderColumn = TeamSheet.column(header, ["order", "순서", "#"]) else {
+                return "\(tab) 탭에 순서(Order) 열이 없습니다."
+            }
+            let letter = TeamSheet.columnLetter(orderColumn)
+
+            // Every row must be known before any is written. A reorder that
+            // stops halfway leaves two songs both numbered 2, which is worse
+            // than not reordering at all.
+            let rows = items.compactMap(\.row)
+            guard rows.count == items.count, rows.allSatisfy({ $0 >= 2 }) else {
+                return "줄 번호를 알 수 없는 항목이 있습니다. 새로 고친 뒤 다시 시도해 주세요."
+            }
+
+            try await client.batchWrite(
+                sheetId: sheetId,
+                updates: zip(items, rows).enumerated().map { index, pair in
+                    (range: "\(tab)!\(letter)\(pair.1)", rows: [[String(index + 1)]])
+                }
+            )
+
+            // Re-read, as everywhere else that writes: what is shown is
+            // what the sheet holds.
+            if hasPlanTab {
+                plans = Self.parsePlan(try await client.read(sheetId: sheetId, range: TeamSheet.planTab))
+            } else {
+                songs = Self.parseSongs(try await rawSongRows(sheetId: sheetId))
+            }
+            return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
