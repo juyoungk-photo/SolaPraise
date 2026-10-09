@@ -71,6 +71,20 @@ enum TeamSheet {
     static let planTab     = "Plan"
     /// Where the service currently is. One row per date.
     static let liveTab     = "Live"
+    /// 악보 and other files attached to a service's songs.
+    ///
+    /// ── TAB "Attachments" ────────────────────────────────────
+    /// Date | Song | Name | FileId | URL | AddedBy | AddedAt
+    ///
+    /// A tab rather than a column on Songs, because a song can have several
+    /// — a lead sheet, a chord chart, a page of lyrics — and a cell that
+    /// holds a list is a cell nobody can edit by hand. One row per file
+    /// keeps the sheet readable and lets a leader delete one by clearing a
+    /// line, which is how everything else in this document works.
+    ///
+    /// `Song` empty means the file belongs to the SERVICE rather than to any
+    /// one song: the combined 콘티 PDF is filed that way.
+    static let attachmentsTab = "Attachments"
 
     /// The Schedule tab's shared-playlist column, however it is spelled.
     ///
@@ -85,6 +99,12 @@ enum TeamSheet {
     enum Signups  { static let date = 0, role = 1, email = 2, name = 3, status = 4, updatedAt = 5 }
     enum Members  { static let email = 0, name = 1, active = 2 }
     enum Live { static let date = 0, order = 1, updatedAt = 2, by = 3 }
+    enum Attachments {
+        static let date = 0, song = 1, name = 2,
+                   fileId = 3, url = 4, addedBy = 5, addedAt = 6
+        static let width = 7
+        static let header = ["Date", "Song", "Name", "FileId", "URL", "AddedBy", "AddedAt"]
+    }
     enum Plan {
         static let date = 0, order = 1, type = 2, title = 3,
                    minutes = 4, person = 5, key = 6, url = 7, notes = 8

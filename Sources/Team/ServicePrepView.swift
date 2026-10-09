@@ -1521,6 +1521,14 @@ struct ServicePrepView: View {
             )
         }
         .layoutPriority(1)
+        // A Sunday that has happened is a record, not a question.
+        //
+        // The control stayed live on past weeks, so a mis-tap while scrolling back
+        // through the season rewrote who had been there — and the answer it
+        // overwrote was the only record of it. Nothing is owed on a service
+        // that is over, and nothing should be changeable about it either.
+        .disabled(upcoming.isPast)
+        .opacity(upcoming.isPast ? 0.45 : 1)
     }
 
     /// One segment of the three. Pressing the chosen one takes the answer
@@ -1624,7 +1632,9 @@ struct ServicePrepView: View {
                             role: String?,
                             person: String?,
                             @ViewBuilder _ content: () -> some View) -> some View {
-        if canAssign {
+        // Same rule as the answer control: a Sunday that has happened is a
+        // record. Re-assigning it by mis-tap would rewrite who actually led.
+        if canAssign, !service.isPast {
             content()
                 .contentShape(Capsule())
                 .onTapGesture {

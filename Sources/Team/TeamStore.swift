@@ -38,6 +38,14 @@ struct TeamSong: Identifiable, Hashable {
     let key: String?
     let transpose: Int
     let notes: String?
+    /// 1-based row on the Songs tab.
+    ///
+    /// Without this, deleting a song from a 콘티 silently did nothing. Most
+    /// teams have no Plan tab, so their 순서 IS the Songs tab promoted into
+    /// one — and the promotion dropped the row, leaving the delete with
+    /// nowhere to write. It refused, into a note at the bottom of a screen
+    /// nobody was looking at.
+    var row: Int? = nil
     var id: String { "\(order)-\(title)" }
 
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
@@ -348,7 +356,7 @@ final class TeamStore: ObservableObject {
         return songs(for: service).map {
             PlanItem(order: $0.order, kind: .song, title: $0.title,
                      minutes: nil, person: nil, key: $0.key, url: $0.url,
-                     notes: $0.notes, row: nil)
+                     notes: $0.notes, row: $0.row)
         }
     }
 
@@ -1340,7 +1348,10 @@ final class TeamStore: ObservableObject {
                     url: cell(urlCol).flatMap(URL.init(string:)),
                     key: playedKey ?? cell(keyCol),
                     transpose: semitones,
-                    notes: cell(notesCol)
+                    notes: cell(notesCol),
+                    // +1: the loop is over every row including the header,
+                    // and sheets count from 1.
+                    row: offset + 1
                 )
             )
         }

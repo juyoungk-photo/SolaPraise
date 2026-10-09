@@ -84,7 +84,18 @@ final class GoogleAuthManager: ObservableObject {
         // account can open, not just the team's. The narrow alternative is to
         // put Google's Picker in front of it, which is a web view and a
         // second SDK for a choice the leader makes once.
-        "https://www.googleapis.com/auth/spreadsheets"
+        "https://www.googleapis.com/auth/spreadsheets",
+        // Attachments — 악보 images and PDFs for a service's 콘티.
+        //
+        // The note above says drive.file did not work for the SHEET, and
+        // that is still true: a sheet whose URL was pasted in was never
+        // created or picked through the app. Attachments are the opposite
+        // case — the app creates every one of them, so per-file access is
+        // exactly what is needed and nothing broader is.
+        //
+        // It is also a NON-SENSITIVE scope, so adding it changes nothing
+        // about the consent screen's verification.
+        "https://www.googleapis.com/auth/drive.file"
     ]
 
     init() {
