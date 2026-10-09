@@ -126,6 +126,18 @@ final class CachedVideo {
     /// it as much as the length does.
     var viewCount: Int?
 
+    /// Broadcasting right now, as of the last refresh.
+    ///
+    /// 코너스톤 모닝워십 streams just before six in the morning but YouTube
+    /// does not publish the archive until that evening, so for the whole
+    /// day in between the only way to reach the service is the live
+    /// broadcast itself. Optional because a video cached before this
+    /// existed has never been asked.
+    var isLiveNow: Bool?
+    /// When `isLiveNow` was last established, so a stale "live" from
+    /// yesterday morning is not believed.
+    var liveCheckedAt: Date?
+
     /// Kept at the top of its feed.
     ///
     /// Not only playlists: a three-hour "찬송가 연속 듣기" is a set list that

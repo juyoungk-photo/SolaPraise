@@ -412,6 +412,10 @@ struct HomeView: View {
             // card led with "Oct 6" while showing the episode for Oct 8,
             // which reads as the app being three days behind when it is in
             // fact exactly right.
+            if video.isLiveNow == true,
+               video.liveCheckedAt.map({ Date().timeIntervalSince($0) < 3600 }) == true {
+                return "● LIVE · \(video.title)"
+            }
             let day = EpisodeDate.inTitle(video.title) ?? video.publishedAt
             guard let day else { return video.title }
             return "\(Self.relativeDay(day)) · \(video.title)"
@@ -654,6 +658,25 @@ struct HomeView: View {
         if needingPassage {
             let readings = episodes.filter { ScriptureReference.passage(in: $0.title) != nil }
             if !readings.isEmpty { episodes = readings }
+        }
+
+        // A LIVE BROADCAST WINS OVER EVERYTHING.
+        //
+        // 코너스톤 모닝워십 streams just before six in the morning and
+        // YouTube does not publish the archive until that evening, so for
+        // the whole day in between the service exists only as the broadcast
+        // itself. Nothing dated today is in the uploads feed yet, and the
+        // card would otherwise offer yesterday's — which is exactly what it
+        // did. While the stream is on, it is the answer.
+        //
+        // Believed only if it was checked recently: liveBroadcastContent
+        // becomes "none" the moment a stream ends, and a cached "live" from
+        // this morning must not still be claiming it at lunchtime.
+        if let live = episodes.first(where: { video in
+            video.isLiveNow == true
+                && video.liveCheckedAt.map { Date().timeIntervalSince($0) < 3600 } == true
+        }) {
+            return live
         }
 
         // THE DATE IN THE TITLE WINS.

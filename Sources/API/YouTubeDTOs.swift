@@ -160,8 +160,14 @@ struct YTVideo: Decodable, Identifiable {
         let channelTitle: String?
         let publishedAt: Date?
         let thumbnails: YTThumbnails?
+        /// "live", "upcoming" or "none". Already in the snippet the batched
+        /// videos.list fetches, so knowing it costs nothing extra.
+        let liveBroadcastContent: String?
     }
     struct ContentDetails: Decodable { let duration: String? }
+
+    /// Broadcasting right now.
+    var isLiveNow: Bool { snippet?.liveBroadcastContent == "live" }
 
     var durationSeconds: Int? {
         contentDetails?.duration.flatMap(ISO8601Duration.seconds(from:))

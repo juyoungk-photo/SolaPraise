@@ -349,30 +349,60 @@ final class FeedStore: ObservableObject {
         let descriptor = FetchDescriptor<CachedVideo>(
             predicate: #Predicate { $0.durationSeconds == nil }
         )
-        guard let pending = try? context.fetch(descriptor), !pending.isEmpty else { return }
+        let pending = (try? context.fetch(descriptor)) ?? []
+
+        // The newest handful go in whether or not they need a duration.
+        //
+        // This call already knows liveBroadcastContent, and a live broadcast
+        // is the one piece of state that goes stale on its own: 모닝워십
+        // streams just before six and YouTube does not publish the archive
+        // until that evening, so for the whole day between them the live
+        // video IS the service. Checking it costs nothing — videos.list is
+        // one unit for up to fifty ids either way.
+        var newestDescriptor = FetchDescriptor<CachedVideo>(
+            sortBy: [SortDescriptor(\CachedVideo.publishedAt, order: .reverse)]
+        )
+        newestDescriptor.fetchLimit = 20
+        let newest = (try? context.fetch(newestDescriptor)) ?? []
+
+        var wanted: [CachedVideo] = []
+        var seen = Set<String>()
+        for video in newest + pending where !seen.contains(video.videoId) {
+            seen.insert(video.videoId)
+            wanted.append(video)
+        }
+        guard !wanted.isEmpty else { return }
 
         // Cap the catch-up so adding several channels at once can't spend an
         // unbounded number of units in a single refresh.
-        let ids = Array(pending.prefix(200)).map(\.videoId)
+        let ids = Array(wanted.prefix(200)).map(\.videoId)
         guard let videos = try? await client.videos(ids: ids) else { return }
 
         var durationById: [String: Int] = [:]
         var embeddableById: [String: Bool] = [:]
         var viewsById: [String: Int] = [:]
         var publishedById: [String: Date] = [:]
+        var liveById: [String: Bool] = [:]
         for v in videos {
             if let secs = v.durationSeconds { durationById[v.id] = secs }
             embeddableById[v.id] = v.isEmbeddable
             if let views = v.viewCount { viewsById[v.id] = views }
             if let published = v.snippet?.publishedAt { publishedById[v.id] = published }
+            liveById[v.id] = v.isLiveNow
         }
-        guard !durationById.isEmpty || !embeddableById.isEmpty else { return }
+        guard !durationById.isEmpty || !embeddableById.isEmpty || !liveById.isEmpty
+        else { return }
 
         var descriptionById: [String: String] = [:]
         for v in videos {
             if let text = v.snippet?.description, !text.isEmpty { descriptionById[v.id] = text }
         }
-        for video in pending {
+        let now = Date()
+        for video in wanted {
+            if let live = liveById[video.videoId] {
+                video.isLiveNow = live
+                video.liveCheckedAt = now
+            }
             if let secs = durationById[video.videoId] { video.durationSeconds = secs }
             if let ok = embeddableById[video.videoId] { video.isEmbeddable = ok }
             if let views = viewsById[video.videoId] { video.viewCount = views }
