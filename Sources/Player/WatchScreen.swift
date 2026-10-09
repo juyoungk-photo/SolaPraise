@@ -292,7 +292,7 @@ struct WatchScreen: View {
                                 Image(systemName: "doc.text.magnifyingglass")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 34, height: 40)
+                                    .frame(width: 36, height: 40)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -303,29 +303,7 @@ struct WatchScreen: View {
                                 Image(systemName: "waveform.badge.magnifyingglass")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 34, height: 40)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            // This song, not the whole playlist.
-                            //
-                            // 콘티에 추가 existed only for whatever was
-                            // sounding, so picking one song out of a
-                            // 재생목록 meant playing it first just to reach
-                            // the button. Choosing a song for Sunday is
-                            // something you do while scanning a list, which
-                            // is exactly where the other two per-song
-                            // actions already live.
-                            AddToServiceMenu(
-                                title: item.title,
-                                videoId: item.id,
-                                key: existingSheet(forVideo: item.id)?.keyLabel
-                            ) {
-                                Image(systemName: "calendar.badge.plus")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 34, height: 40)
+                                    .frame(width: 36, height: 40)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
