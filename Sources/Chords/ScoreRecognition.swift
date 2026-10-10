@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 3
+    static let version = 4
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -147,6 +147,19 @@ enum ScoreRecognition {
         // read one as 「A」. Checked last, after every pass has added.
         if !staves.isEmpty {
             found.removeAll { $0.box.minX < 0.07 }
+            // Nor anything at the very start of a staff, over the clef: that
+            // is where the measure number goes, and an italic 「27」 read as
+            // 「A」. A system's first chord sits over its first note, clear
+            // of the clef by more than two line-gaps.
+            for staff in staves.map(\.staff) {
+                guard let start = staffStart(staff, in: image) else { continue }
+                let gap = staff.height / 4
+                let gapX = gap * CGFloat(image.height) / CGFloat(image.width)
+                found.removeAll { item in
+                    item.box.midY > staff.minY - gap * 7 && item.box.midY < staff.minY + gap
+                        && item.box.minX < start + gapX * 2
+                }
+            }
             // Chords sit ABOVE a staff. Anything centred between its lines
             // is notation: on the iPhone the key signature's ♯, on the top
             // line, was read as 「F」 and became a chord at every staff.
@@ -208,8 +221,9 @@ enum ScoreRecognition {
                                   height: strip.height)
                 guard let piece = strip.cropping(to: rect),
                       let alone = padded(piece, margin: strip.height, scale: 3) else { continue }
-                let read = recognise(alone, languages: ["en-US"]).chords
+                var read = recognise(alone, languages: ["en-US"]).chords
                     + recognise(alone, languages: ["ko-KR", "en-US"]).chords
+                if read.isEmpty, let echoed = readRepeated(piece) { read = [echoed] }
                 guard let chord = read.first else { continue }
                 out.append(Found(
                     original: chord.original,
@@ -364,7 +378,8 @@ enum ScoreRecognition {
             let x0 = max(0, segment.lowerBound - pad), x1 = min(width, segment.upperBound + pad)
             guard let piece = cleaned.cropping(to: CGRect(x: x0, y: 0, width: x1 - x0, height: height)),
                   let ready = padded(piece, margin: height / 2, scale: 3) else { continue }
-            let read = recognise(ready, languages: ["en-US"], strict: true).chords
+            var read = recognise(ready, languages: ["en-US"], strict: true).chords
+            if read.isEmpty, let echoed = readRepeated(piece) { read = [echoed] }
             guard let chord = read.max(by: { $0.original.count < $1.original.count }) else { continue }
             // Where the ink is, vertically, in the strip.
             var top = height, bottom = 0
@@ -420,6 +435,34 @@ enum ScoreRecognition {
         guard let first = inked.first, let last = inked.last else { return box }
         return CGRect(x: CGFloat(first) / CGFloat(w), y: box.minY,
                       width: CGFloat(last - first + 1) / CGFloat(w), height: box.height)
+    }
+
+    /// Where a staff begins across the page: the left end of the longest
+    /// stretch where at least three of its five lines are inked.
+    static func staffStart(_ staff: CGRect, in image: CGImage) -> CGFloat? {
+        guard let gray = grayscale(image) else { return nil }
+        let w = image.width, h = image.height
+        let top = staff.minY * CGFloat(h), gap = staff.height * CGFloat(h) / 4
+        let rows = (0..<5).map { Int((top + gap * CGFloat($0)).rounded()) }
+        func onStaff(_ x: Int) -> Bool {
+            rows.filter { y in (y - 1...y + 1).contains { $0 >= 0 && $0 < h && gray[$0 * w + x] < 200 } }.count >= 3
+        }
+        var best = (start: 0, length: 0), runStart = -1, missed = 0
+        for x in 0...w {
+            if x < w, onStaff(x) {
+                if runStart < 0 { runStart = x }
+                missed = 0
+            } else if runStart >= 0 {
+                missed += 1
+                if missed > 3 || x == w {
+                    let length = x - missed + 1 - runStart
+                    if length > best.length { best = (runStart, length) }
+                    runStart = -1; missed = 0
+                }
+            }
+        }
+        guard best.length > w / 4 else { return nil }
+        return CGFloat(best.start) / CGFloat(w)
     }
 
     /// Whether the ink under a chord's box carries on, unbroken, from above
@@ -523,6 +566,52 @@ enum ScoreRecognition {
 
     /// The image enlarged and set on a white margin, the way a single
     /// symbol is easiest to read.
+    /// A lone glyph read by showing it three times: 「F F F」.
+    ///
+    /// Vision reads words, and a single capital with nothing beside it —
+    /// the 「F」 that opens a bar — often comes back as nothing at all, in
+    /// either language, at any size. Three copies in a row are a line of
+    /// text, and it reads them. Accepted only when the copies agree.
+    static func readRepeated(_ piece: CGImage) -> Found? {
+        let gap = max(4, piece.height / 2)
+        let margin = piece.height
+        let scale = 3
+        let width = (piece.width * 3 + gap * 2 + margin * 2) * scale
+        let height = (piece.height + margin * 2) * scale
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.interpolationQuality = .high
+        for copy in 0..<3 {
+            let x = (margin + copy * (piece.width + gap)) * scale
+            context.draw(piece, in: CGRect(x: x, y: margin * scale,
+                                           width: piece.width * scale, height: piece.height * scale))
+        }
+        guard let image = context.makeImage() else { return nil }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["en-US"]
+        request.minimumTextHeight = 0
+        do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) } catch { return nil }
+        var words = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            .flatMap { $0.split(separator: " ").map(String.init) }
+            .map(repairedChordWord)
+        // Read run together — 「CCC」 — the copies are still three.
+        if words.count == 1, let only = words.first, only.count % 3 == 0, only.count >= 3 {
+            let third = only.count / 3
+            let pieces = (0..<3).map { String(only.dropFirst($0 * third).prefix(third)) }
+            if Set(pieces).count == 1 { words = pieces }
+        }
+        guard words.count >= 2, let first = words.first,
+              words.filter({ $0 == first }).count >= 2,
+              ScoreChordText.parse(first) != nil else { return nil }
+        return Found(original: first, box: CGRect(x: 0, y: 0, width: 1, height: 1), confidence: 0.5)
+    }
+
     private static func padded(_ image: CGImage, margin: Int, scale: Int) -> CGImage? {
         let width = (image.width + margin * 2) * scale
         let height = (image.height + margin * 2) * scale

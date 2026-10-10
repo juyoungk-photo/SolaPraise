@@ -126,7 +126,6 @@ struct ServicePrepView: View {
     /// A chart the team already made, opened from a 콘티 row.
     @State private var openChart: SavedSong?
     /// The song a picked audio file will be analysed as.
-    @State private var analysing: String?
     /// The chip a leader tapped, and what it was about.
     @State private var assigning: AssignmentTarget?
     /// The service whose 찬양 are being filled from a playlist.
@@ -263,20 +262,6 @@ struct ServicePrepView: View {
                     .environmentObject(team)
             }
             .navigationDestination(item: $openChart) { LeadSheetView(song: $0) }
-            // Picking a file here hands it to 작업실 with the song's name
-            // already attached, so the chart comes out labelled rather than
-            // called whatever the file was.
-            .fileImporter(
-                isPresented: Binding(get: { analysing != nil },
-                                     set: { if !$0 { analysing = nil } }),
-                allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio],
-                allowsMultipleSelection: false
-            ) { result in
-                guard case .success(let urls) = result, let url = urls.first,
-                      let title = analysing else { return }
-                StudioInbox.shared.submit(url: url, title: title)
-                analysing = nil
-            }
         }
     }
 
@@ -1008,21 +993,19 @@ struct ServicePrepView: View {
             Spacer(minLength: 0)
 
             if item.kind == .song {
+                // 악보 only. Analysing audio lives in 작업실 and the
+                // player; here it was one more item above what people came
+                // to the menu for.
                 Menu {
-                    Section {
-                        Button {
-                            analysing = item.title
-                        } label: {
-                            Label("이 곡 분석하기", systemImage: "waveform.badge.magnifyingglass")
-                        }
-                    }
-                    SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId))
+                    SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId),
+                                    published: sheetLinks(forVideo: item.videoId))
                 } label: {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
                         .contentShape(Rectangle())
                 }
+                .menuOrder(.fixed)
                 .buttonStyle(.plain)
             }
 
@@ -1050,8 +1033,19 @@ struct ServicePrepView: View {
 
             if let id = item.videoId {
                 Button {
-                    host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0,
-                              purpose: item.kind == .song ? .worship : nil)
+                    // A song plays as the 콘티: every song of the service in
+                    // order, starting here — next and previous go through
+                    // the set, as in a playlist. Anything else plays alone.
+                    if item.kind == .song {
+                        let songs = team.plan(for: service).filter { $0.kind == .song && $0.videoId != nil }
+                        let queue = songs.compactMap { song in
+                            song.videoId.map { PlayableVideo(id: $0, title: song.title) }
+                        }
+                        let start = songs.firstIndex { $0.id == item.id } ?? 0
+                        host.play(queue: queue, startIndex: start, purpose: .worship)
+                    } else {
+                        host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
+                    }
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
                 }
@@ -1068,6 +1062,15 @@ struct ServicePrepView: View {
         guard let id else { return nil }
         let descriptor = FetchDescriptor<CachedVideo>(predicate: #Predicate { $0.videoId == id })
         return (try? modelContext.fetch(descriptor))?.first?.channelTitle
+    }
+
+    /// Chart links the upload's own description gives — the team's official
+    /// 악보 — when the video is cached; the player shows the same ones.
+    private func sheetLinks(forVideo id: String?) -> [SheetMusicLink] {
+        guard let id else { return [] }
+        let descriptor = FetchDescriptor<CachedVideo>(predicate: #Predicate { $0.videoId == id })
+        guard let description = (try? modelContext.fetch(descriptor))?.first?.descriptionText else { return [] }
+        return WorshipSetParser.sheetMusicLinks(description)
     }
 
     /// The key this song's attached chart was last shown in on the stand.

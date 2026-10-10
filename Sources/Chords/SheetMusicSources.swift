@@ -112,15 +112,32 @@ enum SheetMusicSources {
         var english: String? = nil
         let publisher: Publisher?
         let hymn: Int?
+        /// 「새찬송가」 or 「통일찬송가」, as the title says.
+        var hymnal = "새찬송가"
+        /// The team, from the channel, when it has no store of its own here.
+        var team: String? = nil
 
-        /// Words added to every search after the title.
+        /// Words added to every search after the title: the hymn and its
+        /// hymnal, or the team — what tells THIS song from another of the
+        /// same name, and nothing more.
         var context: String {
-            if let hymn { return "새찬송가 \(hymn)장" }
-            return publisher?.name ?? ""
+            if let hymn { return "\(hymnal) \(hymn)장" }
+            return publisher?.name ?? team ?? ""
         }
 
         /// The open web, with the song's details: 「악보 검색」.
         var searchURL: URL? { search("\(song) \(context) 악보", domain: nil) }
+
+        /// The same search in Google Images, large images only. A chart
+        /// found through the web search is usually a page's thumbnail —
+        /// too coarse to play from; the large-size filter finds the scan.
+        var imageSearchURL: URL? {
+            guard let plain = searchURL,
+                  var parts = URLComponents(url: plain, resolvingAgainstBaseURL: false) else { return nil }
+            parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "tbm", value: "isch"),
+                                                          URLQueryItem(name: "tbs", value: "isz:l")]
+            return parts.url
+        }
 
         func url(for source: Source) -> URL? {
             if let page = source.searchPage {
@@ -148,7 +165,27 @@ enum SheetMusicSources {
         return Plan(song: song,
                     english: englishTitle(in: title),
                     publisher: publisher(channel: channel, title: title),
-                    hymn: SongSearchSuggestions.hymnNumber(in: title))
+                    hymn: SongSearchSuggestions.hymnNumber(in: title),
+                    hymnal: SongSearchSuggestions.hymnal(in: title),
+                    team: teamName(channel: channel, song: song))
+    }
+
+    /// The team's name as people search it, from the channel: the Korean
+    /// name when the channel carries one — 「ALL THAT HYMN 올댓힘」 →
+    /// 올댓힘 — otherwise the channel without its generic words. Nil for
+    /// channels that name no team: a 「피아노 찬송가」 upload channel adds
+    /// nothing a search can use.
+    static func teamName(channel: String?, song: String) -> String? {
+        guard let channel = channel?.precomposedStringWithCompatibilityMapping
+            .trimmingCharacters(in: .whitespaces), !channel.isEmpty else { return nil }
+        let generic: Set<String> = ["worship", "official", "music", "channel", "tv", "ministry", "ministries",
+                                    "church", "찬양", "찬송가", "피아노", "ccm", "playlist", "음악", "채널"]
+        let words = channel.split(separator: " ").map(String.init)
+        let hangul = words.filter { $0.range(of: #"\p{Hangul}"#, options: .regularExpression) != nil }
+        let pick = (hangul.isEmpty ? words : hangul).filter { !generic.contains($0.lowercased()) }
+        let name = pick.joined(separator: " ")
+        guard name.count >= 2, !song.contains(name) else { return nil }
+        return name
     }
 
     /// The English title beside a Korean one: the Latin words that follow

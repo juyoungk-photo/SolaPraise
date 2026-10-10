@@ -67,6 +67,35 @@ struct CheckSheetMusic {
         check("…and with the Korean one when there is none",
               decoded(anointing.url(for: SheetMusicSources.stores[0])).hasSuffix("search=날 찾으신 주의 은혜"))
 
+        // The 악보 검색 query: the song and what tells it apart, nothing more.
+        // Real upload titles that came out as the whole title, as the team
+        // alone, or as the wrong hymn.
+        let queries: [(String, String?, String)] = [
+            ("찬송가 543장 | '어려운 일 당할 때' 피아노 찬송가 연주", "피아노 찬송가", "어려운 일 당할 때 새찬송가 543장 악보"),
+            ("찬송과 묵상 #35 우리 주 하나님 (통일찬송가 342장)", nil, "우리 주 하나님 통일찬송가 342장 악보"),
+            ("[주사평] 은혜 아니면 | 주님의 사랑 평화의 노래", "주사평", "은혜 아니면 주사평 악보"),
+            ("오직 예수로 가슴 뛰는 삶 🧡 마커스목요예배 | 26.10.01 [KOR SUB]", "MARKERS WORSHIP",
+             "오직 예수로 가슴 뛰는 삶 마커스 악보"),
+            ("피아워십 정규앨범 2022 - 믿음의 기도 (Official) | Prayers Of Faith (Official)", "F.I.A WORSHIP",
+             "믿음의 기도 F.I.A 악보"),
+            ("주 오실 그날 | 2026 Born Zeal", "아이자야씩스티원 Isaiah6tyOne", "주 오실 그날 아이자야씩스티원 악보"),
+            ("날 찾으신 주의 은혜 | ANOINTING CLIP", "ANOINTING", "날 찾으신 주의 은혜 어노인팅 악보"),
+            ("주님 뜻대로 살기로 했네", nil, "주님 뜻대로 살기로 했네 악보"),
+        ]
+        for (title, channel, expected) in queries {
+            let plan = SheetMusicSources.plan(title: title, channel: channel)
+            let query = plan.searchURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first?.value
+            } ?? ""
+            check("악보 검색 for 「\(title)」", query == expected, "got 「\(query)」")
+        }
+        let imageSearch = SheetMusicSources.plan(title: "주님 뜻대로 살기로 했네", channel: nil).imageSearchURL?.absoluteString ?? ""
+        check("the image search asks Google Images for large images",
+              imageSearch.contains("tbm=isch") && imageSearch.contains("tbs=isz:l"), "got \(imageSearch)")
+        check("an English title is not cut at its 「I」",
+              SheetMusicSources.englishTitle(in: "나의 길이 되시네 He Is the Path I Walk") == "He Is the Path I Walk",
+              "got \(SheetMusicSources.englishTitle(in: "나의 길이 되시네 He Is the Path I Walk") ?? "nil")")
+
         print(failures == 0 ? "\nall sheet music checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

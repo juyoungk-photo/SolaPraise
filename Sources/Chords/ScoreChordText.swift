@@ -78,9 +78,27 @@ enum ScoreChordText {
         // Whatever is left has to be a suffix this vocabulary knows. An
         // unknown tail means the token was a word that merely began like a
         // chord, which is exactly the case to reject.
-        guard suffixes.contains(where: { $0 == remainder }) else { return nil }
+        guard let suffix = knownSuffix(remainder) else { return nil }
 
-        return Parsed(root: root, suffix: remainder, bass: bass, usesFlats: usesFlats)
+        return Parsed(root: root, suffix: suffix, bass: bass, usesFlats: usesFlats)
+    }
+
+    /// The suffix as this vocabulary spells it, accepting how charts print
+    /// it: raised in parentheses — 「G(sus4)」, 「G(SUS4)」 — or in capitals.
+    /// A 「G(sus4)」 read as nothing left a G on a transposed page, in the
+    /// old key, on every chart typeset that way.
+    private static func knownSuffix(_ text: String) -> String? {
+        var candidates = [text]
+        if text.hasPrefix("("), text.hasSuffix(")"), text.count > 2 {
+            candidates.append(String(text.dropFirst().dropLast()))
+        }
+        for candidate in candidates {
+            if suffixes.contains(candidate) { return candidate }
+            // Capitals only for words: 「M7」 is major and 「m7」 minor, so a
+            // two-letter suffix keeps its case.
+            if candidate.count >= 3, suffixes.contains(candidate.lowercased()) { return candidate.lowercased() }
+        }
+        return nil
     }
 
     /// Note letter plus optional accidental, and what follows it.

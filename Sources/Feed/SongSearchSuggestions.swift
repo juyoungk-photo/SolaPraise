@@ -139,12 +139,22 @@ enum SongSearchSuggestions {
             return words.first.map { [$0] } ?? []
         }
 
+        // A title in quotes is the song, whatever surrounds it:
+        // 「찬송가 543장 | '어려운 일 당할 때' 피아노 찬송가 연주」.
+        if let quoted = quotedTitle(in: text), !isPackaging(quoted, team: team) {
+            return [quoted]
+        }
+
         struct Candidate { let text: String; let score: Int; let position: Int; let medley: Int }
         var candidates: [Candidate] = []
         for (position, rawPart) in parts(of: text).enumerated() {
             let part = rawPart.precomposedStringWithCompatibilityMapping
             for (medleyIndex, piece) in part.components(separatedBy: " + ").enumerated() {
-                guard !isPackaging(piece, team: team) else { continue }
+                // Judged without its bracketed tag: 「[주사평] 은혜 아니면」 is
+                // the song with the team's tag in front, not the team.
+                let untagged = piece.replacingOccurrences(of: #"^\s*[\[【(][^\]】)]*[\]】)]\s*"#, with: "",
+                                                         options: .regularExpression)
+                guard !isPackaging(untagged, team: team) else { continue }
                 var hymn = false
                 let song = cleanPart(piece, hymn: &hymn)
                 // A song title has no digits once its hymn and track
@@ -185,10 +195,30 @@ enum SongSearchSuggestions {
         var pieces = [title]
         // 「ㅣ」 (the Hangul vowel) and a spaced 「l」/「I」 are used as bars;
         // " I " only counts in a Korean title, where it cannot be the word.
-        var separators = [" | ", "|", "｜", "ㅣ", " / ", " - ", " — ", " – ", " l "]
-        if title.range(of: #"\p{Hangul}"#, options: .regularExpression) != nil { separators.append(" I ") }
+        let separators = [" | ", "|", "｜", "ㅣ", " / ", " - ", " — ", " – ", " l "]
         for separator in separators {
             pieces = pieces.flatMap { $0.components(separatedBy: separator) }
+        }
+        // " I " as a bar only after Korean: in 「나의 길이 되시네 He Is the
+        // Path I Walk」 it is the word, and splitting there cut the English
+        // title in half.
+        pieces = pieces.flatMap { piece in
+            piece.replacingOccurrences(of: #"(?<=[\p{Hangul})\]]) I "#, with: "\u{1F}", options: .regularExpression)
+                .components(separatedBy: "\u{1F}")
+        }
+        // An emoji between words separates too: 「오직 예수로 가슴 뛰는 삶 🧡
+        // 마커스목요예배」 is the song, then the service.
+        pieces = pieces.flatMap { piece in
+            var out: [String] = [], current = ""
+            for character in piece {
+                if character.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation }) {
+                    out.append(current); current = ""
+                } else {
+                    current.append(character)
+                }
+            }
+            out.append(current)
+            return out
         }
         return pieces.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
@@ -206,6 +236,8 @@ enum SongSearchSuggestions {
             text = text.replacingOccurrences(of: #"(?:새|통일)?찬송가\s*\d{1,3}\s*장|\d{1,3}\s*장"#,
                                              with: " ", options: .regularExpression)
         }
+        // A series and its episode in front: 「찬송과 묵상 #35 우리 주 하나님」.
+        text = text.replacingOccurrences(of: #"^.*?#\d{1,4}\s+(?=\S)"#, with: "", options: .regularExpression)
         // A leading track number: 「01. 은혜」, 「3) 주님」, 「#2 임재」,
         // 「Track 5 은혜」 — never a year or a hymn, both handled above.
         text = text.replacingOccurrences(of: #"^\s*(?:track\s*)?#?\d{1,3}\s*[.)_:\-]?\s+"#,
@@ -271,7 +303,32 @@ enum SongSearchSuggestions {
         guard !team.isEmpty else { return false }
         let words = Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted))
         let joined = normalised(text)
-        return team.contains { words.contains($0) || ($0.count >= 4 && joined.contains($0)) }
+        if team.contains(where: { words.contains($0) || ($0.count >= 4 && joined.contains($0)) }) { return true }
+        // The team spelled out, when its name is an acronym: 「주사평」 is
+        // 「주님의 사랑 평화의 노래」 — the first syllables of its words.
+        let initials = String(text.split(separator: " ").compactMap(\.first))
+        return team.contains { name in
+            name.count >= 3 && name.range(of: #"^\p{Hangul}+$"#, options: .regularExpression) != nil
+                && initials.hasPrefix(name)
+        }
+    }
+
+    /// A title set in quotes inside a longer one — 「'어려운 일 당할 때'」,
+    /// 「“은혜”」 — when it reads as a title: Korean, two characters or more.
+    static func quotedTitle(in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"['‘"“「『]([^'’"”」』]{2,40})['’"”」』]"#),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let inner = text[range].trimmingCharacters(in: .whitespaces)
+        guard hangulShare(of: inner) >= 0.6, inner.rangeOfCharacter(from: .decimalDigits) == nil else { return nil }
+        return inner
+    }
+
+    /// Which hymnal a title's number is in: 통일 or 새 — they number
+    /// differently, and 「통일찬송가 342장」 searched as 새찬송가 342장 is
+    /// another hymn.
+    static func hymnal(in text: String) -> String {
+        text.contains("통일찬송가") || text.contains("통일 찬송가") ? "통일찬송가" : "새찬송가"
     }
 
     /// #선하신목자 → 선하신목자, normalised.

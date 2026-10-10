@@ -141,9 +141,12 @@ struct CheckScoreOCR {
         let lyric: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 26), .foregroundColor: NSColor.black]
         let systems: [(chords: [(String, CGFloat)], lyrics: String)] = [
             ([("G", 160), ("C9", 420), ("Am", 680), ("Dsus4", 930)], "거룩 하신 전능 의 주 찬양 받기 합당한 주"),
-            ([("D", 120), ("G", 300), ("C9", 480), ("Am", 660), ("G", 860), ("D", 930), ("G", 1000)], "나의 평생 주님 만을 사랑 하며 따르리라"),
+            ([("D", 150), ("G", 300), ("C9", 480), ("Am", 660), ("G", 860), ("D", 930), ("G", 1000)], "나의 평생 주님 만을 사랑 하며 따르리라"),
             ([("C9", 160), ("Dsus4", 400), ("1.G", 620), ("2.G", 760), ("D/E", 900), ("D9/F#", 1000)], "찬양 하며 경배 해 귀하 신 만 왕의 왕"),
         ]
+        // Each system's first chord sits clear of the staff's start, as on
+        // a real chart, where clef and key signature come first: a mark at
+        // the very start is a measure number, and is dropped.
         var placed: [Placed] = []
         var y: CGFloat = 200
         for (index, system) in systems.enumerated() {
@@ -184,6 +187,14 @@ struct CheckScoreOCR {
                 (chord as NSString).draw(at: CGPoint(x: x, y: y + 22), withAttributes: text)
                 let name = chord.hasPrefix("1.") || chord.hasPrefix("2.") ? String(chord.dropFirst(2)) : chord
                 placed.append(Placed(text: name, x: x, lineY: y + 22))
+            }
+            // A measure number at the staff's start, over where the clef
+            // goes — italic, small; one read as 「A」 on a real chart.
+            if index > 0 {
+                let italic = NSFontManager.shared.convert(NSFont(name: "Times New Roman", size: 18) ?? serif,
+                                                          toHaveTrait: .italicFontMask)
+                ("\(index * 8 + 1)" as NSString).draw(at: CGPoint(x: 92, y: staffTop - 24),
+                                                     withAttributes: [.font: italic, .foregroundColor: NSColor.black])
             }
             // The volta bracket over 1.G and 2.G.
             if index == 2 {

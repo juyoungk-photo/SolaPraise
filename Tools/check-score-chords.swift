@@ -118,6 +118,14 @@ struct CheckScoreChords {
               ScoreChordText.likelyRoot(of: ["D", "A", "Bm", "G", "D", "A", "G", "D"]) == 2)
         check("a song in Em reads as its relative major, G",
               ScoreChordText.likelyRoot(of: ["Em", "C", "G", "D", "Em", "C", "D", "Em"]) == 7)
+        // A suffix printed raised in parentheses, or in capitals.
+        for (written, expected) in [("G(sus4)", "Asus4"), ("G(SUS4)", "Asus4"), ("G(SuS4)", "Asus4"),
+                                    ("C(add9)", "Dadd9"), ("GSUS4", "Asus4"), ("D(M7)", "EM7")] {
+            let moved = ScoreChordText.transpose(text: written, by: 2)
+            check("「\(written)」 is a chord and moves to \(expected)", moved == expected, "got \(moved ?? "nil")")
+        }
+        check("「G(Live)」 is not a chord", ScoreChordText.parse("G(Live)") == nil)
+
         // A key in the file name: what was printed, so it beats a guess.
         let hints: [(String, Int?, String?)] = [
             ("주의 이름 높이며 | HOLY NAME | LIVE WORSHIP | Album Title (G).pdf", 7, "G"),

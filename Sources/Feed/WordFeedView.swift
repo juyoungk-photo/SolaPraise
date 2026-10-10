@@ -341,7 +341,7 @@ struct WordFeedView: View {
         let shownChannels = Set(channels.map(\.youtubeChannelId))
         return allPlaylists
             .filter { $0.purposeRaw == Purpose.word.rawValue }
-            .filter { playlist in !(playlist.isPinned && shownChannels.contains(playlist.channelId ?? "")) }
+            .filter { playlist in !(playlist.isPinned && shownChannels.contains(playlist.channelId)) }
             .sorted { ($0.isPinned ? 0 : 1, $0.title) < ($1.isPinned ? 0 : 1, $1.title) }
     }
 

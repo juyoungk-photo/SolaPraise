@@ -20,8 +20,30 @@ struct SheetMusicLinks: View {
 
     @Environment(\.openURL) private var openURL
 
+    /// Top to bottom: 악보 검색 for this song, then the official chart when
+    /// there is one, then the big English-language catalogues. The search
+    /// is what is used most; the catalogues rarely carry Korean songs.
     var body: some View {
         let plan = SheetMusicSources.plan(title: title, channel: channel)
+        Section("「\(plan.song)」 \(plan.context)") {
+            Button {
+                if let url = plan.searchURL { openURL(url) }
+            } label: {
+                Label("악보 검색", systemImage: "magnifyingglass")
+            }
+            Button {
+                if let url = plan.imageSearchURL { openURL(url) }
+            } label: {
+                Label("악보 이미지 (큰 사이즈)", systemImage: "photo")
+            }
+            ForEach(SheetMusicSources.shops) { shop in
+                Button {
+                    if let url = plan.url(for: shop) { openURL(url) }
+                } label: {
+                    Text(shop.name)
+                }
+            }
+        }
         if !published.isEmpty {
             Section("이 팀이 올린 악보") {
                 ForEach(published) { link in
@@ -49,20 +71,6 @@ struct SheetMusicLinks: View {
                 }
             }
         }
-        Section("「\(plan.song)」 \(plan.context)") {
-            Button {
-                if let url = plan.searchURL { openURL(url) }
-            } label: {
-                Label("악보 검색", systemImage: "magnifyingglass")
-            }
-            ForEach(SheetMusicSources.shops) { shop in
-                Button {
-                    if let url = plan.url(for: shop) { openURL(url) }
-                } label: {
-                    Text(shop.name)
-                }
-            }
-        }
     }
 }
 
@@ -79,5 +87,8 @@ struct SheetMusicMenu<Label: View>: View {
         } label: {
             label
         }
+        // As written, wherever the button sits: iOS otherwise turns a menu
+        // upside down when it opens upward from the bottom of the screen.
+        .menuOrder(.fixed)
     }
 }
