@@ -173,4 +173,41 @@ enum ScoreChordText {
         }
         return best?.key
     }
+
+    /// A key written in a chart's file name or title — 「Album Title
+    /// (G).pdf」, 「주님 뜻대로 [Bb]」, 「Key of E」, 「Key: F#m」, 「A키」.
+    ///
+    /// WHY: guessing the key from the chords is right most of the time and
+    /// wrong when recognition missed some, or when a song lives on its IV.
+    /// Publishers and teams usually name the file by its key, and what the
+    /// file says is what was printed — so a key in the name wins, and the
+    /// chord estimate is only a fallback and a cross-check.
+    ///
+    /// Only a key standing alone counts: 「(G)」 but not 「(Gospel)」, 「Key of
+    /// E」 but not 「Edition」. Returns the relative MAJOR root (0 = C), to
+    /// compare with likelyRoot, and the key as written.
+    static func keyHint(in name: String) -> (root: Int, written: String)? {
+        var text = name.replacingOccurrences(of: "♯", with: "#").replacingOccurrences(of: "♭", with: "b")
+        if let dot = text.range(of: #"\.(pdf|png|jpe?g|heic)$"#, options: [.regularExpression, .caseInsensitive]) {
+            text.removeSubrange(dot)
+        }
+        let key = #"([A-G][#b]?)(m(?:in(?:or)?)?|\s?[Mm]ajor|\s?minor)?"#
+        let patterns = [
+            #"(?i:key)\s*(?:of|:|=|-)?\s*"# + key + #"(?![A-Za-z#])"#,   // Key of G, Key: F#m
+            #"[(\[]\s*"# + key + #"\s*(?:(?i:key))?\s*[)\]]"#,         // (G) [Bb] (Em) (G key)
+            #"(?<![A-Za-z])"# + key + #"\s?키"#,                             // G키, Bb 키
+            #"(?<![A-Za-z])"# + key + #"\s*(?i:key)(?![A-Za-z])"#,          // G Key
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let noteRange = Range(match.range(at: 1), in: text),
+                  let (note, _, rest) = readNote(String(text[noteRange])), rest.isEmpty else { continue }
+            let quality = Range(match.range(at: 2), in: text).map { String(text[$0]) } ?? ""
+            let minor = quality.lowercased().contains("m") && !quality.lowercased().contains("major")
+            let written = String(text[noteRange]) + (minor ? "m" : "")
+            return ((note + (minor ? 3 : 0)) % 12, written)
+        }
+        return nil
+    }
 }

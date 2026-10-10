@@ -105,13 +105,18 @@ struct SolaPraiseApp: App {
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
         } else if let path = DebugHarness.scorePath {
-            ScoreStandView(items: [ScoreStandItem(
-                attachment: Attachment(date: Date(), song: "Debug score",
-                                       name: (path as NSString).lastPathComponent,
-                                       fileId: path, url: URL(fileURLWithPath: path),
-                                       addedBy: ""),
-                song: "Debug score",
-                teamKey: DebugHarness.scoreTeamKey)])
+            // Several scores, as a set: paths joined by 「::」.
+            ScoreStandView(items: path.components(separatedBy: "::").map { path in
+                let name = (path as NSString).lastPathComponent
+                let song = ((name as NSString).deletingPathExtension as String)
+                    .components(separatedBy: " | ").first ?? name
+                return ScoreStandItem(
+                    attachment: Attachment(date: Date(), song: song, name: name,
+                                           fileId: path, url: URL(fileURLWithPath: path),
+                                           addedBy: ""),
+                    song: song,
+                    teamKey: DebugHarness.scoreTeamKey)
+            }, setTitle: "Debug set")
         } else if let debugId = DebugHarness.videoId {
             WatchScreen()
                 .task {

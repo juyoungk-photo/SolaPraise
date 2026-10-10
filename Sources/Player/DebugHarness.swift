@@ -85,6 +85,14 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// Export the whole set as one PDF as soon as the stand opens (with
+    /// -uiTestScore a::b): the share menu cannot be driven from here.
+    static var exportScoreSet: Bool { args.contains("-uiTestExportSet") }
+
+    /// Show in-development features (작업실) without a developer account:
+    ///   -uiTestDevGate
+    static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }
+
     /// Show the repeated-songs warning in the sample team: -uiTestDuplicates
     static var seedDuplicates: Bool { args.contains("-uiTestDuplicates") }
 

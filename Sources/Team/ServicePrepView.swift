@@ -253,7 +253,8 @@ struct ServicePrepView: View {
                     .environmentObject(planning)
             }
             .fullScreenCover(item: $standService) { service in
-                ScoreStandView(items: standItems(service))
+                ScoreStandView(items: standItems(service),
+                               setTitle: service.date.formatted(.dateTime.month().day()) + " " + service.title)
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }

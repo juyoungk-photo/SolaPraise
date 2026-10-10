@@ -32,6 +32,11 @@ enum DevGate {
     /// developer may be signed in under either.
     @MainActor
     static func isUnlocked(auth: GoogleAuthManager, planning: PlanningAuth) -> Bool {
+        #if DEBUG
+        // The simulator is signed in as nobody; -uiTestDevGate lets the
+        // harness reach 작업실 to check it on both devices.
+        if DebugHarness.unlockDevGate { return true }
+        #endif
         let allowed = AppSecrets.devAccounts
         guard !allowed.isEmpty else { return false }
         return [auth.email, planning.email]

@@ -118,6 +118,30 @@ struct CheckScoreChords {
               ScoreChordText.likelyRoot(of: ["D", "A", "Bm", "G", "D", "A", "G", "D"]) == 2)
         check("a song in Em reads as its relative major, G",
               ScoreChordText.likelyRoot(of: ["Em", "C", "G", "D", "Em", "C", "D", "Em"]) == 7)
+        // A key in the file name: what was printed, so it beats a guess.
+        let hints: [(String, Int?, String?)] = [
+            ("주의 이름 높이며 | HOLY NAME | LIVE WORSHIP | Album Title (G).pdf", 7, "G"),
+            ("주님 뜻대로 [Bb].pdf", 10, "Bb"),
+            ("Way Maker - Key of E.pdf", 4, "E"),
+            ("Oceans Key: Dm.png", 5, "Dm"),
+            ("Goodness of God (A Key).pdf", 9, "A"),
+            ("은혜 A키.jpg", 9, "A"),
+            ("Build My Life (F#m).pdf", 9, "F#m"),
+            ("Holy Spirit (E♭).pdf", 3, "Eb"),
+            ("How Great (C major).pdf", 0, "C"),
+            // Not keys: a word in brackets, a capital in a title, a version.
+            ("Amazing Grace (Live).pdf", nil, nil),
+            ("Great Are You Lord (Gospel).pdf", nil, nil),
+            ("A Mighty Fortress.pdf", nil, nil),
+            ("Edition B Final.pdf", nil, nil),
+            ("Way Maker (2).pdf", nil, nil),
+        ]
+        for (name, root, written) in hints {
+            let hint = ScoreChordText.keyHint(in: name)
+            check("key hint in 「\(name)」", hint?.root == root && hint?.written == written,
+                  "got \(hint.map { "\($0.written) → \($0.root)" } ?? "none")")
+        }
+
         check("Bb with flats", ScoreChordText.likelyRoot(of: ["Bb", "F", "Gm", "Eb", "F", "Bb"]) == 10)
 
         print(failures == 0

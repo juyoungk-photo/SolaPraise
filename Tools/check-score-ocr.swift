@@ -48,7 +48,7 @@ struct CheckScoreOCR {
     static func render(rows: [Row], chordSize: CGFloat, lyricSize: CGFloat,
                        spacing: CGFloat) -> (CGImage, [Placed])? {
         // A4 at 2× — the size the app rasterises a PDF page to.
-        let width = 1190, height = 1684
+        let width = Self.width, height = 1684
         guard let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
@@ -117,6 +117,218 @@ struct CheckScoreOCR {
               "extra \(extra)")
     }
 
+    /// A LEAD SHEET IN STAFF NOTATION, the shape of a real chart the app
+    /// read badly (16 of 46 chords): each chord in a thin serif font above a
+    /// five-line staff, note stems reaching up toward it, a boxed rehearsal
+    /// mark, voltas 「1.G」 「2.G」, a 「Go to A」 instruction, slash chords,
+    /// and a key-signature sharp on each staff.
+    static let width = 1190
+
+    static func staffPage() {
+        let width = 1190, height = 1684
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+
+        let serif = NSFont(name: "Times New Roman", size: 26) ?? NSFont.systemFont(ofSize: 26)
+        let text: [NSAttributedString.Key: Any] = [.font: serif, .foregroundColor: NSColor.black]
+        let lyric: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 26), .foregroundColor: NSColor.black]
+        let systems: [(chords: [(String, CGFloat)], lyrics: String)] = [
+            ([("G", 160), ("C9", 420), ("Am", 680), ("Dsus4", 930)], "거룩 하신 전능 의 주 찬양 받기 합당한 주"),
+            ([("D", 120), ("G", 300), ("C9", 480), ("Am", 660), ("G", 860), ("D", 930), ("G", 1000)], "나의 평생 주님 만을 사랑 하며 따르리라"),
+            ([("C9", 160), ("Dsus4", 400), ("1.G", 620), ("2.G", 760), ("D/E", 900), ("D9/F#", 1000)], "찬양 하며 경배 해 귀하 신 만 왕의 왕"),
+        ]
+        var placed: [Placed] = []
+        var y: CGFloat = 200
+        for (index, system) in systems.enumerated() {
+            let staffTop = y + 60
+            context.setStrokeColor(CGColor(gray: 0.45, alpha: 1))
+            context.setLineWidth(1.4)
+            for line in 0..<5 {
+                let ly = staffTop + CGFloat(line) * 16
+                context.move(to: CGPoint(x: 90, y: ly)); context.addLine(to: CGPoint(x: 1110, y: ly))
+            }
+            context.strokePath()
+            // The key signature: a ♯ on the top line, which the phone's
+            // recogniser read as 「F」.
+            // Drawn as engraved: two uprights about two and a half spaces
+            // tall around the line, two thick slanted bars, clear of the
+            // chord line above it.
+            context.setStrokeColor(CGColor(gray: 0, alpha: 1))
+            context.setLineWidth(2)
+            for x in [CGFloat(102), 110] {
+                context.move(to: CGPoint(x: x, y: staffTop - 9)); context.addLine(to: CGPoint(x: x, y: staffTop + 26))
+            }
+            context.strokePath()
+            context.setLineWidth(5)
+            for y in [staffTop - 1, staffTop + 12] {
+                context.move(to: CGPoint(x: 97, y: y + 3)); context.addLine(to: CGPoint(x: 115, y: y - 3))
+            }
+            context.strokePath()
+            // Note heads and stems, some reaching up into the chord strip.
+            context.setStrokeColor(CGColor(gray: 0, alpha: 1))
+            context.setLineWidth(2.5)
+            for x in stride(from: CGFloat(200), to: 1080, by: 70) {
+                let head = staffTop + 40
+                context.fillEllipse(in: CGRect(x: x, y: head, width: 14, height: 10))
+                context.move(to: CGPoint(x: x + 13, y: head + 4)); context.addLine(to: CGPoint(x: x + 13, y: staffTop - 14))
+            }
+            context.strokePath()
+            for (chord, x) in system.chords {
+                (chord as NSString).draw(at: CGPoint(x: x, y: y + 22), withAttributes: text)
+                let name = chord.hasPrefix("1.") || chord.hasPrefix("2.") ? String(chord.dropFirst(2)) : chord
+                placed.append(Placed(text: name, x: x, lineY: y + 22))
+            }
+            // The volta bracket over 1.G and 2.G.
+            if index == 2 {
+                context.setLineWidth(1.5)
+                context.move(to: CGPoint(x: 605, y: y + 14)); context.addLine(to: CGPoint(x: 880, y: y + 14))
+                context.strokePath()
+            }
+            (system.lyrics as NSString).draw(at: CGPoint(x: 110, y: staffTop + 90), withAttributes: lyric)
+            y += 400
+        }
+        // A boxed rehearsal mark and a 「Go to A」 instruction: neither is a chord.
+        ("A" as NSString).draw(at: CGPoint(x: 100, y: 160), withAttributes: text)
+        context.setLineWidth(2)
+        context.stroke(CGRect(x: 94, y: 156, width: 32, height: 36))
+        ("Go to A" as NSString).draw(at: CGPoint(x: 560, y: 1490), withAttributes: text)
+
+        guard let image = context.makeImage() else { check("staff page renders", false); return }
+
+        // The phone's recogniser read the ♯ as a chord with its box cut at
+        // the top line; the Mac's does not, so the ink test is checked on
+        // its own: through every staff's top line in the key signature's
+        // columns, and not under a chord.
+        let staves = ScoreRecognition.staves(in: image)
+        check("staff page: three staves found", staves.count == 3, "found \(staves.count)")
+        func through(_ x: CGFloat, _ width: CGFloat) -> Int {
+            staves.filter { staff in
+                ScoreRecognition.runsIntoStaff(
+                    CGRect(x: x / CGFloat(self.width), y: staff.staff.minY - staff.staff.height * 0.3,
+                           width: width / CGFloat(self.width), height: staff.staff.height * 0.25),
+                    staff: staff.staff, in: image)
+            }.count
+        }
+        check("a key-signature ♯ runs into every staff", through(96, 20) == staves.count,
+              "\(through(96, 20)) of \(staves.count)")
+        check("a chord above the staff does not", through(158, 22) == 0, "\(through(158, 22))")
+        let found = ScoreRecognition.chords(in: image)
+        print("staff page found \(found.count)/\(placed.count):", found.map(\.original))
+        var remaining = found
+        var missing: [String] = []
+        for p in placed {
+            if let i = remaining.firstIndex(where: { $0.original == p.text
+                && abs($0.box.minX * CGFloat(width) - p.x) < 30 }) {
+                remaining.remove(at: i)
+            } else { missing.append("\(p.text)@\(Int(p.x))") }
+        }
+        check("staff page: every chord above a staff is found", missing.isEmpty, "missing \(missing)")
+        check("staff page: no rehearsal mark, instruction or note taken for a chord",
+              remaining.isEmpty, "extra \(remaining.map { "\($0.original)@\(Int($0.box.minX * CGFloat(width)))" })")
+    }
+
+    /// A HYMNAL PAGE: sans-serif chords crowded down onto the staff, four
+    /// sharps, a 6/8 time signature, measure numbers, verse lines, and
+    /// chords written with a real ♯ — 「G♯」 「C♯m」 「F♯」. Note stems rise
+    /// into the chord line; one in the opening of the C read 「C♯m」 as
+    /// 「G#m」. Drawn here at the size of a phone screenshot.
+    static func hymnPage() {
+        let width = 800, height = 870
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        func text(_ s: String, _ x: CGFloat, _ y: CGFloat, _ size: CGFloat, _ font: String = "Helvetica") {
+            let f = NSFont(name: font, size: size) ?? NSFont.systemFont(ofSize: size)
+            (s as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: f, .foregroundColor: NSColor.black])
+        }
+        text("주님 앞에 나아갑니다", 260, 8, 32)
+        text("(찬송가 000장)", 330, 58, 18)
+        text("KaMU", 10, 80, 18)
+        text("E. P. Writer / I. D. Composer", 570, 78, 15)
+        let verse = "1.주 님 앞에 나 아가 오늘 도 함께 하 - 시네"
+        let systems: [(staff: CGFloat, chords: [(String, CGFloat)], number: String?, verses: Int)] = [
+            (148, [("E", 120), ("B7", 310), ("E", 385), ("A", 462), ("E", 638), ("B7", 728)], nil, 4),
+            (400, [("E", 105), ("A", 292), ("E", 450), ("B7", 652), ("E", 728)], "5", 4),
+            (650, [("E", 110), ("B", 292), ("G♯", 455), ("C♯m", 540), ("F♯", 643), ("B7", 728)], "9", 1),
+            (790, [("E", 110), ("B", 190), ("E7", 285), ("A", 370), ("E", 446), ("B7", 658), ("E", 728)], "13", 1),
+        ]
+        var placed: [Placed] = []
+        for system in systems {
+            let top = system.staff
+            context.setStrokeColor(CGColor(gray: 0, alpha: 1))
+            context.setLineWidth(1)
+            for line in 0..<5 {
+                let y = top + CGFloat(line) * 9
+                context.move(to: CGPoint(x: 8, y: y)); context.addLine(to: CGPoint(x: 792, y: y))
+            }
+            context.strokePath()
+            // Four sharps — F C G D — as engraved.
+            for (i, dy) in [0, 13.5, -4.5, 9].enumerated() {
+                let x = 40 + CGFloat(i) * 9, c = top + CGFloat(dy)
+                context.setLineWidth(1.2)
+                for upright in [x + 2, x + 5] {
+                    context.move(to: CGPoint(x: upright, y: c - 9)); context.addLine(to: CGPoint(x: upright, y: c + 9))
+                }
+                context.strokePath()
+                context.setLineWidth(2.5)
+                for bar in [c - 3, c + 3] {
+                    context.move(to: CGPoint(x: x, y: bar + 1.5)); context.addLine(to: CGPoint(x: x + 7, y: bar - 1.5))
+                }
+                context.strokePath()
+            }
+            if let number = system.number { text(number, 4, top - 22, 11, "Times New Roman") }
+            else { text("6", 88, top - 3, 20, "Times New Roman"); text("8", 88, top + 15, 20, "Times New Roman") }
+            // Notes, stems up, reaching above the top line.
+            context.setLineWidth(1.2)
+            for x in stride(from: CGFloat(125), to: 780, by: 42) {
+                let head = top + CGFloat([9, 13.5, 18, 22.5][Int(x) % 4])
+                context.fillEllipse(in: CGRect(x: x, y: head - 3.5, width: 10, height: 7))
+                context.move(to: CGPoint(x: x + 9.5, y: head)); context.addLine(to: CGPoint(x: x + 9.5, y: head - 27))
+                context.strokePath()
+            }
+            for x in [CGFloat(290), 445, 625, 790] {
+                context.move(to: CGPoint(x: x, y: top)); context.addLine(to: CGPoint(x: x, y: top + 36))
+            }
+            context.strokePath()
+            for (chord, x) in system.chords {
+                text(chord, x, top - 33, 18)
+                placed.append(Placed(text: chord.replacingOccurrences(of: "♯", with: "#"), x: x, lineY: top - 33))
+            }
+            for v in 0..<system.verses {
+                text(verse.replacingOccurrences(of: "1.", with: "\(v + 1)."), 100, top + 50 + CGFloat(v) * 32, 26)
+            }
+        }
+
+        guard let image = context.makeImage() else { check("hymn page renders", false); return }
+        let found = ScoreRecognition.chords(in: image)
+        print("hymn page found \(found.count)/\(placed.count):", found.map(\.original))
+        var remaining = found
+        var missing: [String] = []
+        for p in placed {
+            if let i = remaining.firstIndex(where: { $0.original == p.text
+                && abs($0.box.minX * CGFloat(width) - p.x) < 20 }) {
+                remaining.remove(at: i)
+            } else { missing.append("\(p.text)@\(Int(p.x))") }
+        }
+        check("hymn page: every chord found, C♯m not read as G#m", missing.isEmpty, "missing \(missing)")
+        check("hymn page: no title, credit, measure number or sharp taken for a chord",
+              remaining.isEmpty, "extra \(remaining.map { "\($0.original)@\(Int($0.box.minX * CGFloat(width)))" })")
+        check("hymn page: in E", ScoreChordText.likelyRoot(of: found.map(\.original)) == 4)
+    }
+
     static func main() {
         // Chords spaced as a real chart spaces them: over the syllable they
         // fall on, not evenly. Includes a slash chord, a flat, a seventh,
@@ -144,6 +356,9 @@ struct CheckScoreOCR {
         ], chordSize: 20, lyricSize: 22, spacing: 120, tolerance: 22)
 
         // The key: these chords are mostly G-family on rows 1, 2 and 4.
+        staffPage()
+        hymnPage()
+
         check("score in G, team plays in A → +2",
               ScoreRecognition.shift(fromScoreChords: ["G", "D", "Em", "C", "G", "D", "G"],
                                      toKey: "A") == 2)

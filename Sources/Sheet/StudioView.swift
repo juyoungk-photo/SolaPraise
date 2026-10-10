@@ -8,7 +8,8 @@
 //  musician, not a consumption surface. Everything that starts from sound
 //  lives here — recording a line input, detecting live, analysing a file —
 //  along with what comes out of it: the recordings themselves and the sheets
-//  made from them.
+//  made from them — and, under 팀 악보, the charts the team attached to songs
+//  in 예배 준비, so a chart from three Sundays ago is one tap away.
 //
 //  It gets its own tab on iPad, where there is room to read a chart, and lives
 //  inside 보관함 on iPhone where the tab bar is already full.
@@ -27,6 +28,9 @@ struct StudioView: View {
 
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
     @EnvironmentObject private var host: PlayerHost
+    @EnvironmentObject private var team: TeamStore
+    /// A team chart opened on the 악보 stand.
+    @State private var standItem: ScoreStandItem?
     @State private var showImporter = false
     @State private var openedSong: SavedSong?
     @State private var recordings: [Recordings.Item] = []
@@ -182,9 +186,16 @@ struct StudioView: View {
                         }
                     }
                 }
+
+                if TeamSheetSource.current != nil {
+                    teamScoresSection
+                }
             }
             .fullScreenCover(item: $performanceSet) { set in
                 PerformanceModeView(songs: set.songs)
+            }
+            .fullScreenCover(item: $standItem) { item in
+                ScoreStandView(items: [item])
             }
 
             .task { recordings = Recordings.all() }
@@ -213,6 +224,84 @@ struct StudioView: View {
                 if wants { collectFromInbox() }
             }
         }
+    }
+
+    // MARK: 팀 악보
+
+    /// Charts attached to songs in 예배 준비, by song. Shown only when a
+    /// team sheet is set up — and then on both devices, signed in or not,
+    /// with a line saying why it is empty rather than an empty section.
+    private var teamScoresSection: some View {
+        let entries = ScoreArchive.entries(team.attachments.values.flatMap { $0 },
+                                           date: \.date, song: \.song, name: \.name)
+        return Section {
+            if entries.isEmpty {
+                Text(team.needsAuthorization
+                     ? "예배 준비에 로그인하면 팀이 곡에 첨부한 악보가 여기에 모입니다."
+                     : team.isLoading ? "불러오는 중…"
+                     : "아직 곡에 첨부된 악보가 없습니다. 예배 준비에서 곡에 악보를 첨부하면 여기에 모입니다.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(entries) { entry in
+                if entry.files.count == 1, let file = entry.files.first {
+                    teamScoreRow(file, title: entry.song)
+                } else {
+                    DisclosureGroup {
+                        ForEach(entry.files) { file in
+                            teamScoreRow(file, title: file.name)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.song).lineLimit(1)
+                            Text("악보 \(entry.files.count)개 · 최근 \(entry.latest.formatted(.dateTime.month().day()))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("팀 악보")
+        } footer: {
+            Text("예배 준비에서 곡에 첨부한 악보입니다. 누르면 악보 연주모드로 열리고, 그날 순서의 키로 맞춰집니다.")
+        }
+    }
+
+    private func teamScoreRow(_ file: Attachment, title: String) -> some View {
+        Button {
+            standItem = ScoreStandItem(attachment: file, song: file.song, teamKey: teamKey(for: file))
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).lineLimit(1).foregroundStyle(.primary)
+                HStack(spacing: 6) {
+                    Text(file.date.formatted(.dateTime.month().day()))
+                    // The key it was last played in, from the stand.
+                    if let key = ScoreKeyStore.key(for: file.fileId) {
+                        Text("· 악보 \(key)")
+                    }
+                    if title != file.name {
+                        Text("· \(file.name)").lineLimit(1)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            // The whole row, not just its text, and in the list's own
+            // colours: a list of tinted names read as links.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("악보 연주모드로 열기")
+    }
+
+    /// The key the song was played in at the service the chart belongs to.
+    private func teamKey(for file: Attachment) -> String? {
+        guard let service = team.services.first(where: {
+            Calendar.current.isDate($0.date, inSameDayAs: file.date)
+        }) else { return nil }
+        return team.plan(for: service).first { $0.title == file.song }?.key
     }
 
     /// A take: play it back, turn it into a chart, share it out.

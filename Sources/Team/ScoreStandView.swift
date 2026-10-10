@@ -18,6 +18,7 @@
 
 import SwiftUI
 import UIKit
+import PDFKit
 
 struct ScoreStandItem: Identifiable, Hashable {
     let attachment: Attachment
@@ -34,6 +35,8 @@ struct ScoreStandView: View {
     /// caller can (Drive granted, a sheet configured). Returns an error
     /// message, or nil on success.
     var uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)?
+    /// Names the whole-set PDF: 「10월 12일 주일예배」.
+    var setTitle: String?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -59,9 +62,10 @@ struct ScoreStandView: View {
         let id = UUID()
     }
 
-    init(items: [ScoreStandItem], startAt: Int = 0,
+    init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         self.items = items
+        self.setTitle = setTitle
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
     }
@@ -82,6 +86,11 @@ struct ScoreStandView: View {
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
+                #if DEBUG
+                .task {
+                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle) }
+                }
+                #endif
             }
 
             Button { dismiss() } label: {
@@ -103,7 +112,16 @@ struct ScoreStandView: View {
         .onKeyPress(.rightArrow) { go(1); return .handled }
         .onKeyPress(.leftArrow) { go(-1); return .handled }
         .alert("악보", isPresented: .constant(model.note != nil)) {
-            Button("확인") { model.note = nil }
+            Button("확인") {
+                model.note = nil
+                if let pending = model.pendingExport {
+                    model.pendingExport = nil
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        model.export = pending
+                    }
+                }
+            }
         } message: {
             Text(model.note ?? "")
         }
@@ -201,7 +219,18 @@ struct ScoreStandView: View {
         }
         let from = state.scoreRoot.map { ScoreStandModel.name($0, flats: state.useFlats) } ?? "?"
         let to = state.targetRoot.map { ScoreStandModel.name($0, flats: state.useFlats) } ?? "?"
-        var line = "코드 \(state.chordCount)개 · 악보 \(from) → \(to)"
+        // Where the chart's key came from, so a wrong guess can be spotted:
+        // the file name says what was printed; the chords only suggest.
+        let source: String
+        if let written = state.writtenKey {
+            source = written.hasSuffix("m") ? "\(written) — 파일 이름" : "파일 이름"
+        } else {
+            source = "코드로 추정"
+        }
+        var line = "코드 \(state.chordCount)개 · 악보 \(from)(\(source)) → \(to)"
+        if state.writtenKey != nil, let estimated = state.estimatedRoot, estimated != state.scoreRoot {
+            line += " · 코드로는 \(ScoreStandModel.name(estimated, flats: state.useFlats))"
+        }
         if let teamKey = item.teamKey, state.defaultShift != nil {
             line += " (순서의 키 \(teamKey))"
         } else if item.teamKey == nil {
@@ -270,8 +299,11 @@ struct ScoreStandView: View {
 
     // MARK: - Controls
 
-    /// Key on the left, 원본 in the middle, tools on the right — one row
-    /// where it fits, two where it does not.
+    /// Key on the left, 원본 in the middle, tools on the right and the
+    /// song arrows at the far right edge — one row where it fits, two where
+    /// it does not. The arrows were split, ‹ at the left end and › at the
+    /// right; on a stand both are reached with the same hand, so they sit
+    /// together.
     ///
     /// The first layout was one scrolling row: on a phone it ran off the
     /// edge, and the key itself was never shown — only "+1" and a lone ♭
@@ -285,6 +317,7 @@ struct ScoreStandView: View {
                 originalButton(item)
                 Spacer(minLength: 12)
                 toolGroup(item)
+                songNav()
             }
             .padding(.horizontal, 16)
 
@@ -295,17 +328,20 @@ struct ScoreStandView: View {
                     originalButton(item)
                 }
                 .padding(.horizontal, 16)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        toolGroup(item)
+                HStack(spacing: 10) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            Spacer(minLength: 0)
+                            toolGroup(item)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) { toolGroup(item) }
+                        }
                     }
-                    .padding(.horizontal, 16)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) { toolGroup(item) }
-                            .padding(.horizontal, 16)
-                    }
+                    // Outside the scroll: the arrows never scroll away.
+                    songNav()
                 }
+                .padding(.horizontal, 16)
             }
         }
         .padding(.vertical, 10)
@@ -316,11 +352,6 @@ struct ScoreStandView: View {
     private func keyGroup(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        if items.count > 1 {
-            Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
-                .disabled(index == 0)
-                .accessibilityLabel("이전 곡")
-        }
         Button { model.step(item, -1) } label: { pill(Text("−")) }
             .disabled(!ready)
             .accessibilityLabel("반음 내리기")
@@ -400,11 +431,27 @@ struct ScoreStandView: View {
             .accessibilityLabel("손으로 고친 것을 모두 지우고 다시 인식")
         }
 
-        Button { Task { await model.exportPDF(item) } } label: {
-            pill(Image(systemName: "square.and.arrow.up"))
+        // One song, or the whole 콘티 as one file — to share, or keep in
+        // Files: the share sheet offers both.
+        let shareLabel = pill(model.isExporting ? AnyView(ProgressView().tint(.white))
+                                                : AnyView(Image(systemName: "square.and.arrow.up")))
+        if items.count > 1 {
+            Menu {
+                Button {
+                    Task { await model.exportPDF(item) }
+                } label: { Label("이 곡만 (\(item.song.isEmpty ? "현재 악보" : item.song))", systemImage: "doc") }
+                .disabled(!ready)
+                Button {
+                    Task { await model.exportSet(items, title: setTitle) }
+                } label: { Label("콘티 전체 \(items.count)곡 — 한 파일로", systemImage: "doc.on.doc") }
+            } label: { shareLabel }
+            .disabled(model.isExporting)
+            .accessibilityLabel("PDF로 공유·저장")
+        } else {
+            Button { Task { await model.exportPDF(item) } } label: { shareLabel }
+                .disabled(!ready || model.isExporting)
+                .accessibilityLabel("PDF로 공유·저장")
         }
-        .disabled(!ready || model.isExporting)
-        .accessibilityLabel("PDF로 내보내기")
 
         if let uploadTransposed {
             Button {
@@ -417,10 +464,21 @@ struct ScoreStandView: View {
             .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
         }
 
+    }
+
+    /// Previous and next song, side by side at the right edge.
+    @ViewBuilder
+    private func songNav() -> some View {
         if items.count > 1 {
-            Button { go(1) } label: { pill(Image(systemName: "chevron.right")) }
-                .disabled(index >= items.count - 1)
-                .accessibilityLabel("다음 곡")
+            HStack(spacing: 6) {
+                Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
+                    .disabled(index == 0)
+                    .accessibilityLabel("이전 곡")
+                Button { go(1) } label: { pill(Image(systemName: "chevron.right")) }
+                    .disabled(index >= items.count - 1)
+                    .accessibilityLabel("다음 곡")
+            }
+            .padding(.leading, 4)
         }
     }
 
@@ -533,6 +591,11 @@ final class ScoreStandModel: ObservableObject {
         var isReady = false
         var failure: String?
         var scoreRoot: Int?
+        /// The key in the file's name, as written — 「G」, 「F#m」 — when it
+        /// has one. Then scoreRoot comes from it rather than the chords.
+        var writtenKey: String?
+        /// What the chords alone suggest, kept to cross-check a written key.
+        var estimatedRoot: Int?
         /// From the 순서's key, when both it and the chart's key are known.
         var defaultShift: Int?
         var shift = 0
@@ -564,6 +627,8 @@ final class ScoreStandModel: ObservableObject {
     @Published var states: [String: State] = [:]
     @Published var note: String?
     @Published var export: ExportFile?
+    /// A set file waiting for its "some songs were left out" alert to close.
+    var pendingExport: ExportFile?
     @Published var isExporting = false
     @Published var isUploading = false
     /// The reader's chord size, 1 = as printed. Per device: a stand at arm's
@@ -605,7 +670,10 @@ final class ScoreStandModel: ObservableObject {
                 return
             }
         }
-        let saved = ScoreEditStore.load(item.id)
+        // A reading by an older recogniser is dropped unless someone fixed
+        // it by hand — then their corrections win over any new reading.
+        var saved = ScoreEditStore.load(item.id)
+        if let old = saved, !old.edited, old.version != ScoreRecognition.version { saved = nil }
         guard var read = await ScoreTransposer.read(data: data, recognise: saved == nil),
               !read.pages.isEmpty else {
             // Drive answers a file that is not shared by link with a
@@ -632,9 +700,14 @@ final class ScoreStandModel: ObservableObject {
         }
         state.pages = read.pages
         state.source = read.source
+        // The chart's key: what its name says, if it says one — that is
+        // what was printed — and otherwise what its chords suggest.
         let symbols = read.pages.flatMap { $0.chords.map(\.original) }
-        state.scoreRoot = ScoreChordText.likelyRoot(of: symbols)
-        state.defaultShift = ScoreRecognition.shift(fromScoreChords: symbols, toKey: item.teamKey)
+        let hint = ScoreChordText.keyHint(in: item.attachment.name) ?? ScoreChordText.keyHint(in: item.song)
+        state.estimatedRoot = ScoreChordText.likelyRoot(of: symbols)
+        state.writtenKey = hint?.written
+        state.scoreRoot = hint?.root ?? state.estimatedRoot
+        state.defaultShift = state.scoreRoot.flatMap { ScoreRecognition.shift(fromRoot: $0, toKey: item.teamKey) }
         // A shift the reader chose on this device wins over the default.
         state.shift = Self.savedShift(for: item.id) ?? state.defaultShift ?? 0
         state.isReady = true
@@ -804,6 +877,55 @@ final class ScoreStandModel: ObservableObject {
         }
     }
 
+    /// Every song in the set, each in the key it is shown in, as ONE PDF
+    /// in 순서 order — for printing the whole 콘티, or sending it ahead.
+    ///
+    /// A song not opened yet is read first, so this can take a few seconds
+    /// a song on a set nobody has paged through. A song whose file cannot
+    /// be read is left out and named, rather than failing the whole file.
+    func exportSet(_ items: [ScoreStandItem], title: String?) async {
+        isExporting = true
+        defer { isExporting = false }
+        let combined = PDFDocument()
+        var skipped: [String] = []
+        for item in items {
+            await load(item)
+            // Another load of the same song may be running — the one the
+            // stand started for the page on screen. Wait for it.
+            var waited = 0
+            while states[item.id]?.isReady != true, states[item.id]?.failure == nil, waited < 600 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+            guard let data = await pdf(item), let document = PDFDocument(data: data) else {
+                skipped.append(item.song.isEmpty ? item.attachment.name : item.song)
+                continue
+            }
+            for index in 0..<document.pageCount {
+                if let page = document.page(at: index) { combined.insert(page, at: combined.pageCount) }
+            }
+        }
+        guard combined.pageCount > 0, let data = combined.dataRepresentation() else {
+            note = "PDF를 만들지 못했습니다."
+            return
+        }
+        let base = (title?.isEmpty == false ? title! : "콘티").replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(base) 악보.pdf")
+        do {
+            try data.write(to: url, options: .atomic)
+            if skipped.isEmpty {
+                export = ExportFile(url: url)
+            } else {
+                // An alert and the share sheet cannot both be up: say what
+                // is missing first, and share when it is dismissed.
+                pendingExport = ExportFile(url: url)
+                note = "열 수 없는 악보는 빠졌습니다: \(skipped.joined(separator: ", "))"
+            }
+        } catch {
+            note = "PDF를 저장하지 못했습니다."
+        }
+    }
+
     func upload(_ item: ScoreStandItem,
                 using send: (ScoreStandItem, Data, String) async -> String?) async {
         isUploading = true
@@ -865,6 +987,8 @@ enum ScoreEditStore {
         var pages: [[ScoreChord]]
         /// Changed by hand, as opposed to only recognised.
         var edited: Bool
+        /// ScoreRecognition.version that read it; nil before versions.
+        var version: Int?
     }
 
     private static var folder: URL? {
@@ -883,12 +1007,13 @@ enum ScoreEditStore {
         guard let url = file(id, in: folder), let data = try? Data(contentsOf: url) else { return nil }
         if let saved = try? JSONDecoder().decode(Saved.self, from: data) { return saved }
         // The first format held only hand-edited pages.
-        return (try? JSONDecoder().decode([[ScoreChord]].self, from: data)).map { Saved(pages: $0, edited: true) }
+        return (try? JSONDecoder().decode([[ScoreChord]].self, from: data)).map { Saved(pages: $0, edited: true, version: nil) }
     }
 
     static func save(_ pages: [[ScoreChord]], edited: Bool, for id: String) {
         guard let url = file(id, in: folder),
-              let data = try? JSONEncoder().encode(Saved(pages: pages, edited: edited)) else { return }
+              let data = try? JSONEncoder().encode(Saved(pages: pages, edited: edited,
+                                                         version: ScoreRecognition.version)) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
