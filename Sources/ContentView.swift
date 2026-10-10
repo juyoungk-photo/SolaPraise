@@ -65,11 +65,12 @@ struct ContentView: View {
     /// iPad's own bar both read this, so the two cannot drift apart —
     /// a bar listing a tab that is not there would select nothing.
     private var tabItems: [TabItem] {
+        // 홈 › 말씀 › 찬양 › 예배 › 작업실 › 보관함: what is used each day
+        // first, the archive last.
         var items: [TabItem] = [
             TabItem(tag: .home, title: "홈", symbol: "square.grid.2x2"),
             TabItem(tag: .word, title: "말씀", symbol: "book.closed"),
-            TabItem(tag: .worship, title: "찬양", symbol: "music.note"),
-            TabItem(tag: .library, title: "보관함", symbol: "list.bullet.rectangle")
+            TabItem(tag: .worship, title: "찬양", symbol: "music.note")
         ]
         if teamAccess != .unconfigured, teamAccess != .signInRequired {
             items.append(TabItem(tag: .team, title: "예배",
@@ -79,6 +80,7 @@ struct ContentView: View {
             items.append(TabItem(tag: .studio, title: "작업실",
                                  symbol: "recordingtape"))
         }
+        items.append(TabItem(tag: .library, title: "보관함", symbol: "list.bullet.rectangle"))
         return items
     }
 

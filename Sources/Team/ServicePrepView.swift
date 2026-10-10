@@ -1089,6 +1089,7 @@ struct ServicePrepView: View {
     private func servicePDFRow(_ service: TeamService) -> some View {
         let built = team.attachments(for: service).first(where: \.belongsToService)
         let pieces = team.attachments(for: service).filter { !$0.belongsToService }
+        let serviceFiles = team.attachments(for: service).filter(\.belongsToService)
 
         // Shown as soon as the service has songs, not only once something
         // has been attached. Gating it on attachments made the one line
@@ -1109,11 +1110,19 @@ struct ServicePrepView: View {
                 }
 
                 // Every chart in the order it is played, each in the key
-                // the 순서 gives it — the set, on one stand.
-                if !pieces.isEmpty {
+                // the 순서 gives it — the set, on one stand. A 콘티 file a
+                // teammate made whole opens there too.
+                if !standItems(service).isEmpty {
                     Button { standService = service } label: {
                         Label("악보 연주모드", systemImage: "music.note.list")
                     }
+                }
+
+                // A 콘티 already made — by a teammate, in another app, as
+                // one PDF or a photo — goes on the service, not on a song.
+                AttachmentMenu(service: service, song: "", sheetId: sheetId) {
+                    Label(serviceFiles.isEmpty ? "콘티 파일 올리기" : "콘티 파일 \(serviceFiles.count)개",
+                          systemImage: serviceFiles.isEmpty ? "square.and.arrow.up.on.square" : "doc.on.doc")
                 }
 
                 if let built {
@@ -1139,13 +1148,20 @@ struct ServicePrepView: View {
         let order = plan.enumerated().reduce(into: [String: Int]()) { out, pair in
             out[pair.element.title] = pair.offset
         }
-        return team.attachments(for: service)
+        let songs = team.attachments(for: service)
             .filter { !$0.belongsToService }
             .sorted { (order[$0.song] ?? .max) < (order[$1.song] ?? .max) }
             .map { item in
                 ScoreStandItem(attachment: item, song: item.song,
                                teamKey: plan.first { $0.title == item.song }?.key)
             }
+        // Charts on the songs, when there are any. Otherwise the 콘티 as a
+        // teammate uploaded it whole: shown as it is, in its own key —
+        // it holds many songs, and no one 순서 key applies to all of them.
+        guard songs.isEmpty else { return songs }
+        return team.attachments(for: service).filter(\.belongsToService).map {
+            ScoreStandItem(attachment: $0, song: ($0.name as NSString).deletingPathExtension, teamKey: nil)
+        }
     }
 
     private func buildServicePDF(_ service: TeamService) async {

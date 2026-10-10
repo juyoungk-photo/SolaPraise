@@ -51,6 +51,7 @@ struct ScoreStandView: View {
     @State private var chordAction: ChordAction?
     @State private var entry: ChordEntry?
     @State private var choosingPage = false
+    @State private var confirmingReread = false
     /// Where an added chord starts: near the top left of the page, clear of
     /// the title, ready to be dragged.
     static let addPoint = CGPoint(x: 0.2, y: 0.08)
@@ -84,14 +85,11 @@ struct ScoreStandView: View {
             if let item {
                 VStack(spacing: 0) {
                     header(item)
-                    if showsChart && !editing { chart(item) } else { pages(item) }
+                    songPager
                     controls(item)
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
-                .task(id: chartKey(item)) {
-                    if showsChart { await model.loadChart(item) }
-                }
                 #if DEBUG
                 .task {
                     if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle) }
@@ -148,6 +146,12 @@ struct ScoreStandView: View {
             Button("취소", role: .cancel) { chordAction = nil }
         } message: { _ in
             Text("코드가 아닌 글자를 잘못 읽었다면 지우세요. 지우면 원래 인쇄된 글자가 그대로 보입니다.")
+        }
+        .confirmationDialog("코드를 다시 읽을까요?", isPresented: $confirmingReread, titleVisibility: .visible) {
+            Button("다시 읽기 — 손으로 고친 것은 지워집니다", role: .destructive) {
+                if let item { Task { await model.resetEdits(item) } }
+            }
+            Button("취소", role: .cancel) {}
         }
         .confirmationDialog("어느 쪽에 넣을까요?", isPresented: $choosingPage, titleVisibility: .visible) {
             ForEach(0..<(item.flatMap { model.states[$0.id]?.pages.count } ?? 0), id: \.self) { page in
@@ -280,18 +284,6 @@ struct ScoreStandView: View {
             }
             // No page scroll while editing: a drag moves a chord.
             .scrollDisabled(editing)
-            // Swipe sideways between songs; vertical is the page scroll.
-            // Not while editing, where a sideways drag is a chord being moved.
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 50)
-                    .onEnded { value in
-                        guard !editing else { return }
-                        guard abs(value.translation.width) > abs(value.translation.height) * 1.5
-                        else { return }
-                        if value.translation.width < -60 { go(1) }
-                        else if value.translation.width > 60 { go(-1) }
-                    }
-            )
         } else if let failure = state?.failure {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -311,6 +303,46 @@ struct ScoreStandView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Songs side by side
+
+    /// Swipe left or right for the next or previous song.
+    ///
+    /// A real pager, not a drag gesture on the page: the drag sat inside
+    /// the page's own vertical scroll, which took the touch first, so the
+    /// swipe worked only now and then. Each song is a page of its own; the
+    /// next is read while the current one is on the stand, so turning to it
+    /// is immediate. While editing there is one song and no pager — a
+    /// sideways drag there moves a chord.
+    @ViewBuilder
+    private var songPager: some View {
+        if editing || items.count < 2, let item {
+            songContent(item)
+        } else {
+            TabView(selection: $index) {
+                ForEach(Array(items.enumerated()), id: \.offset) { position, song in
+                    songContent(song)
+                        .task { await model.load(song) }
+                        .tag(position)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .task(id: index) {
+                // The next song read ahead, so the swipe lands on it ready.
+                if items.indices.contains(index + 1) { await model.load(items[index + 1]) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func songContent(_ song: ScoreStandItem) -> some View {
+        if showsChart && !editing {
+            chart(song)
+                .task(id: chartKey(song)) { if showsChart { await model.loadChart(song) } }
+        } else {
+            pages(song)
         }
     }
 
@@ -487,11 +519,18 @@ struct ScoreStandView: View {
             }
             .accessibilityLabel("빠진 코드 넣기")
         }
-        if editing, state?.isEdited == true {
-            Button { Task { await model.resetEdits(item) } } label: {
-                pill(Text("되돌리기").font(.system(size: 13, weight: .semibold)), wide: true)
+        // Always offered while editing, not only after a hand edit: the
+        // reader improves, and a chart read by an older one can be read
+        // again on request. A chart corrected by hand asks first, since
+        // the corrections go.
+        if editing {
+            Button {
+                if state?.isEdited == true { confirmingReread = true }
+                else { Task { await model.resetEdits(item) } }
+            } label: {
+                pill(Text("다시 읽기").font(.system(size: 13, weight: .semibold)), wide: true)
             }
-            .accessibilityLabel("손으로 고친 것을 모두 지우고 다시 인식")
+            .accessibilityLabel("코드를 처음부터 다시 인식")
         }
 
         // One song, or the whole 콘티 as one file — to share, or keep in

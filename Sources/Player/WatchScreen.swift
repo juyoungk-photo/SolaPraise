@@ -97,6 +97,7 @@ struct WatchScreen: View {
     @Environment(\.modelContext) private var context
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
+    @AppStorage("word.series.direction") private var seriesDirection = DailySeries.Direction.off.rawValue
     @State private var leadSheet: SavedSong?
     /// A channel whose page is open, from tapping its name.
     @State private var channelPage: ChannelRef?
@@ -160,6 +161,9 @@ struct WatchScreen: View {
             logWatch(completed: true)
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
+            // 이어 듣기 is a run: the next episode starts on its own.
+            if !showsChordButton, seriesDirection != DailySeries.Direction.off.rawValue,
+               host.hasNext { host.onAdvance?() }
         }
         // A video the player can never show should stop being offered.
         //
@@ -420,7 +424,7 @@ struct WatchScreen: View {
 
             actionRow
 
-            if showsChordButton { searchSuggestionRow }
+            if showsChordButton { searchSuggestionRow } else { seriesRow }
 
             // Unfolds directly under the player the moment 코드 is pressed.
             //
@@ -468,6 +472,55 @@ struct WatchScreen: View {
     }
 
     // MARK: - Where this song leads
+
+    // MARK: - 이어 듣기
+
+    /// A daily episode — 모닝워십, 매일성경 — continues to the day before or
+    /// the day after, as chosen here and remembered. See DailySeries.
+    @ViewBuilder
+    private var seriesRow: some View {
+        if let current, seriesQueue(for: current, direction: .previous) != nil {
+            HStack(spacing: 10) {
+                Label("이어 듣기", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Picker("이어 듣기", selection: Binding(
+                    get: { seriesDirection },
+                    set: { seriesDirection = $0; applySeries(to: current) })) {
+                    Text("끔").tag(DailySeries.Direction.off.rawValue)
+                    Text("◀ 전날").tag(DailySeries.Direction.previous.rawValue)
+                    Text("다음날 ▶").tag(DailySeries.Direction.next.rawValue)
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            // Played alone — a hero card, a search result — it picks up the
+            // run once it is on.
+            .task(id: current.id) {
+                if host.queue.count == 1 { applySeries(to: current) }
+            }
+        }
+    }
+
+    private func seriesQueue(for video: PlayableVideo,
+                             direction: DailySeries.Direction) -> (videos: [CachedVideo], start: Int)? {
+        let id = video.id
+        guard let own = (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.videoId == id })))?.first,
+              let channel = own.channelId else { return nil }
+        let siblings = (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.channelId == channel }))) ?? []
+        return DailySeries.queue(for: own, among: siblings, direction: direction,
+                                 title: \.title, channel: \.channelId, id: \.videoId)
+    }
+
+    private func applySeries(to video: PlayableVideo) {
+        guard let direction = DailySeries.Direction(rawValue: seriesDirection), direction != .off,
+              let run = seriesQueue(for: video, direction: direction) else { return }
+        host.play(queue: run.videos.map(PlayableVideo.init(cached:)), startIndex: run.start, purpose: .word)
+    }
 
     /// 다른 버전 · 찬송가 · 중심 가사 · 첫소절 · 말씀 — see SongSearchSuggestions.
     ///

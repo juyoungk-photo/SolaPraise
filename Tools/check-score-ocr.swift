@@ -378,6 +378,13 @@ struct CheckScoreOCR {
         if let first = chart.first {
             check("chart: a verse reads whole, its number and dashes gone",
                   verseText(first, 0) == "주님앞에나아가오늘도함께하시네", "got 「\(verseText(first, 0))」")
+            // 코드표 lays a staff out as syllables in columns: a verse must
+            // read whole across them, and every chord sit on a column.
+            let cellsLine = first.bars.flatMap(\.cells)
+            let sung = cellsLine.map { $0.syllables.first ?? "" }.joined()
+            check("chart: syllable columns read the verse whole", sung == "주님앞에나아가오늘도함께하시네", "got 「\(sung)」")
+            check("chart: every chord of the line sits on a column",
+                  cellsLine.compactMap(\.chord).count == first.bars.flatMap(\.segments).compactMap(\.chord).count)
             check("chart: the fourth verse is its own line",
                   first.verses == 4 && verseText(first, 3) == "주님앞에나아가오늘도함께하시네", "got 「\(verseText(first, 3))」")
         }

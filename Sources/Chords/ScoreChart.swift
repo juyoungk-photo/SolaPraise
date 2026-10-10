@@ -51,10 +51,21 @@ enum ScoreChart {
         var lyrics: [String]
     }
 
+    /// One sung position — a syllable column — with the chord that starts
+    /// there, if any. The same column across verses holds each verse's
+    /// syllable for that note, as in a hymnal.
+    struct Cell: Equatable {
+        var chord: UUID?
+        /// One per verse line, "" where a verse has none here.
+        var syllables: [String]
+    }
+
     struct Bar: Equatable {
         var segments: [Segment]
         var repeatStart = false
         var repeatEnd = false
+        /// The bar note by note, for laying lyrics out as lines.
+        var cells: [Cell] = []
 
         var hasChord: Bool { segments.contains { $0.chord != nil } }
     }
@@ -124,7 +135,8 @@ enum ScoreChart {
                 }
                 bars.append(Bar(segments: segments(chords: inBar, words: barWords),
                                 repeatStart: startRepeat.contains(b),
-                                repeatEnd: endRepeat.contains(b)))
+                                repeatEnd: endRepeat.contains(b),
+                                cells: cells(chords: inBar, words: barWords)))
             }
             // The stretch before the first barline that holds only the clef,
             // key and time — no chord, no word, shorter than a bar — is not
@@ -138,7 +150,8 @@ enum ScoreChart {
                 }
             }
             if bars.isEmpty {
-                bars = [Bar(segments: segments(chords: mine, words: lines))]
+                bars = [Bar(segments: segments(chords: mine, words: lines),
+                            cells: cells(chords: mine, words: lines))]
             }
             return System(bars: bars, verses: lines.count)
         }
@@ -161,6 +174,55 @@ enum ScoreChart {
             out.append(Segment(chord: chord.id, lyrics: mine.map(joined)))
         }
         return out
+    }
+
+    /// A bar's syllables in columns, verse lines aligned by where they
+    /// were printed, and each chord on the syllable it starts over. A chord
+    /// with no syllable near it — an intro, a held note — is a column of
+    /// its own.
+    static func cells(chords: [ChordMark], words: [[Word]]) -> [Cell] {
+        let verses = words.count
+        struct Column { var minX: CGFloat; var maxX: CGFloat; var syllables: [String]; var chord: UUID? }
+        var columns: [Column] = []
+        for (verse, line) in words.enumerated() {
+            for (index, word) in line.enumerated() {
+                var text = word.text
+                if index == 0, let number = text.range(of: #"^\d+\."#, options: .regularExpression) {
+                    text.removeSubrange(number)
+                }
+                text = text.filter { !"—–-_~".contains($0) }
+                guard !text.isEmpty else { continue }
+                let mid = word.box.midX
+                if let match = columns.firstIndex(where: { column in
+                    column.syllables[verse].isEmpty
+                        && abs((column.minX + column.maxX) / 2 - mid) < max(column.maxX - column.minX, word.box.width) * 0.6
+                }) {
+                    columns[match].syllables[verse] = text
+                    columns[match].minX = min(columns[match].minX, word.box.minX)
+                    columns[match].maxX = max(columns[match].maxX, word.box.maxX)
+                } else {
+                    var syllables = [String](repeating: "", count: verses)
+                    syllables[verse] = text
+                    columns.append(Column(minX: word.box.minX, maxX: word.box.maxX, syllables: syllables))
+                }
+            }
+        }
+        columns.sort { $0.minX < $1.minX }
+        let typical = columns.map { $0.maxX - $0.minX }.sorted().dropFirst(columns.count / 2).first ?? 0.02
+        for chord in chords.sorted(by: { $0.box.minX < $1.box.minX }) {
+            let x = chord.box.minX
+            let nearest = columns.indices
+                .filter { columns[$0].chord == nil && columns[$0].maxX > x - typical * 0.3 }
+                .min { abs(columns[$0].minX - x) < abs(columns[$1].minX - x) }
+            if let nearest, abs(columns[nearest].minX - x) < typical * 1.6 {
+                columns[nearest].chord = chord.id
+            } else {
+                let at = columns.firstIndex { $0.minX > x } ?? columns.count
+                columns.insert(Column(minX: x, maxX: chord.box.maxX,
+                                      syllables: [String](repeating: "", count: verses), chord: chord.id), at: at)
+            }
+        }
+        return columns.map { Cell(chord: $0.chord, syllables: $0.syllables) }
     }
 
     // MARK: - Barlines
@@ -351,17 +413,35 @@ enum ScoreChart {
                 let tops = chords.filter { $0.midY > staff.maxY && $0.midY < next.minY }.map(\.minY).sorted()
                 if !tops.isEmpty { tight = min(tight, tops[tops.count / 2] - gap * 0.1) }
             }
-            for (pass, bottom) in [(1, generous), (2, tight)] {
-                guard bottom > top + gap else { continue }
-                let strip = CGRect(x: 0, y: top, width: 1, height: bottom - top)
-                let pixels = CGRect(x: 0, y: strip.minY * CGFloat(image.height), width: CGFloat(image.width),
-                                    height: strip.height * CGFloat(image.height)).integral
-                guard let crop = image.cropping(to: pixels),
-                      let large = ScoreRecognition.enlarged(crop, by: 2) else { continue }
-                reads[pass] += readWords(large).map { word in
+            // Pass 1, the strip whole; pass 2, each line of it on its own.
+            // A clean block of four verses under a hymn's second staff came
+            // back from the whole strip as 「1111」; cut at the blank rows
+            // between lines, every line read.
+            guard generous > top + gap else { continue }
+            let strip = CGRect(x: 0, y: top, width: 1, height: generous - top)
+            let pixels = CGRect(x: 0, y: strip.minY * CGFloat(image.height), width: CGFloat(image.width),
+                                height: strip.height * CGFloat(image.height)).integral
+            guard let crop = image.cropping(to: pixels) else { continue }
+            if let large = ScoreRecognition.enlarged(crop, by: 2) {
+                reads[1] += readWords(large).map { word in
                     Word(text: word.text,
                          box: CGRect(x: word.box.minX, y: strip.minY + word.box.minY * strip.height,
                                      width: word.box.width, height: word.box.height * strip.height))
+                }
+            }
+            let tightRows = Int((tight - top) * CGFloat(image.height))
+            for line in textLines(in: crop) where line.lowerBound < max(tightRows, 1) {
+                let pad = max(2, line.count / 4)
+                let y0 = max(0, line.lowerBound - pad), y1 = min(crop.height, line.upperBound + pad)
+                guard y1 - y0 > 4,
+                      let piece = crop.cropping(to: CGRect(x: 0, y: y0, width: crop.width, height: y1 - y0)),
+                      let large = ScoreRecognition.enlarged(piece, by: 2) else { continue }
+                let lineTop = strip.minY + CGFloat(y0) / CGFloat(image.height)
+                let lineHeight = CGFloat(y1 - y0) / CGFloat(image.height)
+                reads[2] += readWords(large).map { word in
+                    Word(text: word.text,
+                         box: CGRect(x: word.box.minX, y: lineTop + word.box.minY * lineHeight,
+                                     width: word.box.width, height: word.box.height * lineHeight))
                 }
             }
         }
@@ -414,6 +494,37 @@ enum ScoreChart {
             let text = slot.texts.keys.sorted().compactMap { slot.texts[$0] }.first { counts[$0] == best } ?? ""
             return Word(text: text, box: slot.box)
         }
+    }
+
+    /// Rows of an image holding a line of text: runs of inked rows between
+    /// blank ones, at least a few pixels tall.
+    static func textLines(in image: CGImage) -> [Range<Int>] {
+        guard let gray = ScoreRecognition.grayscale(image) else { return [] }
+        let w = image.width, h = image.height
+        var inked = [Bool](repeating: false, count: h)
+        for y in 0..<h {
+            var count = 0
+            for x in 0..<w where gray[y * w + x] < 160 { count += 1; if count > 2 { break } }
+            inked[y] = count > 2
+        }
+        var lines: [Range<Int>] = []
+        var start: Int?
+        var blank = 0
+        for y in 0...h {
+            if y < h, inked[y] {
+                if start == nil { start = y }
+                blank = 0
+            } else if let s = start {
+                blank += 1
+                // A row or two of white inside a line is the gap in 「ㅡ」.
+                if blank > 2 || y == h {
+                    let end = y - blank + 1
+                    if end - s >= 6 { lines.append(s..<end) }
+                    start = nil; blank = 0
+                }
+            }
+        }
+        return lines
     }
 
     /// Whether a word is a chord symbol rather than a lyric.

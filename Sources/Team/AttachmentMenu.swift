@@ -49,22 +49,18 @@ struct AttachmentMenu<Content: View>: View {
             if !existing.isEmpty {
                 Section("첨부된 파일") {
                     ForEach(existing) { item in
-                        // A song's chart opens on the stand, in the team's
-                        // key. The service's combined PDF is a document to
-                        // read, and opens as one.
+                        // On the stand: a song's chart in the team's key, a
+                        // whole 콘티 as it was made.
                         Button {
-                            if item.belongsToService { openURL(item.url) }
-                            else { stand = standItem(item) }
+                            stand = standItem(item)
                         } label: {
                             Label(item.name, systemImage: item.belongsToService
                                   ? "doc" : "music.note.list")
                         }
                     }
-                    if !song.isEmpty {
-                        ForEach(existing) { item in
-                            Button { openURL(item.url) } label: {
-                                Label("\(item.name) 원본 링크", systemImage: "arrow.up.right.square")
-                            }
+                    ForEach(existing) { item in
+                        Button { openURL(item.url) } label: {
+                            Label("\(item.name) 원본 링크", systemImage: "arrow.up.right.square")
                         }
                     }
                 }
@@ -147,8 +143,11 @@ struct AttachmentMenu<Content: View>: View {
     // MARK: - Stand
 
     private func standItem(_ item: Attachment) -> ScoreStandItem {
-        ScoreStandItem(attachment: item, song: song,
-                       teamKey: team.plan(for: service).first { $0.title == song }?.key)
+        guard !song.isEmpty else {
+            return ScoreStandItem(attachment: item, song: (item.name as NSString).deletingPathExtension, teamKey: nil)
+        }
+        return ScoreStandItem(attachment: item, song: song,
+                              teamKey: team.plan(for: service).first { $0.title == song }?.key)
     }
 
     private var canUpload: Bool { team.canAttach && sheetId != nil }
