@@ -210,7 +210,7 @@ struct WorshipFeedView: View {
                                 .onTapGesture { play(video, in: pinnedVideos) }
                                 .contextMenu {
                                     pinToggle(video)
-                                    SheetMusicMenu(title: video.title) {
+                                    SheetMusicMenu(title: video.title, channel: video.channelTitle) {
                                         Label("공식 악보 찾기",
                                               systemImage: "doc.text.magnifyingglass")
                                     }

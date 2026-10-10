@@ -2,7 +2,9 @@
 //  SheetMusicMenu.swift
 //  SolaPraise
 //
-//  The 악보 찾기 menu, shared by every screen that names a song.
+//  The 악보 찾기 menu, shared by every screen that names a song — and
+//  shaped by the song: its team's own links and store first, then searches
+//  that carry the title and the team rather than the raw upload title.
 //
 
 import SwiftUI
@@ -12,24 +14,52 @@ import SwiftUI
 /// the first.
 struct SheetMusicLinks: View {
     let title: String
+    /// The channel the song came from, which names its team.
+    var channel: String? = nil
     var published: [SheetMusicLink] = []
 
     @Environment(\.openURL) private var openURL
 
     var body: some View {
+        let plan = SheetMusicSources.plan(title: title, channel: channel)
         if !published.isEmpty {
-            Section("이 팀이 올린 링크") {
+            Section("이 팀이 올린 악보") {
                 ForEach(published) { link in
                     Button(link.label) { openURL(link.url) }
                 }
             }
         }
-        Section("악보 검색") {
-            ForEach(SheetMusicSources.all) { source in
+        if let publisher = plan.publisher {
+            Section("\(publisher.name) 공식 악보") {
                 Button {
-                    if let url = source.url(for: title) { openURL(url) }
+                    if let url = plan.url(for: publisher.store) { openURL(url) }
                 } label: {
-                    Text(source.name)
+                    Label(publisher.store.name, systemImage: "checkmark.seal")
+                }
+            }
+        }
+        // The big catalogues, searched on their own pages — English title
+        // when the upload carries one.
+        Section("악보 스토어") {
+            ForEach(SheetMusicSources.stores) { store in
+                Button {
+                    if let url = plan.url(for: store) { openURL(url) }
+                } label: {
+                    Label(store.name, systemImage: "books.vertical")
+                }
+            }
+        }
+        Section("「\(plan.song)」 \(plan.context)") {
+            Button {
+                if let url = plan.searchURL { openURL(url) }
+            } label: {
+                Label("악보 검색", systemImage: "magnifyingglass")
+            }
+            ForEach(SheetMusicSources.shops) { shop in
+                Button {
+                    if let url = plan.url(for: shop) { openURL(url) }
+                } label: {
+                    Text(shop.name)
                 }
             }
         }
@@ -38,30 +68,14 @@ struct SheetMusicLinks: View {
 
 struct SheetMusicMenu<Label: View>: View {
     let title: String
+    var channel: String? = nil
     /// Links the channel published itself, which outrank any search.
     var published: [SheetMusicLink] = []
     @ViewBuilder var label: Label
 
-    @Environment(\.openURL) private var openURL
-
     var body: some View {
         Menu {
-            if !published.isEmpty {
-                Section("이 팀이 올린 링크") {
-                    ForEach(published) { link in
-                        Button(link.label) { openURL(link.url) }
-                    }
-                }
-            }
-            Section(published.isEmpty ? "" : "검색") {
-                ForEach(SheetMusicSources.all) { source in
-                    Button {
-                        if let url = source.url(for: title) { openURL(url) }
-                    } label: {
-                        Text(source.name)
-                    }
-                }
-            }
+            SheetMusicLinks(title: title, channel: channel, published: published)
         } label: {
             label
         }

@@ -312,7 +312,7 @@ struct WatchScreen: View {
                             // and the chart you want is usually for the one
                             // you are about to rehearse rather than the one
                             // currently sounding.
-                            SheetMusicMenu(title: item.title) {
+                            SheetMusicMenu(title: item.title, channel: item.channelTitle) {
                                 Image(systemName: "doc.text.magnifyingglass")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -699,7 +699,7 @@ struct WatchScreen: View {
                 }
                 .buttonStyle(.plain)
 
-                SheetMusicMenu(title: current.title, published: sheetLinks) {
+                SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks) {
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text.magnifyingglass")
                         Text(sheetLinks.isEmpty ? "공식 악보 찾기" : "공식 악보")

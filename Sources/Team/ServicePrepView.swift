@@ -970,6 +970,18 @@ struct ServicePrepView: View {
                     if let key = item.key {
                         Text(key).font(.caption.weight(.semibold)).foregroundStyle(.tint)
                     }
+                    // The key the attached chart was last shown in on the
+                    // stand. Orange when it is not the 순서's key, so a chart
+                    // left in the wrong key is caught before Sunday.
+                    if item.kind == .song, let chartKey = chartKey(for: item, in: service) {
+                        let matches = item.key.flatMap(ScoreRecognition.keyRoot)
+                            == ScoreRecognition.keyRoot(chartKey.replacingOccurrences(of: "♭", with: "b")
+                                .replacingOccurrences(of: "♯", with: "#"))
+                        Label("악보 \(chartKey)", systemImage: "music.note.list")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(matches || item.key == nil ? Color.secondary : Color.orange)
+                            .accessibilityLabel("악보 키 \(chartKey)")
+                    }
                     if let person = item.person {
                         Text(person).font(.caption2).foregroundStyle(.secondary)
                     }
@@ -1002,7 +1014,7 @@ struct ServicePrepView: View {
                             Label("이 곡 분석하기", systemImage: "waveform.badge.magnifyingglass")
                         }
                     }
-                    SheetMusicLinks(title: item.title)
+                    SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId))
                 } label: {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1045,6 +1057,20 @@ struct ServicePrepView: View {
             }
         }
         .padding(.vertical, 3)
+    }
+
+    /// The channel a 순서 song's video came from, when the app has seen it —
+    /// it names the team, which decides the 악보 menu's official store.
+    private func channelTitle(forVideo id: String?) -> String? {
+        guard let id else { return nil }
+        let descriptor = FetchDescriptor<CachedVideo>(predicate: #Predicate { $0.videoId == id })
+        return (try? modelContext.fetch(descriptor))?.first?.channelTitle
+    }
+
+    /// The key this song's attached chart was last shown in on the stand.
+    private func chartKey(for item: PlanItem, in service: TeamService) -> String? {
+        team.attachments(for: service, song: item.title)
+            .lazy.compactMap { ScoreKeyStore.key(for: $0.fileId) }.first
     }
 
     /// One document for the Sunday: the 순서, then every 악보 behind it.

@@ -34,6 +34,8 @@ struct ReorderPlanSheet: View {
     }
 
     @State private var lines: [Line] = []
+    /// Swiped away. Removed from the sheet only on 저장, like the order.
+    @State private var removed: [PlanItem] = []
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -56,8 +58,15 @@ struct ReorderPlanSheet: View {
                         }
                     }
                     .onMove { from, to in lines.move(fromOffsets: from, toOffset: to) }
+                    // Swipe left to remove — the same gesture as the 콘티.
+                    .onDelete { offsets in
+                        removed += offsets.map { lines[$0].item }
+                        lines.remove(atOffsets: offsets)
+                    }
                 } footer: {
-                    Text("끌어서 순서를 바꾼 뒤 저장하세요. 저장하기 전까지는 시트가 바뀌지 않습니다.")
+                    Text(removed.isEmpty
+                         ? "끌어서 순서를 바꾸고, 왼쪽으로 밀어 지우세요. 저장하기 전까지는 시트가 바뀌지 않습니다."
+                         : "\(removed.count)개를 지웁니다. 저장하기 전까지는 시트가 바뀌지 않습니다.")
                 }
 
                 if let errorMessage {
@@ -91,7 +100,7 @@ struct ReorderPlanSheet: View {
     }
 
     private var changed: Bool {
-        lines.map(\.id) != Array(0..<lines.count)
+        !removed.isEmpty || lines.map(\.id) != Array(0..<lines.count)
     }
 
     private func save() {
@@ -99,7 +108,19 @@ struct ReorderPlanSheet: View {
         isSaving = true
         errorMessage = nil
         Task {
-            let failure = await team.reorder(lines.map(\.item), in: service, sheetId: sheetId)
+            // Removals first, each checked against its row (see
+            // removePlanItem), then the rest renumbered 1…n — which closes
+            // the gaps the removals leave.
+            for item in removed {
+                if let failure = await team.removePlanItem(item, from: service, sheetId: sheetId) {
+                    isSaving = false
+                    errorMessage = failure
+                    return
+                }
+            }
+            removed = []
+            let failure = lines.isEmpty ? nil
+                : await team.reorder(lines.map(\.item), in: service, sheetId: sheetId)
             isSaving = false
             if let failure { errorMessage = failure } else { dismiss() }
         }
