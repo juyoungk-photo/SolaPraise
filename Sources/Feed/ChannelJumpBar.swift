@@ -193,9 +193,9 @@ struct PlaylistPinButton: View {
     var body: some View {
         Button {
             playlist.isPinned.toggle()
-            if playlist.isPinned {
-                playlist.purposeRaw = purpose.rawValue
-            }
+            // Unpinned means not shown: filed on no feed, so it does not
+            // drop from under its channel into the 고정됨 list at the top.
+            playlist.purposeRaw = playlist.isPinned ? purpose.rawValue : nil
             save()
         } label: {
             Label(

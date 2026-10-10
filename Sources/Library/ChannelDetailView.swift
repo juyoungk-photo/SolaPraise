@@ -311,19 +311,36 @@ struct ChannelPlaylistsView: View {
         List {
             Section {
                 ForEach(shown) { playlist in
-                    Button { onSelect(playlist) } label: { ChannelPlaylistRow(playlist: playlist) }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
-                                onPinChanged?()
-                            }
+                    HStack(spacing: 10) {
+                        Button { onSelect(playlist) } label: { ChannelPlaylistRow(playlist: playlist) }
+                            .buttonStyle(.plain)
+                        // In plain sight: a pin hidden in a long-press menu
+                        // was a feature nobody found.
+                        Button {
+                            togglePin(playlist)
+                        } label: {
+                            Image(systemName: playlist.isPinned ? "pin.fill" : "pin")
+                                .font(.body)
+                                .foregroundStyle(playlist.isPinned ? Color.accentColor : Color.secondary)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(playlist.isPinned ? "고정 해제" : "고정")
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button { togglePin(playlist) } label: {
+                            Label(playlist.isPinned ? "고정 해제" : "고정",
+                                  systemImage: playlist.isPinned ? "pin.slash" : "pin")
+                        }
+                        .tint(playlist.isPinned ? .gray : .accentColor)
+                    }
                 }
             } footer: {
                 if shown.isEmpty {
                     Text("검색과 일치하는 재생목록이 없습니다.")
                 } else {
-                    Text("^[\(shown.count) playlist](inflect: true)")
+                    Text("고정한 재생목록만 \(channel.purpose.title) 탭의 이 채널 아래에 보입니다. · ^[\(shown.count) playlist](inflect: true)")
                 }
             }
         }
@@ -335,5 +352,12 @@ struct ChannelPlaylistsView: View {
         )
         .navigationTitle(channel.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func togglePin(_ playlist: CachedPlaylist) {
+        playlist.isPinned.toggle()
+        // As PlaylistPinButton: unpinned is shown nowhere.
+        playlist.purposeRaw = playlist.isPinned ? channel.purpose.rawValue : nil
+        onPinChanged?()
     }
 }

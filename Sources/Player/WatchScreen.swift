@@ -27,6 +27,10 @@ struct PlayableVideo: Identifiable, Hashable {
     /// Which channel this came from, so the player can tell a 찬양 upload from
     /// a 말씀 one without guessing from the title.
     let channelId: String?
+    /// Which tab it was started from, when that says what it is. A 말씀
+    /// search result from a channel nobody filed is still 말씀, and gets the
+    /// reduced player; see WatchScreen.isWorship.
+    var purpose: Purpose?
 
     init(id: String, title: String, channelTitle: String? = nil,
          durationSeconds: Int? = nil, publishedAt: Date? = nil, viewCount: Int? = nil,
@@ -312,25 +316,27 @@ struct WatchScreen: View {
                             // and the chart you want is usually for the one
                             // you are about to rehearse rather than the one
                             // currently sounding.
-                            SheetMusicMenu(title: item.title, channel: item.channelTitle) {
-                                Image(systemName: "doc.text.magnifyingglass")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 36, height: 40)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            if isWorship(item) {
+                                SheetMusicMenu(title: item.title, channel: item.channelTitle) {
+                                    Image(systemName: "doc.text.magnifyingglass")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 36, height: 40)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
 
-                            AudioSourceMenu(title: item.title,
-                                            seconds: item.durationSeconds,
-                                            artist: item.channelTitle) {
-                                Image(systemName: "waveform.badge.magnifyingglass")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 36, height: 40)
-                                    .contentShape(Rectangle())
+                                AudioSourceMenu(title: item.title,
+                                                seconds: item.durationSeconds,
+                                                artist: item.channelTitle) {
+                                    Image(systemName: "waveform.badge.magnifyingglass")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 36, height: 40)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 5)
@@ -442,13 +448,20 @@ struct WatchScreen: View {
         .overlay(alignment: .bottom) { Divider() }
     }
 
-    /// 코드 detection is offered for 찬양 only.
+    /// 찬양 gets the whole player — 코드, 음원, 악보 and the search row of
+    /// 다른 버전 · 중심 가사 · 첫소절 — wherever it was started from: the 콘티,
+    /// the 찬양 tab, its search, 홈. 말씀 and 교제 get the reduced one.
     ///
-    /// Unknown channels — a result from a search across all of YouTube — get
-    /// the button, since that is where songs come from. A channel you have
-    /// filed under 말씀 or 교제 does not.
-    private var showsChordButton: Bool {
-        guard let channelId = current?.channelId else { return true }
+    /// Where playback started decides first, then the channel's filing.
+    /// Unknown channels — a search across all of YouTube from 홈 — are 찬양,
+    /// since that is where songs come from.
+    private var showsChordButton: Bool { isWorship(current) }
+
+    /// The same rule for any video — the one playing, or a row in the
+    /// queue, whose 악보 and 음원 buttons follow it too.
+    private func isWorship(_ video: PlayableVideo?) -> Bool {
+        if let purpose = video?.purpose { return purpose == .worship }
+        guard let channelId = video?.channelId else { return true }
         guard let channel = channels.first(where: { $0.youtubeChannelId == channelId })
         else { return true }
         return channel.purpose == .worship
@@ -463,37 +476,51 @@ struct WatchScreen: View {
     @ViewBuilder
     private var searchSuggestionRow: some View {
         if let current {
-            let suggestions = SongSearchSuggestions.make(
-                title: current.title, description: descriptionForSuggestions,
-                channel: current.channelTitle)
-            if !suggestions.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        ForEach(suggestions) { suggestion in
-                            Button {
-                                searching = SearchRequest(query: suggestion.query)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(suggestion.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(suggestion.label)
-                                        .lineLimit(1)
-                                }
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Capsule().fill(Color(.secondarySystemBackground)))
+            // A zero-height anchor, so the task runs even while there are no
+            // chips — an empty `if` is no view, and a task on it never runs.
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 0)
+                suggestionChips(for: current)
+            }
+                // Outside the chips: a video not in the cache — every search
+                // result — has no description until this fetches it, and
+                // with the task inside, an empty row never asked. That is
+                // why the 콘티 player had the row and the search player not.
+                .task(id: current.id) { await loadDescriptionIfNeeded() }
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionChips(for current: PlayableVideo) -> some View {
+        let suggestions = SongSearchSuggestions.make(
+            title: current.title, description: descriptionForSuggestions,
+            channel: current.channelTitle)
+        if !suggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(suggestions) { suggestion in
+                        Button {
+                            searching = SearchRequest(query: suggestion.query)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(suggestion.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(suggestion.label)
+                                    .lineLimit(1)
                             }
-                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color(.secondarySystemBackground)))
                         }
+                        .buttonStyle(.plain)
                     }
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                .task(id: current.id) { await loadDescriptionIfNeeded() }
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
     }
 

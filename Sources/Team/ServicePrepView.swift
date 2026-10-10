@@ -828,7 +828,8 @@ struct ServicePrepView: View {
                             queue: songs.compactMap { item in
                                 item.videoId.map { PlayableVideo(id: $0, title: item.title) }
                             },
-                            startIndex: 0
+                            startIndex: 0,
+                            purpose: .worship
                         )
                     } label: {
                         Label("찬양만 이어 듣기", systemImage: "play.fill")
@@ -1049,7 +1050,8 @@ struct ServicePrepView: View {
 
             if let id = item.videoId {
                 Button {
-                    host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
+                    host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0,
+                              purpose: item.kind == .song ? .worship : nil)
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
                 }

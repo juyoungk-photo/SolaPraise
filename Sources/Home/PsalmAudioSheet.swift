@@ -121,7 +121,7 @@ struct PsalmAudioSheet: View {
     private func foundSection(_ video: CachedVideo) -> some View {
         Section {
             Button {
-                host.play(queue: [PlayableVideo(cached: video)], startIndex: 0)
+                host.play(queue: [PlayableVideo(cached: video)], startIndex: 0, purpose: .word)
             } label: {
                 HStack(spacing: 10) {
                     VideoMetaRow(video: PlayableVideo(cached: video))

@@ -5,10 +5,13 @@
 //  Purpose 1: worship music — scoped feed, budgeted search, curation.
 //
 //  Two search modes, deliberately unequal:
-//    • Typing filters what is already cached — free, instant, no network.
-//    • "Search all of YouTube" is an explicit second tap costing 100 units,
-//      with the remaining budget shown on the button itself. Feeling that
-//      cost is the point; it is what stops idle searching.
+//    • Typing filters what is already cached — your channels and saved
+//      topics — free, instant, no network.
+//    • YouTube 전체 검색 costs 100 units: pressing return, or the button
+//      under your own results, with the day's remaining searches on it.
+//      Once it has run, its results replace the button — the button sitting
+//      above results it had already fetched read as "these are not the
+//      results yet".
 //
 
 import SwiftUI
@@ -54,6 +57,9 @@ struct WorshipFeedView: View {
         Set(savedSongs.compactMap(\.videoId))
     }
     @State private var remoteResults: [YTSearchResult] = []
+    /// The query `remoteResults` answer. Typing on makes them another
+    /// query's results, and they are hidden until searched again.
+    @State private var remoteQuery: String?
     @State private var isSearching = false
     @State private var searchError: String?
     @State private var showSettings = false
@@ -98,6 +104,9 @@ struct WorshipFeedView: View {
                 .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
                 .refreshable { await refresh() }
                 .task { await refreshIfNeeded() }
+                #if DEBUG
+                .onAppear { if let query = DebugHarness.searchQuery { searchText = query } }
+                #endif
         }
     }
 
@@ -331,45 +340,55 @@ struct WorshipFeedView: View {
             LazyVStack(alignment: .leading, spacing: 22) {
                 let local = localMatches
                 if !local.isEmpty {
-                    ResultSection(title: "In your channels & topics", subtitle: "free", videos: local) { video in
+                    ResultSection(title: "내 채널·주제에서", subtitle: "\(local.count)개 · 저장된 영상", videos: local) { video in
                         play(video, in: local)
                     } onAdd: { video in
                         addTarget = playable(video)
                     }
-                }
-
-                remoteSection
-
-                if local.isEmpty && remoteResults.isEmpty && !isSearching {
-                    Text("Nothing cached matches “\(searchText)”. Search all of YouTube to look wider.")
+                } else {
+                    Text("내 채널과 주제에는 「\(trimmedSearch)」이(가) 없습니다.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 16)
                 }
+
+                remoteSection
             }
             .padding(.top, 12)
         }
     }
 
+    private var trimmedSearch: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether the YouTube results on hand answer what is typed now.
+    private var hasRemoteResults: Bool {
+        !remoteResults.isEmpty && remoteQuery == trimmedSearch
+    }
+
     @ViewBuilder
     private var remoteSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button {
-                Task { await runRemoteSearch() }
-            } label: {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                    Text("Search all of YouTube")
-                    Spacer()
-                    Text("\(quota.searchesRemaining) of \(QuotaLedger.dailySearchLimit) left")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+            if !hasRemoteResults {
+                Button {
+                    Task { await runRemoteSearch() }
+                } label: {
+                    HStack {
+                        Image(systemName: "globe")
+                        Text("YouTube 전체에서 「\(trimmedSearch)」 검색")
+                            .lineLimit(1)
+                        Spacer()
+                        Text("오늘 \(quota.searchesRemaining)회 남음")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
                 }
-                .font(.subheadline)
+                .buttonStyle(.bordered)
+                .disabled(isSearching || !quota.canSearch || trimmedSearch.isEmpty)
+                .padding(.horizontal, 16)
             }
-            .buttonStyle(.bordered)
-            .disabled(isSearching || !quota.canSearch)
-            .padding(.horizontal, 16)
 
             if isSearching {
                 ProgressView().padding(.horizontal, 16)
@@ -380,7 +399,7 @@ struct WorshipFeedView: View {
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 16)
             }
-            if !remoteResults.isEmpty {
+            if hasRemoteResults {
                 RemoteResultSection(results: remoteResults, detail: resultDetail) { result in
                     guard let id = result.videoId else { return }
                     let info = resultDetail[id]
@@ -389,8 +408,9 @@ struct WorshipFeedView: View {
                             channelTitle: result.snippet?.channelTitle,
                             durationSeconds: info?.0,
                             publishedAt: result.snippet?.publishedAt,
-                            viewCount: info?.1
-                        )], startIndex: 0)
+                            viewCount: info?.1,
+                            channelId: result.snippet?.channelId
+                        )], startIndex: 0, purpose: .worship)
                 } onAdd: { result in
                     guard let id = result.videoId else { return }
                     let info = resultDetail[id]
@@ -488,7 +508,7 @@ struct WorshipFeedView: View {
                 : "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
-        host.play(queue: queue, startIndex: 0)
+        host.play(queue: queue, startIndex: 0, purpose: .worship)
     }
 
     /// The browse feed: every worship video the cache holds, newest first,
@@ -540,7 +560,7 @@ struct WorshipFeedView: View {
     private func play(_ video: CachedVideo, in section: [CachedVideo]) {
         let queue = section.map(playable)
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
-        host.play(queue: queue, startIndex: start)
+        host.play(queue: queue, startIndex: start, purpose: .worship)
     }
 
     private func runRemoteSearch() async {
@@ -558,6 +578,7 @@ struct WorshipFeedView: View {
         let client = AppServices.client(auth: auth, quota: quota)
         do {
             remoteResults = try await client.search(query: query)
+            remoteQuery = query
             // One extra unit buys duration and view count for every hit —
             // without them you cannot tell a studio cut from a live set.
             let ids = remoteResults.compactMap(\.videoId)
@@ -628,7 +649,7 @@ private struct ResultSection: View {
                 Text(title).font(.subheadline.weight(.semibold))
                 Text(subtitle)
                     .font(.caption2)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
 
@@ -669,9 +690,13 @@ private struct RemoteResultSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("From YouTube")
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16)
+            HStack(spacing: 6) {
+                Text("YouTube 전체 검색 결과").font(.subheadline.weight(.semibold))
+                Text("\(results.count)개")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
 
             ForEach(results) { result in
                 HStack(spacing: 10) {

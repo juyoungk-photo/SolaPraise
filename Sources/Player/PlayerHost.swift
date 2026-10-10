@@ -78,8 +78,16 @@ final class PlayerHost: ObservableObject {
     var isPlaylist: Bool { queue.count > 1 }
     var isVisible: Bool { mode != .closed }
 
-    func play(queue: [PlayableVideo], startIndex: Int = 0) {
+    /// - purpose: what the tab it was started from plays — 찬양 or 말씀 —
+    ///   stamped on each video that does not already say, so the player
+    ///   gives 찬양 its whole feature set and 말씀 the reduced one.
+    func play(queue: [PlayableVideo], startIndex: Int = 0, purpose: Purpose? = nil) {
         guard !queue.isEmpty else { return }
+        let queue = queue.map { video -> PlayableVideo in
+            var video = video
+            if video.purpose == nil { video.purpose = purpose }
+            return video
+        }
         let chosen = queue.indices.contains(startIndex) ? queue[startIndex] : queue[0]
         let cleaned = Self.watchable(queue, keeping: chosen)
 

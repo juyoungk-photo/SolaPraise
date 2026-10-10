@@ -89,6 +89,12 @@ enum DebugHarness {
     /// -uiTestScore a::b): the share menu cannot be driven from here.
     static var exportScoreSet: Bool { args.contains("-uiTestExportSet") }
 
+    /// Open 찬양 with this already typed in its search: -uiTestSearch 2027
+    static var searchQuery: String? {
+        guard let i = args.firstIndex(of: "-uiTestSearch"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate
     static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }

@@ -87,6 +87,13 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     private var pendingAutoplay = true
     private var hasRetriedLoad = false
     private var readinessWatchdog: Task<Void, Never>?
+    /// The player PAGE has said it is ready — the document, not the song.
+    /// A song is swapped in by script only into a page that has; into one
+    /// still loading, or one whose process iOS has killed, the script found
+    /// no `player`, threw inside a try/catch, and the song never came.
+    private var documentReady = false
+    /// The watchdog has already rebuilt the page once for this song.
+    private var recoveredAutomatically = false
 
     /// True when the failure is worth another attempt rather than a hand-off.
     @Published private(set) var canRetryLoad = false
@@ -179,13 +186,14 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         let isFirst = loadedVideoId == nil || webView == nil
         loadedVideoId = videoId
         hasRetriedLoad = false
+        recoveredAutomatically = false
 
         if isFirst {
             serve(videoId: videoId)
+            watchForSilentFailure(videoId: videoId)
         } else {
             load(videoId: videoId)
         }
-        watchForSilentFailure(videoId: videoId)
     }
 
     /// Turns an unexplained black player into something a person can act on.
@@ -203,11 +211,24 @@ final class PlayerCoordinator: NSObject, ObservableObject {
             // ready at seven — and then left the message up, because nothing
             // ever looked again. On a slow connection that is an ordinary
             // load, not a failure.
-            for _ in 0..<14 {
+            for second in 1...14 {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled,
                       self.loadedVideoId == videoId else { return }
                 if self.isAlive { return }
+                // Halfway, do once what 「다시 시도」 does — a fresh server
+                // and page — since that is what fixed it when people pressed
+                // it. The message is for when that fails too.
+                if second == 7, !self.recoveredAutomatically {
+                    self.recoveredAutomatically = true
+                    #if DEBUG
+                    print("[FocusPlayer] not alive after 7s — rebuilding the page")
+                    #endif
+                    self.isReady = false
+                    self.hasRetriedLoad = false
+                    LocalPlayerServer.shared.stop()
+                    self.serve(videoId: videoId)
+                }
             }
             guard let self, !Task.isCancelled,
                   self.loadedVideoId == videoId, !self.isAlive,
@@ -263,6 +284,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 
     private func serve(videoId: String) {
         guard webView != nil else { return }
+        documentReady = false
         // Awaited, not blocked on. Starting the server used to sleep the
         // calling thread for up to two seconds — on the main thread, during
         // view construction, which is its own way to produce a black screen.
@@ -294,6 +316,14 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     // MARK: - Commands
 
     func load(videoId: String) {
+        // Whoever asks — the next song, a tap in the queue, PiP carrying on —
+        // this is now the song, watched like any other. Callers that came
+        // straight here used to leave `loadedVideoId` on the last song, so a
+        // failure was checked against the wrong one, or not at all.
+        loadedVideoId = videoId
+        hasRetriedLoad = false
+        recoveredAutomatically = false
+        watchForSilentFailure(videoId: videoId)
         didEnd = false
         errorMessage = nil
         errorCode = nil
@@ -301,7 +331,27 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         isEmbedBlocked = false
         maxTimeReached = 0
         currentTime = 0
-        run("player.loadVideoById('\(escape(videoId))');")
+        // This song is not playing until it says so. Left as they were, the
+        // last song's `ready` and `playing` made the watchdog think a swap
+        // that had failed was fine, so it never offered a way out.
+        isReady = false
+        state = .unstarted
+
+        guard documentReady, let webView else {
+            serve(videoId: videoId)
+            return
+        }
+        let js = "(function () { if (!window.player || !player.loadVideoById) return false; "
+            + "player.loadVideoById('\(escape(videoId))'); return true; })()"
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            guard let self, self.loadedVideoId == videoId else { return }
+            if error != nil || (result as? Bool) != true {
+                #if DEBUG
+                print("[FocusPlayer] swap failed (\(error?.localizedDescription ?? "no player")) — serving a fresh page")
+                #endif
+                self.serve(videoId: videoId)
+            }
+        }
     }
 
     /// Queues without autoplaying — used when the user should press play.
@@ -395,6 +445,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         webView?.stopLoading()
         webView = nil
         loadedVideoId = nil
+        documentReady = false
         state = .unstarted
         isReady = false
         didEnd = false
@@ -611,6 +662,25 @@ extension PlayerCoordinator: WKNavigationDelegate {
         for child in root.subviews { yieldDoubleTap(in: child) }
     }
 
+    /// iOS ends the page's web process to reclaim memory — commonly while
+    /// the app sits in the background — and the view stays on screen,
+    /// empty. Without this the next song was sent to a page that no longer
+    /// existed. The song that was showing is served again.
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Task { @MainActor in
+            #if DEBUG
+            print("[FocusPlayer] web content process ended — serving the page again")
+            #endif
+            self.documentReady = false
+            self.isReady = false
+            self.state = .unstarted
+            guard let videoId = self.loadedVideoId else { return }
+            self.hasRetriedLoad = false
+            self.serve(videoId: videoId)
+            self.watchForSilentFailure(videoId: videoId)
+        }
+    }
+
     /// A refused connection to the loopback port produces no error page, just
     /// a black view — which is what a stale port looked like. Rebuild the
     /// server once and retry before falling back.
@@ -657,6 +727,7 @@ extension PlayerCoordinator: WKScriptMessageHandler {
         #endif
         switch event {
         case "ready":
+            documentReady = true
             noteAlive()
             if let d = body["duration"] as? Double { duration = d }
 

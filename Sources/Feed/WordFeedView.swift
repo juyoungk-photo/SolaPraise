@@ -334,9 +334,14 @@ struct WordFeedView: View {
         allVideos.first { $0.title.contains("코너스톤교회-") }
     }
 
+    /// Playlists added to 말씀 by link, from channels that have no section
+    /// below. One pinned from a channel's own list is shown under that
+    /// channel, and only there.
     private var pinnedPlaylists: [CachedPlaylist] {
-        allPlaylists
+        let shownChannels = Set(channels.map(\.youtubeChannelId))
+        return allPlaylists
             .filter { $0.purposeRaw == Purpose.word.rawValue }
+            .filter { playlist in !(playlist.isPinned && shownChannels.contains(playlist.channelId ?? "")) }
             .sorted { ($0.isPinned ? 0 : 1, $0.title) < ($1.isPinned ? 0 : 1, $1.title) }
     }
 
@@ -363,7 +368,7 @@ struct WordFeedView: View {
             playlistError = "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
-        host.play(queue: queue, startIndex: 0)
+        host.play(queue: queue, startIndex: 0, purpose: .word)
     }
 
     /// Latest N for a channel, minus whatever is already a hero card.
@@ -402,7 +407,7 @@ struct WordFeedView: View {
                 playlistError = "\(playlist.title): 재생할 수 있는 영상이 없습니다."
                 return
             }
-            host.play(queue: queue, startIndex: 0)
+            host.play(queue: queue, startIndex: 0, purpose: .word)
         } catch {
             playlistError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -413,7 +418,7 @@ struct WordFeedView: View {
             PlayableVideo(cached: $0)
         }
         let start = queue.firstIndex { $0.id == video.videoId } ?? 0
-        host.play(queue: queue, startIndex: start)
+        host.play(queue: queue, startIndex: start, purpose: .word)
     }
 
     private func refresh() async {
@@ -471,43 +476,49 @@ struct ChannelSection: View {
         }
     }
 
-    /// Three rows, then a way through to the rest.
+    /// The playlists the reader pinned for this channel, and a way through
+    /// to all of them to pin or unpin.
     ///
-    /// A horizontal strip does not survive a channel with eighty playlists —
-    /// you cannot tell how many there are, you cannot skim them, and reaching
-    /// the far end is a long sideways drag.
+    /// Nothing is chosen for the reader any more. The app used to show three
+    /// it picked — pinned first, then the newest worth opening — and for most
+    /// channels those were lists nobody had asked for. Now a channel shows
+    /// exactly what was pinned, and a channel with none shows one line.
     private var playlistBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let pinned = playlists.filter(\.isPinned).sorted { $0.title < $1.title }
+        return VStack(alignment: .leading, spacing: 8) {
             NavigationLink {
-                ChannelPlaylistsView(channel: channel, playlists: playlists) { playlist in
+                ChannelPlaylistsView(channel: channel, playlists: playlists, onSelect: { playlist in
                     onSelectPlaylist?(playlist)
-                }
+                }, onPinChanged: onPinChanged)
             } label: {
                 HStack(spacing: 6) {
-                    Text("재생목록")
-                        .font(.footnote.weight(.semibold))
-                    Text("\(playlists.count)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    Image(systemName: pinned.isEmpty ? "pin" : "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                    Text(pinned.isEmpty ? "재생목록 \(playlists.count)개 · 고정해서 여기 두기"
+                                        : "고정한 재생목록")
+                        .font(.footnote.weight(pinned.isEmpty ? .regular : .semibold))
                     Spacer()
-                    if playlists.count > Self.previewCount {
-                        Text("전체 보기").font(.caption2)
+                    if !pinned.isEmpty {
+                        Text("전체 \(playlists.count)").font(.caption2)
                     }
                     Image(systemName: "chevron.right").font(.caption2)
                 }
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(pinned.isEmpty ? Color.secondary : Color.primary)
             }
             .buttonStyle(.plain)
 
-            VStack(spacing: 6) {
-                ForEach(Self.preview(playlists)) { playlist in
-                    Button { onSelectPlaylist?(playlist) } label: {
-                        PlaylistBar(playlist: playlist)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
-                            onPinChanged?()
+            if !pinned.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(pinned) { playlist in
+                        Button { onSelectPlaylist?(playlist) } label: {
+                            PlaylistBar(playlist: playlist)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            PlaylistPinButton(playlist: playlist, purpose: channel.purpose) {
+                                onPinChanged?()
+                            }
                         }
                     }
                 }
@@ -516,48 +527,5 @@ struct ChannelSection: View {
         .padding(.horizontal, 16)
         .padding(.top, 6)
     }
-
-    private static let previewCount = 3
-
-    /// The three a reader most likely wants: pinned ones first, then the
-    /// newest, leaving out what is not worth opening.
-    ///
-    /// These used to be the first three by title, because the cache is
-    /// sorted by title for the full list — so a channel's preview was
-    /// whatever began with 「1」 or 「가」: an old book index, a finished
-    /// series, a Shorts list. For a church the newest playlist is the
-    /// series being preached now, which is the one people come for.
-    static func preview(_ playlists: [CachedPlaylist]) -> [CachedPlaylist] {
-        // Three items at least: checked against the live channels, the
-        // newest list was often a one-video stub made that week, which is
-        // new but not yet anything to open.
-        let worth = playlists.filter { playlist in
-            guard playlist.isPinned || playlist.itemCount >= 3 else { return false }
-            let title = playlist.title.lowercased()
-            return !skippedMarkers.contains { title.contains($0) }
-        }
-        let ranked = worth.sorted { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned }
-            switch (a.publishedAt, b.publishedAt) {
-            case let (x?, y?) where x != y: return x > y
-            case (_?, nil): return true
-            case (nil, _?): return false
-            default: return a.title < b.title
-            }
-        }
-        // Topped up from the rest when the filter leaves fewer than three,
-        // so a small channel still shows what it has.
-        var picked = Array(ranked.prefix(previewCount))
-        for playlist in playlists where picked.count < previewCount
-            && !picked.contains(where: { $0.playlistId == playlist.playlistId }) {
-            picked.append(playlist)
-        }
-        return picked
-    }
-
-    /// Lists that are not 말씀: short clips, notices, promotion, chat, and
-    /// members-only lists most readers cannot open.
-    private static let skippedMarkers = ["shorts", "쇼츠", "광고", "홍보", "공지", "안내", "teaser",
-                                         "잡담", "회원", "멤버십", "members"]
 }
 
