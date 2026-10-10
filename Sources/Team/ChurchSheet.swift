@@ -74,7 +74,14 @@ enum ChurchSheet {
     /// sheet has heading rows, blank spacers and months typed ahead with
     /// nothing in them yet, and none of those are a service.
     static func notes(from rows: [[String]]) -> [Date: ChurchNote] {
-        guard let header = rows.first else { return [:] }
+        // The header is the first row, near the top, that names a date
+        // column and one of ours — not necessarily row 1: an office sheet
+        // often opens with a title or a note above it.
+        guard let headerIndex = rows.prefix(15).firstIndex(where: { row in
+            column(row, matching: dateNames) != nil
+                && (column(row, matching: dedicationNames) != nil || column(row, matching: sermonNames) != nil)
+        }) else { return [:] }
+        let header = rows[headerIndex]
 
         guard let dateColumn = column(header, matching: dateNames) else { return [:] }
         let dedicationColumn = column(header, matching: dedicationNames)
@@ -82,7 +89,7 @@ enum ChurchSheet {
         guard dedicationColumn != nil || sermonColumn != nil else { return [:] }
 
         var result: [Date: ChurchNote] = [:]
-        for row in rows.dropFirst() {
+        for row in rows.dropFirst(headerIndex + 1) {
             guard let raw = row[safe: dateColumn],
                   let date = TeamSheet.day(raw) else { continue }
 

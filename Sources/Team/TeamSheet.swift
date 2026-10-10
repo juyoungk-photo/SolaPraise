@@ -340,6 +340,85 @@ enum TeamSheet {
         return nil
     }
 
+    // MARK: Headers wherever they are
+
+    /// The column names that identify each tab's header row.
+    ///
+    /// A team reorganises its sheet by hand: a title row added above the
+    /// header, a blank row left at the top, rows sorted. The app read row 1
+    /// as the header everywhere, so a header moved to row 2 made a tab look
+    /// empty — and the Attachments check, finding row 1 blank, tried to
+    /// create a tab that already existed and every upload failed. The
+    /// header is now found by what it says, not where it is.
+    static let headerSignatures: [String: [[String]]] = [
+        scheduleTab: [["date", "날짜"], ["title", "service", "구분", "type", "예배", "행사", "예배명"],
+                      ["notes", "note", "비고", "메모"], ["time", "시간"]],
+        rolesTab: [["name", "role", "파트", "역할", "이름"], ["order", "순서"], ["active", "사용", "활성"]],
+        songsTab: [["date", "날짜"], ["title", "곡", "곡명", "찬양"], ["order", "순서", "#"],
+                   ["youtubeurl", "url", "link", "링크", "영상"], ["key", "키", "원키"]],
+        signupsTab: [["date", "날짜"], ["role", "파트", "역할"], ["memberemail", "email", "이메일"],
+                     ["status", "상태", "응답"]],
+        membersTab: [["email", "이메일", "메일"], ["name", "이름"], ["active", "사용", "활성"]],
+        planTab: [["date", "날짜"], ["type", "구분", "순서종류"], ["title", "내용", "순서"], ["order", "#"]],
+        liveTab: [["date", "날짜"], ["currentorder", "order", "현재순서"], ["updatedby", "by", "진행"]],
+        attachmentsTab: [["date", "날짜"], ["song", "곡", "찬양"], ["name", "이름", "파일"],
+                         ["fileid", "파일id"], ["url", "link", "링크"]]
+    ]
+
+    /// Index of the header row among the first rows of a tab, or nil when
+    /// none of them reads as one. Two of the tab's column names are enough.
+    static func headerIndex(_ rows: [[String]], tab: String) -> Int? {
+        guard let signature = headerSignatures[tab] else { return rows.isEmpty ? nil : 0 }
+        var best: (index: Int, matches: Int)?
+        for (index, row) in rows.prefix(15).enumerated() {
+            let matches = signature.filter { column(row, $0) != nil }.count
+            if matches >= 2, matches > (best?.matches ?? 0) { best = (index, matches) }
+        }
+        return best?.index
+    }
+
+    /// The tab with its header moved to the front and every data row left
+    /// at its own index — so `offset + 1` is still the row's number on the
+    /// sheet, and every parser and every write that relies on that stays
+    /// correct. Rows above the header (a title, a note, blanks) are blanked
+    /// in place. A tab whose header cannot be found is returned unchanged.
+    static func anchorHeader(_ rows: [[String]], tab: String) -> [[String]] {
+        guard let index = headerIndex(rows, tab: tab), index > 0 else { return rows }
+        var out = rows
+        out[0] = rows[index]
+        for i in 1...index { out[i] = [] }
+        return out
+    }
+
+    /// A row laid out by a tab's own header: each value in the column its
+    /// names find. Values whose column the tab does not have are left out
+    /// rather than written somewhere else.
+    static func place(_ values: [([String], String)], header: [String]) -> [String] {
+        var cells = [String](repeating: "", count: max(header.count, 1))
+        for (names, value) in values {
+            if let index = column(header, names), cells.indices.contains(index) { cells[index] = value }
+        }
+        return cells
+    }
+
+    /// Whether a row still holds what it held when it was read: every
+    /// expected value appears in some cell — dates compared as days, other
+    /// text case- and space-insensitively.
+    ///
+    /// Writes address rows by number, remembered from the last load. Sort
+    /// the tab in a browser and that number points at someone else's row;
+    /// an answer or an assignment written there overwrites it without a
+    /// word. Every such write checks the row first.
+    static func row(_ cells: [String], holds expected: [String]) -> Bool {
+        func same(_ a: String, _ b: String) -> Bool {
+            if let x = day(a), let y = day(b) { return Calendar.current.isDate(x, inSameDayAs: y) }
+            return a.trimmingCharacters(in: .whitespaces).lowercased()
+                == b.trimmingCharacters(in: .whitespaces).lowercased()
+        }
+        return expected.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .allSatisfy { want in cells.contains { same($0, want) } }
+    }
+
     /// Finds a column by any of its accepted names, case-insensitively.
     ///
     /// Every tab is read this way now. A person adds a column, renames one,
@@ -523,6 +602,33 @@ actor SheetsClient {
         throw SheetsError.badRange("\(tab): no free row after several tries")
     }
 
+    /// A whole tab, with its header found and moved to the front — see
+    /// TeamSheet.anchorHeader. What every reader of a team tab should use.
+    func readTable(sheetId: String, tab: String) async throws -> [[String]] {
+        TeamSheet.anchorHeader(try await read(sheetId: sheetId, range: tab), tab: tab)
+    }
+
+    /// The tab names in the spreadsheet — for asking whether a tab exists,
+    /// which is a question about its name, not about what row 1 holds.
+    func tabTitles(sheetId: String) async throws -> [String] {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("titles") }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)"
+        comps.queryItems = [.init(name: "fields", value: "sheets.properties.title")]
+        guard let url = comps.url else { throw SheetsError.badRange("titles") }
+        struct Spreadsheet: Decodable {
+            struct Sheet: Decodable { struct P: Decodable { let title: String }; let properties: P }
+            let sheets: [Sheet]?
+        }
+        let data = try await send(url: url, method: "GET", rawBody: nil)
+        return (try JSONDecoder().decode(Spreadsheet.self, from: data).sheets ?? []).map(\.properties.title)
+    }
+
+    /// One row, as it stands now.
+    func row(sheetId: String, tab: String, number: Int) async throws -> [String] {
+        try await read(sheetId: sheetId, range: "\(tab)!A\(number):Z\(number)").first ?? []
+    }
+
     func write(sheetId: String, range: String, row: [String]) async throws {
         guard let url = valuesURL(sheetId: sheetId, suffix: range),
               var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -601,8 +707,9 @@ actor SheetsClient {
 
         var tabs: [SheetTidy.Tab] = []
         for sheet in decoded.sheets ?? [] where SheetTidy.knownTabs.contains(sheet.properties.title) {
-            let header = (try? await read(sheetId: sheetId,
-                                          range: "\(sheet.properties.title)!1:1"))?.first ?? []
+            let raw = (try? await read(sheetId: sheetId, range: sheet.properties.title)) ?? []
+            let headerRow = TeamSheet.headerIndex(raw, tab: sheet.properties.title) ?? 0
+            let header = raw.indices.contains(headerRow) ? raw[headerRow] : []
             let formulas = (sheet.conditionalFormats ?? []).flatMap {
                 ($0.booleanRule?.condition?.values ?? []).compactMap(\.userEnteredValue)
             }
@@ -610,6 +717,7 @@ actor SheetsClient {
                 gid: sheet.properties.sheetId,
                 title: sheet.properties.title,
                 header: header,
+                headerRow: headerRow,
                 columnCount: sheet.properties.gridProperties?.columnCount ?? header.count,
                 frozenRows: sheet.properties.gridProperties?.frozenRowCount ?? 0,
                 existingFormulas: Set(formulas)))

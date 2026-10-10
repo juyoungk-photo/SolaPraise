@@ -419,6 +419,25 @@ final class TeamStore: ObservableObject {
             : nil
     }
 
+    // MARK: - Rows that may have moved
+
+    static let sheetMovedMessage =
+        "시트가 그 사이에 바뀌어(정렬·줄 이동 등) 쓰지 않았습니다. 새로 불러왔으니 다시 시도해 주세요."
+
+    /// Whether a remembered row still holds these values. When it does not,
+    /// the sheet is reloaded so the next attempt uses fresh row numbers.
+    private func confirm(_ tab: String, row: Int, holds expected: [String],
+                         sheetId: String, client: SheetsClient) async -> Bool {
+        guard let cells = try? await client.row(sheetId: sheetId, tab: tab, number: row) else { return false }
+        if TeamSheet.row(cells, holds: expected) { return true }
+        await load(sheetId: sheetId)
+        return false
+    }
+
+    private func dateText(_ service: TeamService) -> String {
+        TeamSheet.dateFormatter.string(from: service.date)
+    }
+
     /// The address writes will be attributed to.
     func actingEmail(auth: GoogleAuthManager, planning: PlanningAuth) -> String? {
         #if DEBUG
@@ -500,17 +519,19 @@ final class TeamStore: ObservableObject {
         do {
             // Four reads rather than one batch: each tab is parsed
             // differently and a failure in one should not lose the others.
-            async let scheduleRows = client.read(sheetId: sheetId, range: TeamSheet.scheduleTab)
-            async let roleRows     = client.read(sheetId: sheetId, range: TeamSheet.rolesTab)
-            async let songRows     = client.read(sheetId: sheetId, range: TeamSheet.songsTab)
-            async let signupRows   = client.read(sheetId: sheetId, range: TeamSheet.signupsTab)
+            // Every tab through readTable: its header is found by name
+            // wherever it sits, not assumed to be row 1.
+            async let scheduleRows = client.readTable(sheetId: sheetId, tab: TeamSheet.scheduleTab)
+            async let roleRows     = client.readTable(sheetId: sheetId, tab: TeamSheet.rolesTab)
+            async let songRows     = client.readTable(sheetId: sheetId, tab: TeamSheet.songsTab)
+            async let signupRows   = client.readTable(sheetId: sheetId, tab: TeamSheet.signupsTab)
 
             let (schedule, roleData, songData, signupData) =
                 try await (scheduleRows, roleRows, songRows, signupRows)
 
             // Optional tab: absent on a sheet made before the order of
             // service existed, which must keep working.
-            let planData = (try? await client.read(sheetId: sheetId, range: TeamSheet.planTab)) ?? []
+            let planData = (try? await client.readTable(sheetId: sheetId, tab: TeamSheet.planTab)) ?? []
             plans = Self.parsePlan(planData)
 
             roles = Self.parseRoles(roleData)
@@ -576,7 +597,7 @@ final class TeamStore: ObservableObject {
     /// sheet counts as a member — which is the same thing, since Google's own
     /// sharing is what actually protects it.
     private func loadMembers(sheetId: String, client: SheetsClient) async -> Set<String> {
-        guard let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.membersTab),
+        guard let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.membersTab),
               rows.count > 1 else { members = []; rawMembers = nil; return [] }
         rawMembers = rows
 
@@ -770,11 +791,19 @@ final class TeamStore: ObservableObject {
 
         do {
             isReadOnly = false
-            let existing = mySignup(for: service, role: role, email: email)
+            var existing = mySignup(for: service, role: role, email: email)
+            // The remembered row must still be this answer; a sorted tab
+            // would otherwise have this answer overwrite someone else's.
+            if let target = existing?.row, target >= 2,
+               !(await confirm(TeamSheet.signupsTab, row: target,
+                               holds: [dateText(service), email, role], sheetId: sheetId, client: client)) {
+                await load(sheetId: sheetId)
+                existing = mySignup(for: service, role: role, email: email)
+            }
             var writtenRow = existing?.row
 
-            // Row 1 is the header, so anything below 2 is not a real row to
-            // rewrite — append and learn where it went.
+            // The header is above every data row, so anything below 2 is not
+            // a real row to rewrite — append and learn where it went.
             if let target = existing?.row, target >= 2 {
                 try await client.write(
                     sheetId: sheetId,
@@ -812,8 +841,8 @@ final class TeamStore: ObservableObject {
     /// such tab, and that is not an error. The tab is created on the first
     /// upload rather than demanded up front.
     private func loadAttachments(sheetId: String, client: SheetsClient) async {
-        guard let rows = try? await client.read(
-            sheetId: sheetId, range: TeamSheet.attachmentsTab
+        guard let rows = try? await client.readTable(
+            sheetId: sheetId, tab: TeamSheet.attachmentsTab
         ), rows.count > 1 else { attachments = [:]; return }
 
         let header = rows[0]
@@ -883,18 +912,19 @@ final class TeamStore: ObservableObject {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
 
-        let row = [
-            TeamSheet.dateFormatter.string(from: service.date),
-            song,
-            name,
-            uploaded.fileId,
-            uploaded.link.absoluteString,
-            email,
-            ISO8601DateFormatter().string(from: Date())
-        ]
-
         do {
-            try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            // Placed by the tab's own column names, so a tab whose columns
+            // were rearranged still gets each value in its column.
+            let header = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            let row = TeamSheet.place([
+                (["date", "날짜"], TeamSheet.dateFormatter.string(from: service.date)),
+                (["song", "곡", "찬양"], song),
+                (["name", "이름", "파일"], name),
+                (["fileid", "파일id"], uploaded.fileId),
+                (["url", "link", "링크"], uploaded.link.absoluteString),
+                (["addedby", "by", "올린사람"], email),
+                (["addedat", "at", "올린시각"], ISO8601DateFormatter().string(from: Date()))
+            ], header: header)
             let written = try await client.append(
                 sheetId: sheetId, tab: TeamSheet.attachmentsTab, row: row
             )
@@ -939,28 +969,46 @@ final class TeamStore: ObservableObject {
         }
     }
 
-    /// Creates the Attachments tab the first time one is needed.
+    /// The Attachments tab's header, creating the tab the first time one
+    /// is needed.
     ///
-    /// Reading a tab that does not exist throws, which is how this knows.
-    /// Adding a TAB is safe where adding a COLUMN is not: a new tab cannot
-    /// shift anything the team already has.
-    private func ensureAttachmentsTab(sheetId: String, client: SheetsClient) async throws {
-        if let rows = try? await client.read(
-            sheetId: sheetId, range: "\(TeamSheet.attachmentsTab)!1:1"
-        ), !(rows.first ?? []).isEmpty {
-            return
+    /// Whether the tab EXISTS is asked by its name. It used to be inferred
+    /// from row 1 having something in it — so a team that inserted a row
+    /// above the header, or left row 1 blank, had every upload fail with
+    /// Google refusing to create 「Attachments」 a second time. Adding a TAB
+    /// is safe where adding a COLUMN is not: a new tab cannot shift
+    /// anything the team already has.
+    private func ensureAttachmentsTab(sheetId: String, client: SheetsClient) async throws -> [String] {
+        let tab = TeamSheet.attachmentsTab
+        let rows = (try? await client.readTable(sheetId: sheetId, tab: tab)) ?? []
+        if let header = rows.first, TeamSheet.headerIndex(rows, tab: tab) != nil {
+            return header
         }
-        try await client.addSheet(sheetId: sheetId, title: TeamSheet.attachmentsTab)
-        _ = try await client.append(
-            sheetId: sheetId, tab: TeamSheet.attachmentsTab,
-            row: TeamSheet.Attachments.header
-        )
+        if !(try await client.tabTitles(sheetId: sheetId)).contains(tab) {
+            try await client.addSheet(sheetId: sheetId, title: tab)
+        }
+        // The tab exists with no header the app recognises. An empty tab
+        // gets one; a tab holding something else is not written over.
+        let hasContent = rows.contains { $0.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }
+        guard !hasContent else {
+            throw SheetsClient.SheetsError.badRange(
+                "Attachments 탭에 Date · Song · Name · FileId · URL 머리글이 없습니다. 머리글 줄을 넣거나, 다른 용도의 탭이면 이름을 바꿔 주세요.")
+        }
+        let header = TeamSheet.Attachments.header
+        try await client.write(sheetId: sheetId,
+                               range: "\(tab)!A1:\(TeamSheet.columnLetter(header.count - 1))1",
+                               row: header)
+        return header
     }
 
     /// Removes an attachment from the sheet and from Drive.
     func removeAttachment(_ item: Attachment, sheetId: String) async -> String? {
         guard let client else { return "시트에 연결되어 있지 않습니다." }
         guard let row = item.row, row >= 2 else { return "줄 번호를 알 수 없습니다." }
+        guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [item.fileId],
+                            sheetId: sheetId, client: client) else {
+            return Self.sheetMovedMessage
+        }
         do {
             try await client.write(
                 sheetId: sheetId,
@@ -1064,6 +1112,10 @@ final class TeamStore: ObservableObject {
         }
 
         let cell = "\(TeamSheet.scheduleTab)!\(TeamSheet.columnLetter(column))\(row)"
+        guard await confirm(TeamSheet.scheduleTab, row: row, holds: [dateText(service)],
+                            sheetId: sheetId, client: client) else {
+            return Self.sheetMovedMessage
+        }
         do {
             isReadOnly = false
             try await client.write(sheetId: sheetId, range: cell, row: [value])
@@ -1102,6 +1154,10 @@ final class TeamStore: ObservableObject {
         }
 
         let cell = "\(TeamSheet.scheduleTab)!\(TeamSheet.columnLetter(column))\(row)"
+        guard await confirm(TeamSheet.scheduleTab, row: row, holds: [dateText(service)],
+                            sheetId: sheetId, client: client) else {
+            return Self.sheetMovedMessage
+        }
         do {
             isReadOnly = false
             try await client.write(
@@ -1194,6 +1250,11 @@ final class TeamStore: ObservableObject {
             isReadOnly = false
             let blank = [String](repeating: "", count: signupLayout.width)
             for target in rows {
+                // Only a row that is still this person's answer for this day.
+                guard let signup = mine.first(where: { $0.row == target }),
+                      await confirm(TeamSheet.signupsTab, row: target,
+                                    holds: [dateText(service), signup.email, signup.role],
+                                    sheetId: sheetId, client: client) else { continue }
                 try await client.write(
                     sheetId: sheetId,
                     range: "\(TeamSheet.signupsTab)!A\(target):\(signupLayout.lastColumnLetter)\(target)",
@@ -1240,8 +1301,8 @@ final class TeamStore: ObservableObject {
         // The Plan tab's own column order, read from its header, so this
         // writes into the sheet the team actually has rather than one the app
         // wishes they had.
-        guard let header = try? await client.read(
-            sheetId: sheetId, range: "\(TeamSheet.planTab)!1:1"
+        guard let header = try? await client.readTable(
+            sheetId: sheetId, tab: TeamSheet.planTab
         ).first, !header.isEmpty else {
             errorMessage = "시트에 Plan 탭이 없습니다. 먼저 Plan 탭을 만들어 주세요."
             return false
@@ -1310,7 +1371,7 @@ final class TeamStore: ObservableObject {
         }
 
         let tab = hasPlanTab ? TeamSheet.planTab : TeamSheet.songsTab
-        let header = (try? await client.read(sheetId: sheetId, range: "\(tab)!1:1"))?.first ?? []
+        let header = (try? await client.readTable(sheetId: sheetId, tab: tab))?.first ?? []
         let width = max(header.count, 7)
         let last = TeamSheet.columnLetter(width - 1)
 
@@ -1382,7 +1443,8 @@ final class TeamStore: ObservableObject {
 
         let tab = hasPlanTab ? TeamSheet.planTab : TeamSheet.songsTab
         do {
-            let header = (try await client.read(sheetId: sheetId, range: "\(tab)!1:1")).first ?? []
+            let table = try await client.readTable(sheetId: sheetId, tab: tab)
+            let header = table.first ?? []
             guard let orderColumn = TeamSheet.column(header, ["order", "순서", "#"]) else {
                 return "\(tab) 탭에 순서(Order) 열이 없습니다."
             }
@@ -1395,6 +1457,16 @@ final class TeamStore: ObservableObject {
             guard rows.count == items.count, rows.allSatisfy({ $0 >= 2 }) else {
                 return "줄 번호를 알 수 없는 항목이 있습니다. 새로 고친 뒤 다시 시도해 주세요."
             }
+            // Each remembered row must still hold its song. Sorted in the
+            // browser since the last load, these numbers would renumber
+            // other songs — so nothing is written unless every row checks.
+            let moved = zip(items, rows).contains { item, row in
+                !(table.indices.contains(row - 1) && TeamSheet.row(table[row - 1], holds: [item.title]))
+            }
+            if moved {
+                await load(sheetId: sheetId)
+                return Self.sheetMovedMessage
+            }
 
             try await client.batchWrite(
                 sheetId: sheetId,
@@ -1406,7 +1478,7 @@ final class TeamStore: ObservableObject {
             // Re-read, as everywhere else that writes: what is shown is
             // what the sheet holds.
             if hasPlanTab {
-                plans = Self.parsePlan(try await client.read(sheetId: sheetId, range: TeamSheet.planTab))
+                plans = Self.parsePlan(try await client.readTable(sheetId: sheetId, tab: TeamSheet.planTab))
             } else {
                 adoptSongRows(try await rawSongRows(sheetId: sheetId))
             }
@@ -1691,21 +1763,25 @@ final class TeamStore: ObservableObject {
     /// rewrite rather than guessing from the parsed view.
     func rawSongRows(sheetId: String) async throws -> [[String]] {
         guard let client else { throw SheetsClient.SheetsError.noSheet }
-        return try await client.read(sheetId: sheetId, range: TeamSheet.songsTab)
+        return try await client.readTable(sheetId: sheetId, tab: TeamSheet.songsTab)
     }
 
     // MARK: - Parsing
 
     static func parseRoles(_ rows: [[String]]) -> [TeamRole] {
-        rows.dropFirst().compactMap { row in
-            guard row.count > TeamSheet.Roles.name else { return nil }
-            let name = row[TeamSheet.Roles.name].trimmingCharacters(in: .whitespaces)
+        // By header name, like every other tab: a Roles tab laid out
+        // Order · Name · Active would otherwise read its numbers as parts.
+        let header = rows.first ?? []
+        let nameCol = TeamSheet.column(header, ["name", "role", "파트", "역할", "이름"]) ?? TeamSheet.Roles.name
+        let orderCol = TeamSheet.column(header, ["order", "순서"]) ?? TeamSheet.Roles.order
+        let activeCol = TeamSheet.column(header, ["active", "사용", "활성"]) ?? TeamSheet.Roles.active
+        return rows.dropFirst().compactMap { row in
+            guard row.count > nameCol else { return nil }
+            let name = row[nameCol].trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else { return nil }
-            let active = row.count > TeamSheet.Roles.active
-                ? row[TeamSheet.Roles.active].lowercased() : "true"
+            let active = row.count > activeCol ? row[activeCol].lowercased() : "true"
             guard !["false", "no", "n", "0"].contains(active) else { return nil }
-            let order = row.count > TeamSheet.Roles.order
-                ? Double(row[TeamSheet.Roles.order]) ?? 0 : 0
+            let order = row.count > orderCol ? Double(row[orderCol]) ?? 0 : 0
             return TeamRole(name: name, order: order)
         }
         .sorted {
@@ -1893,9 +1969,15 @@ final class TeamStore: ObservableObject {
             return
         }
         do {
+            // By the tab's own column names: this team's Members tab is
+            // Name · Email · Active, and the fixed Email · Name · Active
+            // order put the address in the Name column.
+            let header = (try? await client.readTable(sheetId: sheetId, tab: TeamSheet.membersTab))?.first ?? []
+            let cells = header.isEmpty ? [address, name, "TRUE"] : TeamSheet.place([
+                (["email", "이메일", "메일"], address), (["name", "이름"], name), (["active", "사용", "활성"], "TRUE")
+            ], header: header)
             let row = try await client.append(
-                sheetId: sheetId, tab: TeamSheet.membersTab,
-                row: [address, name, "TRUE"]
+                sheetId: sheetId, tab: TeamSheet.membersTab, row: cells
             )
             members.append(Member(email: address, name: name, isActive: true, row: row ?? 0))
             if !address.isEmpty { memberEmails.insert(address) }
@@ -1913,10 +1995,24 @@ final class TeamStore: ObservableObject {
     func setMemberActive(_ active: Bool, member: Member, sheetId: String) async {
         guard let client, member.row >= 2 else { return }
         do {
+            // Only the Active cell, found by name, and only on a row that is
+            // still this person's.
+            let table = try await client.readTable(sheetId: sheetId, tab: TeamSheet.membersTab)
+            guard let header = table.first,
+                  let column = TeamSheet.column(header, ["active", "사용", "활성"]) else {
+                errorMessage = "Members 탭에 Active 열이 없습니다."
+                return
+            }
+            guard table.indices.contains(member.row - 1),
+                  TeamSheet.row(table[member.row - 1], holds: [member.email]) else {
+                await load(sheetId: sheetId)
+                errorMessage = Self.sheetMovedMessage
+                return
+            }
             try await client.write(
                 sheetId: sheetId,
-                range: "\(TeamSheet.membersTab)!A\(member.row):C\(member.row)",
-                row: [member.email, member.name, active ? "TRUE" : "FALSE"]
+                range: "\(TeamSheet.membersTab)!\(TeamSheet.columnLetter(column))\(member.row)",
+                row: [active ? "TRUE" : "FALSE"]
             )
             members = members.map {
                 $0.id == member.id
@@ -1936,7 +2032,7 @@ final class TeamStore: ObservableObject {
     /// without costing what a full reload would.
     func pollLive(sheetId: String) async {
         guard let client,
-              let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.liveTab)
+              let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.liveTab)
         else { return }
 
         guard let header = rows.first,
@@ -1972,17 +2068,23 @@ final class TeamStore: ObservableObject {
         liveOrder[day] = order
         liveUpdatedBy[day] = name
 
-        let row = [
-            TeamSheet.dateFormatter.string(from: service.date),
-            String(order),
-            ISO8601DateFormatter().string(from: Date()),
-            name
-        ]
         do {
-            if let existing = liveRows[day], existing >= 2 {
+            let header = (try? await client.readTable(sheetId: sheetId, tab: TeamSheet.liveTab))?.first ?? []
+            let row = header.isEmpty
+                ? [TeamSheet.dateFormatter.string(from: service.date), String(order),
+                   ISO8601DateFormatter().string(from: Date()), name]
+                : TeamSheet.place([
+                    (["date", "날짜"], TeamSheet.dateFormatter.string(from: service.date)),
+                    (["currentorder", "order", "현재순서"], String(order)),
+                    (["updatedat", "updated", "시각"], ISO8601DateFormatter().string(from: Date())),
+                    (["updatedby", "by", "진행"], name)
+                ], header: header)
+            if let existing = liveRows[day], existing >= 2,
+               await confirm(TeamSheet.liveTab, row: existing, holds: [dateText(service)],
+                             sheetId: sheetId, client: client) {
                 try await client.write(
                     sheetId: sheetId,
-                    range: "\(TeamSheet.liveTab)!A\(existing):D\(existing)",
+                    range: "\(TeamSheet.liveTab)!A\(existing):\(TeamSheet.columnLetter(max(row.count, 1) - 1))\(existing)",
                     row: row
                 )
             } else {

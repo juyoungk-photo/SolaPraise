@@ -68,6 +68,8 @@ enum SheetAudit {
         var signups: [[String]]?
         var members: [[String]]?
         var plan: [[String]]?
+        /// The Attachments tab, when there is one.
+        var attachments: [[String]]? = nil
         var accounts = Accounts()
         /// False for a read from outside the app (Tools/audit-live-sheet),
         /// which has no sign-in to judge.
@@ -173,6 +175,15 @@ enum SheetAudit {
                                  title: "\(tab) 탭에서 열 이름을 찾지 못했습니다",
                                  detail: "\(missing.joined(separator: ", ")) — 기본 위치로 읽고 있어, 열 순서가 다르면 엉뚱한 칸을 읽습니다."))
             }
+        }
+        // Attachments is optional — created on the first upload — but a tab
+        // of that name whose header cannot be found makes every upload fail.
+        if let rows = input.attachments,
+           rows.contains(where: { $0.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }),
+           TeamSheet.headerIndex(rows, tab: TeamSheet.attachmentsTab) == nil {
+            out.append(.init(id: "structure.header.Attachments", severity: .problem, area: "시트 구조",
+                             title: "Attachments 탭의 머리글을 찾을 수 없습니다",
+                             detail: "Date · Song · Name · FileId · URL 머리글이 맨 위 15줄 안에 있어야 악보를 첨부할 수 있습니다."))
         }
         return out
     }

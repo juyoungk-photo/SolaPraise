@@ -37,6 +37,8 @@ enum SheetTidy {
         let gid: Int
         let title: String
         let header: [String]
+        /// 0-based row the header is on — not always the first.
+        var headerRow: Int = 0
         let columnCount: Int
         let frozenRows: Int
         /// Formulas of the conditional-format rules already on the tab.
@@ -71,16 +73,17 @@ enum SheetTidy {
         for tab in tabs where knownTabs.contains(tab.title) {
             let width = max(tab.columnCount, tab.header.count, 1)
 
-            if tab.frozenRows < 1 {
+            // Frozen down to and including the header, wherever it is.
+            if tab.frozenRows < tab.headerRow + 1 {
                 out.append(["updateSheetProperties": [
                     "properties": ["sheetId": tab.gid,
-                                   "gridProperties": ["frozenRowCount": 1]],
+                                   "gridProperties": ["frozenRowCount": tab.headerRow + 1]],
                     "fields": "gridProperties.frozenRowCount"
                 ]])
             }
 
             out.append(["repeatCell": [
-                "range": range(tab.gid, rows: 0..<1, columns: 0..<width),
+                "range": range(tab.gid, rows: tab.headerRow..<(tab.headerRow + 1), columns: 0..<width),
                 "cell": ["userEnteredFormat": [
                     "textFormat": ["bold": true],
                     "backgroundColor": json(headerShade)
@@ -95,28 +98,31 @@ enum SheetTidy {
 
             var rules: [(formula: String, format: [String: Any])] = []
 
+            // Formulas are written for the first data row and Sheets shifts
+            // them down the range — so they name that row, not row 2.
+            let first = tab.headerRow + 2
             if datedTabs.contains(tab.title) {
                 let date = column(TeamSheet.column(tab.header, ["date", "날짜"]) ?? 0)
                 // N() is 0 for text, so a hand-typed date Sheets did not
                 // recognise is left uncoloured rather than compared as text.
                 rules.append((
-                    "=AND(N($\(date)2)>0,$\(date)2>=TODAY(),$\(date)2<TODAY()+7)",
+                    "=AND(N($\(date)\(first))>0,$\(date)\(first)>=TODAY(),$\(date)\(first)<TODAY()+7)",
                     ["backgroundColor": json(thisWeekShade)]))
                 rules.append((
-                    "=AND(N($\(date)2)>0,$\(date)2<TODAY())",
+                    "=AND(N($\(date)\(first))>0,$\(date)\(first)<TODAY())",
                     ["textFormat": ["foregroundColor": json(pastText)]]))
             }
 
             if tab.title == TeamSheet.signupsTab {
                 let status = column(TeamSheet.column(tab.header, ["status", "상태", "응답"]) ?? 4)
                 // Spelled the ways SignupStatus reads them.
-                rules.append((anyOf(status, ["declined", "불가", "어려움"]),
+                rules.append((anyOf(status, first, ["declined", "불가", "어려움"]),
                                ["backgroundColor": json(declined)]))
-                rules.append((anyOf(status, ["away", "자리비움", "부재"]),
+                rules.append((anyOf(status, first, ["away", "자리비움", "부재"]),
                                ["backgroundColor": json(away)]))
-                rules.append((anyOf(status, ["maybe", "미정", "아마", "tentative"]),
+                rules.append((anyOf(status, first, ["maybe", "미정", "아마", "tentative"]),
                                ["backgroundColor": json(maybe)]))
-                rules.append((anyOf(status, ["available", "가능"]),
+                rules.append((anyOf(status, first, ["available", "가능"]),
                                ["backgroundColor": json(available)]))
             }
 
@@ -124,7 +130,7 @@ enum SheetTidy {
                 out.append(["addConditionalFormatRule": [
                     "index": 0,
                     "rule": [
-                        "ranges": [range(tab.gid, fromRow: 1, columns: 0..<width)],
+                        "ranges": [range(tab.gid, fromRow: tab.headerRow + 1, columns: 0..<width)],
                         "booleanRule": [
                             "condition": ["type": "CUSTOM_FORMULA",
                                           "values": [["userEnteredValue": rule.formula]]],
@@ -142,8 +148,8 @@ enum SheetTidy {
     /// "A" … "Z", "AA" …
     static func column(_ index: Int) -> String { TeamSheet.columnLetter(index) }
 
-    private static func anyOf(_ column: String, _ words: [String]) -> String {
-        let tests = words.map { "LOWER(TRIM($\(column)2))=\"\($0.lowercased())\"" }
+    private static func anyOf(_ column: String, _ row: Int, _ words: [String]) -> String {
+        let tests = words.map { "LOWER(TRIM($\(column)\(row)))=\"\($0.lowercased())\"" }
         return "=OR(\(tests.joined(separator: ",")))"
     }
 

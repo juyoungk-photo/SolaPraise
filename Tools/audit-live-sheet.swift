@@ -38,7 +38,7 @@ struct AuditLiveSheet {
             print("Could not reach the sheet.")
             exit(2)
         }
-        let tabs = ["Schedule", "Songs", "Signups", "Members", "Plan"]
+        let tabs = ["Schedule", "Songs", "Signups", "Members", "Plan", "Attachments"]
         var gids: [String: String] = [:]
         for tab in tabs {
             let pattern = #"\[\d+,0,\\?"(\d+)\\?",\[\{[^\]]*?\\?""# + tab + #"\\?""#
@@ -59,7 +59,8 @@ struct AuditLiveSheet {
             let url = "https://docs.google.com/spreadsheets/d/\(sheetId)/export?format=csv&gid=\(gid)"
             if let data = await fetch(url), let text = String(data: data, encoding: .utf8),
                !text.hasPrefix("<") {
-                rows[tab] = csv(text)
+                // The header wherever it is, as the app reads it.
+                rows[tab] = TeamSheet.anchorHeader(csv(text), tab: tab)
             }
         }
         print("Read: " + tabs.map { "\($0) \(rows[$0].map { "\($0.count - 1)" } ?? "—")" }
@@ -67,7 +68,8 @@ struct AuditLiveSheet {
 
         let findings = SheetAudit.run(SheetAudit.Input(
             schedule: rows["Schedule"], songs: rows["Songs"], signups: rows["Signups"],
-            members: rows["Members"], plan: rows["Plan"], checksAccounts: false))
+            members: rows["Members"], plan: rows["Plan"], attachments: rows["Attachments"],
+            checksAccounts: false))
 
         for finding in findings {
             let mark: String
