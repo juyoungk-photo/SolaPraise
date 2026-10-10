@@ -15,7 +15,7 @@
 //
 //  Run:
 //      swiftc -O -o /tmp/scoreocr \
-//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift \
+//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift Sources/Chords/ScoreChart.swift \
 //          Tools/check-score-ocr.swift
 //      /tmp/scoreocr
 //
@@ -238,7 +238,8 @@ struct CheckScoreOCR {
     /// sharps, a 6/8 time signature, measure numbers, verse lines, and
     /// chords written with a real ♯ — 「G♯」 「C♯m」 「F♯」. Note stems rise
     /// into the chord line; one in the opening of the C read 「C♯m」 as
-    /// 「G#m」. Drawn here at the size of a phone screenshot.
+    /// 「G#m」. Beamed stems as tall as the staff, which are not barlines,
+    /// and an end repeat, which is. Drawn at the size of a phone screenshot.
     static func hymnPage() {
         let width = 800, height = 870
         guard let context = CGContext(
@@ -303,6 +304,20 @@ struct CheckScoreOCR {
                 context.move(to: CGPoint(x: x, y: top)); context.addLine(to: CGPoint(x: x, y: top + 36))
             }
             context.strokePath()
+            // Two eighths beamed on the top line, heads in the bottom space:
+            // stems exactly as tall as the staff, which are not barlines.
+            context.fillEllipse(in: CGRect(x: 322, y: top + 28, width: 10, height: 7))
+            context.fillEllipse(in: CGRect(x: 352, y: top + 28, width: 10, height: 7))
+            context.move(to: CGPoint(x: 331.5, y: top + 31)); context.addLine(to: CGPoint(x: 331.5, y: top))
+            context.move(to: CGPoint(x: 361.5, y: top + 31)); context.addLine(to: CGPoint(x: 361.5, y: top))
+            context.strokePath()
+            context.fill(CGRect(x: 331, y: top - 1, width: 31, height: 4))
+            // The second row ends on a repeat: dots, thin, thick.
+            if system.number == "5" {
+                context.fillEllipse(in: CGRect(x: 774, y: top + 11.5, width: 4.5, height: 4.5))
+                context.fillEllipse(in: CGRect(x: 774, y: top + 20.5, width: 4.5, height: 4.5))
+                context.fill(CGRect(x: 786, y: top, width: 5, height: 36))
+            }
             for (chord, x) in system.chords {
                 text(chord, x, top - 33, 18)
                 placed.append(Placed(text: chord.replacingOccurrences(of: "♯", with: "#"), x: x, lineY: top - 33))
@@ -327,6 +342,34 @@ struct CheckScoreOCR {
         check("hymn page: no title, credit, measure number or sharp taken for a chord",
               remaining.isEmpty, "extra \(remaining.map { "\($0.original)@\(Int($0.box.minX * CGFloat(width)))" })")
         check("hymn page: in E", ScoreChordText.likelyRoot(of: found.map(\.original)) == 4)
+
+        // 코드표: the same page read as bars, chords and verses.
+        let names = Dictionary(uniqueKeysWithValues: found.map { ($0.id, $0.original) })
+        let chart = ScoreChart.read(image, chords: found.map { ScoreChart.ChordMark(id: $0.id, box: $0.box) })
+        let barChords = chart.map { system in
+            system.bars.map { bar in bar.segments.compactMap { $0.chord.flatMap { names[$0] } } }
+        }
+        check("chart: four rows of four bars", chart.map(\.bars.count) == [4, 4, 4, 4],
+              "got \(chart.map(\.bars.count))")
+        check("chart: each chord in the bar it starts in",
+              barChords.first == [["E"], ["B7", "E"], ["A"], ["E", "B7"]]
+                  && barChords.last == [["E", "B"], ["E7", "A"], ["E"], ["B7", "E"]],
+              "got \(barChords)")
+        check("chart: the second row ends on a repeat, and no other bar does",
+              chart.map { $0.bars.map(\.repeatEnd) } == [[false, false, false, false], [false, false, false, true],
+                                                         [false, false, false, false], [false, false, false, false]],
+              "got \(chart.map { $0.bars.map(\.repeatEnd) })")
+        check("chart: four verses under the first two rows, one under the rest",
+              chart.map(\.verses) == [4, 4, 1, 1], "got \(chart.map(\.verses))")
+        let verseText = { (system: ScoreChart.System, line: Int) in
+            system.bars.flatMap(\.segments).map { line < $0.lyrics.count ? $0.lyrics[line] : "" }.joined()
+        }
+        if let first = chart.first {
+            check("chart: a verse reads whole, its number and dashes gone",
+                  verseText(first, 0) == "주님앞에나아가오늘도함께하시네", "got 「\(verseText(first, 0))」")
+            check("chart: the fourth verse is its own line",
+                  first.verses == 4 && verseText(first, 3) == "주님앞에나아가오늘도함께하시네", "got 「\(verseText(first, 3))」")
+        }
     }
 
     static func main() {

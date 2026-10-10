@@ -45,6 +45,9 @@ struct ScoreStandView: View {
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
+    /// 코드표: the page read as bars of chords and lyrics, instead of the
+    /// page itself. Remembered on this device.
+    @AppStorage("score.showsChart") private var showsChart = false
     @State private var chordAction: ChordAction?
     @State private var entry: ChordEntry?
     @State private var choosingPage = false
@@ -81,11 +84,14 @@ struct ScoreStandView: View {
             if let item {
                 VStack(spacing: 0) {
                     header(item)
-                    pages(item)
+                    if showsChart && !editing { chart(item) } else { pages(item) }
                     controls(item)
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
+                .task(id: chartKey(item)) {
+                    if showsChart { await model.loadChart(item) }
+                }
                 #if DEBUG
                 .task {
                     if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle) }
@@ -191,6 +197,17 @@ struct ScoreStandView: View {
                         .foregroundStyle(.white.opacity(0.55))
                 }
                 Spacer(minLength: 0)
+                Picker("보기", selection: $showsChart) {
+                    Text("악보").tag(false)
+                    Text("코드표").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .disabled(editing)
+                // The stand is dark on every device; a segmented control
+                // takes its look from the environment, and on iPad it came
+                // out light with 「악보」 unreadable.
+                .environment(\.colorScheme, .dark)
             }
             if editing {
                 Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요.")
@@ -290,6 +307,52 @@ struct ScoreStandView: View {
             VStack(spacing: 12) {
                 ProgressView().tint(.white)
                 Text("악보에서 코드를 읽는 중…")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - 코드표
+
+    /// Reloads when the song changes, when 코드표 is chosen, and after a hand
+    /// edit has thrown the old reading away.
+    private func chartKey(_ item: ScoreStandItem) -> String {
+        "\(item.id)|\(showsChart)|\(model.states[item.id]?.isReady == true)|\(model.charts[item.id] == nil)"
+    }
+
+    @ViewBuilder
+    private func chart(_ item: ScoreStandItem) -> some View {
+        if let systems = model.charts[item.id], let state = model.states[item.id] {
+            if systems.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "music.note.list").font(.largeTitle)
+                    Text("오선을 찾지 못해 코드표를 만들 수 없습니다. 오선 없이 코드와 가사만 있는 악보는 「악보」로 보세요.")
+                        .multilineTextAlignment(.center)
+                        .font(.callout)
+                }
+                .foregroundStyle(.white.opacity(0.8))
+                .padding(32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                let originals = Dictionary(state.pages.flatMap(\.chords).map { ($0.id, $0.original) },
+                                           uniquingKeysWith: { first, _ in first })
+                let shift = state.showsOriginal ? 0 : state.shift
+                ScoreChartView(systems: systems, chord: { id in
+                    originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
+                }, scale: model.chordScale)
+            }
+        } else if let failure = model.states[item.id]?.failure {
+            Text(failure)
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.8))
+                .padding(32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 12) {
+                ProgressView().tint(.white)
+                Text("마디와 가사를 읽는 중…")
                     .font(.callout)
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -411,7 +474,7 @@ struct ScoreStandView: View {
         Button { editing.toggle() } label: {
             pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
         }
-        .disabled(!(state?.isReady ?? false))
+        .disabled(!(state?.isReady ?? false) || showsChart)
         .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
 
         if editing {
@@ -808,8 +871,32 @@ final class ScoreStandModel: ObservableObject {
         return nil
     }
 
+    // MARK: 코드표
+
+    /// Each song's bars, chords and lyrics, read the first time 코드표 is
+    /// asked for — a second or two a page — and again after a hand edit.
+    /// Held in memory only: the lyrics are the team's chart, read to lay it
+    /// out, and are not kept.
+    @Published var charts: [String: [ScoreChart.System]] = [:]
+    private var chartsReading: Set<String> = []
+
+    func loadChart(_ item: ScoreStandItem) async {
+        guard charts[item.id] == nil, !chartsReading.contains(item.id),
+              let state = states[item.id], state.isReady else { return }
+        chartsReading.insert(item.id)
+        defer { chartsReading.remove(item.id) }
+        let pages = state.pages.map { page in
+            (page.image.cgImage, page.chords.map { ScoreChart.ChordMark(id: $0.id, box: $0.placed) })
+        }
+        let systems = await Task.detached(priority: .userInitiated) {
+            pages.flatMap { image, marks in image.map { ScoreChart.read($0, chords: marks) } ?? [] }
+        }.value
+        charts[item.id] = systems
+    }
+
     /// Forgets every hand edit and reads the chart again.
     func resetEdits(_ item: ScoreStandItem) async {
+        charts[item.id] = nil
         ScoreEditStore.remove(item.id)
         Self.cache[item.id] = nil
         states[item.id] = nil
@@ -827,6 +914,7 @@ final class ScoreStandModel: ObservableObject {
     }
 
     private func saveEdits(_ item: ScoreStandItem) {
+        charts[item.id] = nil
         guard let state = states[item.id] else { return }
         ScoreEditStore.save(state.pages.map(\.chords), edited: true, for: item.id)
     }

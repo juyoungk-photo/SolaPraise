@@ -222,7 +222,7 @@ enum ScoreRecognition {
     }
 
     /// The image scaled up, smoothly, for a second look at small text.
-    private static func enlarged(_ image: CGImage, by factor: Int) -> CGImage? {
+    static func enlarged(_ image: CGImage, by factor: Int) -> CGImage? {
         let width = image.width * factor, height = image.height * factor
         guard let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -453,7 +453,7 @@ enum ScoreRecognition {
     /// of a set being exported.
     private static let grayLock = NSLock()
 
-    private static func grayscale(_ image: CGImage) -> [UInt8]? {
+    static func grayscale(_ image: CGImage) -> [UInt8]? {
         grayLock.lock()
         let cached = grayCache
         grayLock.unlock()
