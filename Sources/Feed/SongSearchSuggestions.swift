@@ -52,7 +52,8 @@ struct SongSearchSuggestion: Identifiable, Equatable {
 
 enum SongSearchSuggestions {
 
-    static func make(title: String, description: String?) -> [SongSearchSuggestion] {
+    static func make(title: String, description: String?,
+                     channel: String? = nil) -> [SongSearchSuggestion] {
         var out: [SongSearchSuggestion] = []
         var seen = Set<String>()
 
@@ -69,15 +70,27 @@ enum SongSearchSuggestions {
             out.append(SongSearchSuggestion(kind: kind, label: query, query: query))
         }
 
-        let cleanTitle = clean(title)
-        add(.title, cleanTitle)
+        // A medley names two songs; both are worth searching.
+        for song in songTitles(title: title, description: description ?? "", channel: channel) {
+            add(.title, song)
+        }
 
         let corpus = title + "\n" + (description ?? "")
-        if let hymn = hymnNumber(in: corpus) { add(.hymn, "찬송가 \(hymn)장") }
+        // The title's number first: a description can mention others —
+        // 「찬송가 1장부터 645장까지」 is a channel's blurb, not this song.
+        if let hymn = hymnNumber(in: title) ?? hymnNumber(in: description ?? "") {
+            add(.hymn, "찬송가 \(hymn)장")
+        }
 
-        let lyrics = lyricLines(in: description ?? "")
+        // Lines that name the team or the channel are not lyrics, however
+        // much they read like one — 「어노인팅 채널」, 「마커스 목요예배」.
+        let team = teamWords(channel: channel)
+        let notTeam: (String) -> Bool = { line in !mentionsTeam(line, team) }
+        let lyrics = lyricLines(in: description ?? "").filter(notTeam)
         if let hook = mostRepeated(lyrics) { add(.hook, hook) }
-        if let first = lyricBlock(in: description ?? "").first { add(.firstLine, first) }
+        if let first = lyricBlock(in: description ?? "").first(where: notTeam) {
+            add(.firstLine, first)
+        }
 
         if let passage = ScriptureReferenceText.passage(in: corpus) {
             add(.scripture, passage)
@@ -86,6 +99,198 @@ enum SongSearchSuggestions {
     }
 
     // MARK: - Title
+
+    /// The song (or songs, for a medley) a video is of, best first. Empty
+    /// when the title names no song at all — a service stream, a teaser.
+    ///
+    /// The title is cut at every separator teams use, and each part is
+    /// judged on its own. Keeping simply the part before the first
+    /// separator — the old rule — was right for 「은혜 | 손경민」 and wrong
+    /// for most of a real feed, measured on 96 recent uploads:
+    ///
+    ///   간미연 - 너 근심 걱정 말아라 | Delivery Project   → the singer
+    ///   출근길에 딱 - 선하신 목자                          → the headline
+    ///   은밀한 곳 조용한 곳에ㅣANOINTING CLIP             → kept 「ㅣANOINTING CLIP」
+    ///   2026_1001ㅣ어노인팅목요예배ㅣ인도_ 소병찬          → a service, not a song
+    ///   01. 은혜                                           → the track number
+    ///
+    /// The description settles the hard ones. Teams tag the song itself
+    /// (#선하신목자), open with its title, and list singers in credits —
+    /// so a part that matches a hashtag or the first line wins, and one
+    /// that appears in a credit line is a person.
+    static func songTitles(title: String, description: String, channel: String?) -> [String] {
+        // Split BEFORE the compatibility mapping that turns 𝑳𝒊𝒗𝒆 into
+        // Live: it also turns the 「ㅣ」 teams use as a bar into a different
+        // character, and 「은밀한 곳 조용한 곳에ㅣANOINTING CLIP」 stopped
+        // splitting at all.
+        let text = title
+        let team = teamWords(channel: channel)
+        let tags = hashtags(in: text + "\n" + description)
+        let firstLine = description.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty && !$0.hasPrefix("#") && !$0.lowercased().contains("http") }
+            .map(normalised) ?? ""
+        let credits = creditLines(in: description).map(normalised)
+
+        // Hashtag-only titles: 「#깨끗한손주옵소서 #giveuscleanhands」.
+        if text.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+            let words = text.split(separator: " ").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+            if let korean = words.first(where: { hangulShare(of: $0) > 0.5 }) { return [korean] }
+            return words.first.map { [$0] } ?? []
+        }
+
+        struct Candidate { let text: String; let score: Int; let position: Int; let medley: Int }
+        var candidates: [Candidate] = []
+        for (position, rawPart) in parts(of: text).enumerated() {
+            let part = rawPart.precomposedStringWithCompatibilityMapping
+            for (medleyIndex, piece) in part.components(separatedBy: " + ").enumerated() {
+                guard !isPackaging(piece, team: team) else { continue }
+                var hymn = false
+                let song = cleanPart(piece, hymn: &hymn)
+                // A song title has no digits once its hymn and track
+                // numbers are gone; 「27년 1/28」 is a date.
+                guard song.count >= 2, hangulShare(of: song) >= 0.5 || song.count >= 4,
+                      song.rangeOfCharacter(from: .decimalDigits) == nil,
+                      !isPackaging(song, team: team) else { continue }
+                let key = normalised(song)
+                guard !key.isEmpty else { continue }
+                var score = 0
+                if tags.contains(key) { score += 6 }
+                if !firstLine.isEmpty, firstLine.hasPrefix(key) || key.hasPrefix(firstLine) { score += 3 }
+                if hymn { score += 3 }
+                if hangulShare(of: song) >= 0.7 { score += 1 }
+                // A name in the credits is a person, not a song: 「범키」,
+                // 「간미연」. Only short, single-word parts — a real title
+                // can appear in a credit line as 「곡: 은혜」.
+                if !song.contains(" "), song.count <= 4,
+                   credits.contains(where: { $0.contains(key) }) { score -= 6 }
+                candidates.append(Candidate(text: song, score: score,
+                                            position: position, medley: medleyIndex))
+            }
+        }
+        guard let best = candidates.max(by: { a, b in
+            a.score != b.score ? a.score < b.score
+                : (a.position != b.position ? a.position > b.position : a.medley > b.medley)
+        }) else { return [] }
+
+        // The other song of a medley rides along: 「A + B」 is two songs.
+        let partners = candidates.filter {
+            $0.position == best.position && $0.medley != best.medley && $0.score >= best.score - 1
+        }
+        return [best.text] + partners.prefix(1).map(\.text)
+    }
+
+    /// Cut at every separator teams put between the song and its packaging.
+    static func parts(of title: String) -> [String] {
+        var pieces = [title]
+        // 「ㅣ」 (the Hangul vowel) and a spaced 「l」/「I」 are used as bars;
+        // " I " only counts in a Korean title, where it cannot be the word.
+        var separators = [" | ", "|", "｜", "ㅣ", " / ", " - ", " — ", " – ", " l "]
+        if title.range(of: #"\p{Hangul}"#, options: .regularExpression) != nil { separators.append(" I ") }
+        for separator in separators {
+            pieces = pieces.flatMap { $0.components(separatedBy: separator) }
+        }
+        return pieces.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// One part with its asides removed: brackets, track numbers, hymn
+    /// numbers, keys, an English translation trailing the Korean.
+    static func cleanPart(_ raw: String, hymn: inout Bool) -> String {
+        var text = raw
+        for pattern in [#"\[[^\]]*\]"#, #"\([^)]*\)"#, #"【[^】]*】"#, #"「|」|"|“|”"#] {
+            text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+        }
+        // 「찬송가 543장」, a trailing 「543장」 — the song is what is left.
+        if text.range(of: #"(?:새|통일)?찬송가\s*\d{1,3}\s*장|\d{1,3}\s*장"#, options: .regularExpression) != nil {
+            hymn = true
+            text = text.replacingOccurrences(of: #"(?:새|통일)?찬송가\s*\d{1,3}\s*장|\d{1,3}\s*장"#,
+                                             with: " ", options: .regularExpression)
+        }
+        // A leading track number: 「01. 은혜」, 「3) 주님」, 「#2 임재」,
+        // 「Track 5 은혜」 — never a year or a hymn, both handled above.
+        text = text.replacingOccurrences(of: #"^\s*(?:track\s*)?#?\d{1,3}\s*[.)_:\-]?\s+"#,
+                                         with: "", options: [.regularExpression, .caseInsensitive])
+        // Packaging words inside the part.
+        text = text.replacingOccurrences(
+            of: #"(?i)\b(?:mr|inst|kor\s*sub|eng\s*sub|official|mv|m/v|lyrics?|live|ver\.?|version|acoustic|cover)\b|가사\s*포함|가사|반주"#,
+            with: " ", options: .regularExpression)
+        // Emoji and symbols.
+        text = String(text.unicodeScalars.filter {
+            !($0.properties.isEmojiPresentation || $0.properties.generalCategory == .otherSymbol)
+        }.map(Character.init))
+        // An English translation trailing a Korean title.
+        if let range = text.range(of: #"(?<=\p{Hangul})\s+[A-Za-z][A-Za-z0-9 ,'’!?.&]*$"#,
+                                  options: .regularExpression) {
+            text = String(text[..<range.lowerBound])
+        }
+        return text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    /// Words that mark a part as the team, the event, or the format rather
+    /// than the song.
+    private static let packaging = [
+        "워십", "worship", "project", "프로젝트", "clip", "클립", "streaming", "스트리밍",
+        "목요예배", "주일예배", "수요예배", "금요예배", "새벽예배", "화요모임", "예배실황", "실황",
+        "찬양팀", "컨퍼런스", "conference", "teaser", "티저", "camp", "캠프", "소식",
+        "플레이리스트", "playlist", "연속 듣기", "연속듣기", "모음", "보컬 클래스",
+        "인도_", "인도:", "설교", "sermon"
+    ]
+
+    static func isPackaging(_ part: String, team: [String]) -> Bool {
+        let lower = part.lowercased()
+        if packaging.contains(where: { lower.contains($0) }) { return true }
+        if mentionsTeam(part, team) { return true }
+        // An episode, a date, a key, a run time.
+        if lower.range(of: #"^ep\.?\s*\d|^\d{4}[-_.]|^20\d\d\b|^\d{1,2}\.\d{1,2}\.\d{2,4}|^[a-g][#b♭]?(?:-[a-g][#b♭]?)?\s*key$|^\d+\s*(시간|분)"#,
+                       options: .regularExpression) != nil { return true }
+        return false
+    }
+
+    /// The channel's own name, word by word, for spotting it in titles and
+    /// descriptions: 「MARKERS WORSHIP」 → markers, worship.
+    static func teamWords(channel: String?) -> [String] {
+        guard let channel else { return [] }
+        // Latin words need four letters and must not be common words:
+        // 「더라이트 The Light」 made 「the」 a team word, and every hymn
+        // with an English title — 「All the Way My Savior Leads Me」 —
+        // was thrown out as the team's name.
+        let common: Set<String> = ["the", "and", "for", "with", "you", "our", "of", "official", "music", "church"]
+        return channel.precomposedStringWithCompatibilityMapping
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { word in
+                guard !common.contains(word) else { return false }
+                return word.range(of: #"\p{Hangul}"#, options: .regularExpression) != nil
+                    ? word.count >= 2 : word.count >= 4
+            }
+    }
+
+    static func mentionsTeam(_ text: String, _ team: [String]) -> Bool {
+        guard !team.isEmpty else { return false }
+        let words = Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted))
+        let joined = normalised(text)
+        return team.contains { words.contains($0) || ($0.count >= 4 && joined.contains($0)) }
+    }
+
+    /// #선하신목자 → 선하신목자, normalised.
+    static func hashtags(in text: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: #"#([\p{L}\p{N}_]+)"#) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return Set(regex.matches(in: text, range: range).compactMap {
+            Range($0.range(at: 1), in: text).map { normalised(String(text[$0])) }
+        })
+    }
+
+    /// Lines that credit people: 「Voc | 권기범(범키)」, 「• Piano 권예은」.
+    static func creditLines(in description: String) -> [String] {
+        description.components(separatedBy: .newlines).filter { line in
+            let lower = line.lowercased()
+            let words = lower.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+            return words.contains { roleWords.contains($0) || ["voc", "lead", "인도", "보컬", "건반"].contains($0) }
+        }
+    }
 
     /// The song's name without the packaging around it.
     ///
@@ -125,7 +330,9 @@ enum SongSearchSuggestions {
 
     /// 「찬송가 543장」, 「새찬송가 543장」, 「통일찬송가 342장」, 「543장」.
     static func hymnNumber(in text: String) -> Int? {
-        let patterns = [#"(?:새|통일)?찬송가\s*(\d{1,3})\s*장"#, #"(?<!\d)(\d{1,3})\s*장(?!\s*\d)"#]
+        // Not a range: 「1장부터」, 「645장까지」, 「1~645장」.
+        let patterns = [#"(?:새|통일)?찬송가\s*(\d{1,3})\s*장(?!\s*(?:부터|까지|~))"#,
+                        #"(?<![\d~])(\d{1,3})\s*장(?!\s*(?:\d|부터|까지|~))"#]
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern),
                   let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
@@ -171,7 +378,10 @@ enum SongSearchSuggestions {
                            "guitar", "keys", "engineer", "믹싱", "마스터링", "촬영",
                            "영상", "제작", "후원", "문의", "copyright", "ccli",
                            "all rights", "instagram", "facebook", "구독", "좋아요",
-                           "알림", "인도", "찬양팀", "worship leader", "director"]
+                           "알림", "인도:", "인도_", "인도 :", "찬양팀", "worship leader", "director"]
+        // Not a bare 「인도」: as a role it is written 「인도: 이름」, and as
+        // a word it is all over hymns — 「예수 인도하시니」 was rejected as
+        // a credit, which broke the verse and moved 첫소절 to its third line.
         return description
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -184,6 +394,8 @@ enum SongSearchSuggestions {
                 if line.contains(":") || line.contains("：") { return false }
                 if line.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil { return false }
                 if creditWords.contains(where: { lower.contains($0) }) { return false }
+                // An event or a team, not a lyric: 「예수전도단 화요모임」.
+                if isPackaging(line, team: []) { return false }
                 // MUST LOOK LIKE A LYRIC, not merely fail to look like a
                 // credit. A blocklist of non-lyrics kept leaking: after the
                 // credits were caught, 「☎️032-551-0210 (오전 9시 - 오후 6시)」
@@ -195,6 +407,11 @@ enum SongSearchSuggestions {
                 guard hangulShare(of: line) >= 0.7 else { return false }
                 // A note, not a lyric: 「*피아 목요 예배 녹화영상은…」.
                 if line.hasPrefix("*") || line.hasPrefix("※") || line.hasPrefix("-") { return false }
+                // Prose, not a lyric: 「어쿠스틱 기타 한 대로 다시 불렀습니다.」
+                // Sung lines are not written with a closing full stop.
+                if line.hasSuffix(".") || line.hasSuffix("…") || line.hasSuffix("다!") { return false }
+                // A list of names: 「윤기현 조성민」, 「곽세아, 김다솜, 김서희」.
+                if isNameList(line) { return false }
                 // "Mixed by 이호", "Arrangement by F.I.A".
                 if lower.contains(" by ") || lower.hasSuffix(" by") { return false }
                 // AN ENGLISH ROLE, THEN A KOREAN NAME.
@@ -211,6 +428,22 @@ enum SongSearchSuggestions {
                 }
                 return true
             }
+    }
+
+    /// Common Korean surnames, for telling a list of people from a lyric.
+    private static let surnames = Set("김이박최정강조윤장임한오서신권황안송류전홍고문양손배백허유남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉")
+
+    /// Every word a three-syllable Hangul name with a common surname, and
+    /// at least two of them. 「주님의 사랑이」 fails on 사; a lyric made only
+    /// of surname-led three-syllable words is rare enough to accept.
+    static func isNameList(_ line: String) -> Bool {
+        let words = line.replacingOccurrences(of: ",", with: " ")
+            .split(separator: " ").map(String.init)
+        guard words.count >= 2 else { return false }
+        return words.allSatisfy { word in
+            word.count == 3 && hangulShare(of: word) == 1
+                && word.first.map { surnames.contains($0) } == true
+        }
     }
 
     /// Share of non-space characters that are Hangul syllables.
@@ -231,17 +464,28 @@ enum SongSearchSuggestions {
     /// details.
     static func lyricBlock(in description: String) -> [String] {
         let accepted = Set(lyricLines(in: description))
+        // A run of one-word lines is a list — guest teams, places — not
+        // a verse: 「제이어스」 was offered as a song's first line.
+        func isVerse(_ run: [String]) -> Bool {
+            guard run.count >= 3 else { return false }
+            let words = run.reduce(0) { $0 + $1.split(separator: " ").count }
+            return Double(words) / Double(run.count) >= 2
+        }
         var run: [String] = []
         for raw in description.components(separatedBy: .newlines) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if accepted.contains(line) {
                 run.append(line)
             } else {
-                if run.count >= 3 { return run }
+                // A run that ends in a full-stop sentence was the start of
+                // that sentence: 「이 시간을 통해 조용히 주님 앞에 머물며, /
+                // … / 함께 기도해 주시길 바랍니다.」 is a paragraph, not a verse.
+                let closesSentence = line.hasSuffix(".") && hangulShare(of: line) > 0.5
+                if isVerse(run), !closesSentence { return run }
                 run = []
             }
         }
-        return run.count >= 3 ? run : []
+        return isVerse(run) ? run : []
     }
 
     /// The line sung most often — the hook — when one is sung more than once.

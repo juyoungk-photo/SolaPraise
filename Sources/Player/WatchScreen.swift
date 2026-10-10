@@ -464,7 +464,8 @@ struct WatchScreen: View {
     private var searchSuggestionRow: some View {
         if let current {
             let suggestions = SongSearchSuggestions.make(
-                title: current.title, description: descriptionForSuggestions)
+                title: current.title, description: descriptionForSuggestions,
+                channel: current.channelTitle)
             if !suggestions.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {

@@ -171,6 +171,60 @@ struct CheckSongSuggestions {
         check("no lyrics → still offers the title",
               bare.first?.query == "은혜", "got \(bare.first?.query ?? "nil")")
 
+        // REAL TITLE SHAPES, measured on 96 recent uploads from the app's
+        // worship channels. Person names are placeholders.
+        func titleSuggestions(_ title: String, _ description: String = "", channel: String? = nil) -> [String] {
+            SongSearchSuggestions.make(title: title, description: description, channel: channel)
+                .filter { $0.kind == .title }.map(\.query)
+        }
+        let shapes: [(String, String, String?, [String])] = [
+            // Singer first: the song is the OTHER part; the singer is in the credits.
+            ("가수명 - 너 근심 걱정 말아라  |  Delivery Project",
+             "[Credit]\n🎙️ Voc | 가수명", "Delivery Project", ["너 근심 걱정 말아라"]),
+            // A headline first; the description's hashtag names the song.
+            ("출근길에 딱 - 선하신 목자", "#선하신목자 #복음성가", "ALL THAT HYMNㅣ올댓힘", ["선하신 목자"]),
+            // A hymn number marks the song part.
+            ("해와 달이 아무리 빛나도 - 만유의 주재 32장", "", nil, ["만유의 주재"]),
+            // 「ㅣ」 as a bar, the team after it.
+            ("은밀한 곳 조용한 곳에ㅣANOINTING CLIP", "", "ANOINTING", ["은밀한 곳 조용한 곳에"]),
+            // A service stream names no song.
+            ("2026_1001ㅣ어노인팅목요예배ㅣ인도_ 인도자", "", "ANOINTING", []),
+            ("2026-10-06ㅣ예수전도단 화요모임", "", "예수전도단 화요모임 YWAM Worship Korea", []),
+            ("2027 FIC Winter Camp - Teaser", "", "F.I.A", []),
+            // A track number is not part of the title.
+            ("01. 은혜 | 예시워십", "", nil, ["은혜"]),
+            ("Track 3 주님 뜻대로 살기로 했네", "", nil, ["주님 뜻대로 살기로 했네"]),
+            // A medley is two songs.
+            ("예수 우리 왕이여 + 나는 찬양하리라", "", nil, ["예수 우리 왕이여", "나는 찬양하리라"]),
+            // An English title must survive a channel named 「… The Light」.
+            ("나의 갈 길 다 가도록 All the Way My Savior Leads Me | 찬송가 384장 | 더라이트 워십 Live",
+             "", "더라이트 The Light", ["나의 갈 길 다 가도록"]),
+            // Bold Unicode letters in the packaging, and a key.
+            ("임재 Come Holy Spirit - 마커스워십 𝑳𝒊𝒗𝒆 𝑪𝒍𝒊𝒑 | A Key", "", "MARKERS WORSHIP", ["임재"]),
+        ]
+        for (title, description, channel, want) in shapes {
+            let got = titleSuggestions(title, description, channel: channel)
+            check("title: \(title.prefix(34))", got == want, "got \(got), want \(want)")
+        }
+
+        // 첫소절 must be a lyric, never names, a team or prose.
+        let names = "Vocal\n김기현 조성민\n곽세아, 김다솜, 김서희\n이다혜 이서연 정은용"
+        check("a list of names is not 첫소절",
+              !SongSearchSuggestions.make(title: "예시 | 팀", description: names)
+                .contains { $0.kind == .firstLine })
+        let prose = "이 시간을 통해 조용히 주님 앞에 머물며,\n고통하는 영혼들의 멍에가 끊어지고\n북한 땅에 하나님의 자유가 임하도록\n함께 기도해 주시길 바랍니다."
+        check("a prose paragraph is not 첫소절",
+              !SongSearchSuggestions.make(title: "예시 | 팀", description: prose)
+                .contains { $0.kind == .firstLine })
+        let hymnVerse = "[1절]\n나의 갈 길 다 가도록\n예수 인도하시니\n내 주 안에 있는 긍휼\n어찌 의심하리요"
+        check("「인도하시니」 is a lyric, not a credit",
+              SongSearchSuggestions.lyricBlock(in: hymnVerse).first == "나의 갈 길 다 가도록",
+              "got \(SongSearchSuggestions.lyricBlock(in: hymnVerse))")
+        check("a hymn range in a channel blurb is not this hymn",
+              SongSearchSuggestions.make(title: "선하신 목자 | 예시",
+                                         description: "찬송가 1장부터 645장까지 매주 한 곡씩")
+                .allSatisfy { $0.kind != .hymn })
+
         print(failures == 0 ? "\nall suggestion checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }
