@@ -107,8 +107,7 @@ struct ServicePrepView: View {
     /// Set by the List's ScrollViewReader so opening a row can bring it into
     /// view — a row near the bottom would otherwise unfold off screen.
     @State private var scrollTo: ((Date) -> Void)?
-    @State private var scrollToHealth: (() -> Void)?
-    private static let healthAnchor = "sheet-health"
+    @State private var showHealth = false
 
     /// What the switch was asked to be, per service, while the write is in
     /// flight — see answerControl.
@@ -247,6 +246,12 @@ struct ServicePrepView: View {
                 .environmentObject(team)
             }
             .fullScreenCover(item: $live) { LiveServiceView(service: $0) }
+            .sheet(isPresented: $showHealth) {
+                SheetHealthView(sheetId: sheetId)
+                    .environmentObject(team)
+                    .environmentObject(auth)
+                    .environmentObject(planning)
+            }
             .fullScreenCover(item: $standService) { service in
                 ScoreStandView(items: standItems(service))
             }
@@ -471,7 +476,7 @@ struct ServicePrepView: View {
             // list and the list opens scrolled to the next service — below
             // them. A sheet problem the screen opens past is one nobody sees.
             if let summary = sheetHealthSummary {
-                Button { scrollToHealth?() } label: {
+                Button { showHealth = true } label: {
                     Label(summary, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
@@ -566,13 +571,22 @@ struct ServicePrepView: View {
         }
     }
 
-    /// "시트 확인 필요 · 칸 밀림 2 · 중복 6 — 눌러서 보기", or nil when clean.
+    /// What 워크플로 점검 says needs attention, as SheetHealthView shows it.
+    private var attention: [SheetAudit.Finding] {
+        SheetAudit.needsAttention(
+            team.audit(accounts: SheetHealthView.accounts(auth: auth, planning: planning)))
+    }
+
+    /// "워크플로 점검 · 문제 1 · 확인 2 — 눌러서 보기", or nil when clean.
     private var sheetHealthSummary: String? {
+        let found = attention
+        guard !found.isEmpty else { return nil }
+        let problems = found.filter { $0.severity == .problem }.count
+        let warnings = found.count - problems
         var parts: [String] = []
-        if !team.damagedSongRows.isEmpty { parts.append("칸 밀림 \(team.damagedSongRows.count)") }
-        if !team.duplicateSongs.isEmpty { parts.append("중복 \(team.duplicateSongs.rows.count)") }
-        guard !parts.isEmpty else { return nil }
-        return "시트 확인 필요 · " + parts.joined(separator: " · ") + " — 눌러서 보기"
+        if problems > 0 { parts.append("문제 \(problems)") }
+        if warnings > 0 { parts.append("확인 \(warnings)") }
+        return "워크플로 점검 · " + parts.joined(separator: " · ") + " — 눌러서 보기"
     }
 
     private var rowList: String {
@@ -607,6 +621,22 @@ struct ServicePrepView: View {
                         Text(problem)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                    }
+                }
+                // Always reachable, so "is everything set up right?" has an
+                // answer even when the answer is yes.
+                Button { showHealth = true } label: {
+                    HStack {
+                        Label("워크플로 점검", systemImage: "stethoscope")
+                        Spacer()
+                        let count = attention.count
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.caption.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Capsule().fill(.orange))
+                        }
                     }
                 }
                 // Asked, not done: it changes how a shared document looks
@@ -656,11 +686,8 @@ struct ServicePrepView: View {
                 // a second, unrelated screen and selecting a row changed
                 // something off screen. Every service is now a row that opens
                 // where it is, and the next one is open to begin with.
-                Group {
-                    damagedRowsWarning
-                    duplicateSongsWarning
-                }
-                .id(Self.healthAnchor)
+                damagedRowsWarning
+                duplicateSongsWarning
 
                 scheduleSection
 
@@ -682,9 +709,6 @@ struct ServicePrepView: View {
             .safeAreaInset(edge: .top, spacing: 0) { accountBar }
             .onAppear {
                 scrollTo = { id in proxy.scrollTo(id, anchor: .top) }
-                scrollToHealth = {
-                    withAnimation { proxy.scrollTo(Self.healthAnchor, anchor: .top) }
-                }
                 // Land on the next service, not on the oldest one.
                 //
                 // With past weeks above, opening the tab would otherwise

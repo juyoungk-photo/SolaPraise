@@ -60,6 +60,29 @@ found by the user rather than by me:
   and microphone behaviour cannot be driven from here; say so rather than
   implying they were tested.
 
+## Sanity checks — run them, and grow them
+
+Every serious bug in 예배 준비 was silent: rows written into the wrong
+columns, one song added seven times, membership judged by the wrong
+account, a failed read that looked like an empty week. So:
+
+1. **Before every commit: `Tools/run-checks.sh`.** It builds and runs every
+   `Tools/check-*.swift` from the compile line in each file's own header,
+   so a check whose sources stop compiling fails instead of rotting. Add
+   `--live` to also audit the real team sheet (read-only, addresses
+   masked) — do that before touching anything that writes to the sheet.
+2. **워크플로 점검 runs in the app on every load** (`SheetAudit`, shown by
+   `SheetHealthView` and the pinned line in 예배 준비). It reads only what
+   was loaded and writes nothing; fixes run only from a button.
+3. **When a new kind of bug is found, give it a shape in `SheetAudit` and
+   a fixture in `Tools/check-sheet-audit.swift`** before or with the fix.
+   A clean setup must stay clean there too — an audit that cries wolf is
+   ignored.
+4. **Accounts.** The YouTube sign-in and the church account are different
+   identities to the sheet. Anything that asks "who is this" uses the
+   acting account (`TeamStore.actingEmail`: church when connected, else
+   the main sign-in). Never judge membership by the YouTube account alone.
+
 ## Secrets
 
 `Secrets.xcconfig` is gitignored and must never be committed. The repository

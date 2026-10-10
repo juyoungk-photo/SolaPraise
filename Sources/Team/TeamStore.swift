@@ -142,13 +142,10 @@ struct PlanItem: Identifiable, Hashable {
 enum SignupStatus: String {
     case available, maybe, declined, away
 
+    /// Read through TeamSheet.statusWords, the list the sheet audit also
+    /// uses. An unknown word stays 가능, as before — and is now reported.
     init(raw: String) {
-        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
-        case "declined", "불가", "어려움":            self = .declined
-        case "away", "자리비움", "부재":               self = .away
-        case "maybe", "미정", "아마", "tentative":    self = .maybe
-        default:                                     self = .available
-        }
+        self = TeamSheet.signupStatus(raw).flatMap(SignupStatus.init(rawValue:)) ?? .available
     }
 
     var label: String {
@@ -261,6 +258,45 @@ final class TeamStore: ObservableObject {
     /// TeamSheet.duplicateSongRows. Shown with a tidy-up, never fixed silently.
     @Published private(set) var duplicateSongs = TeamSheet.DuplicateSongs(rows: [], renumber: [])
 
+    // The tabs exactly as last read, for 워크플로 점검. Kept rather than
+    // re-read: the audit should judge what the screen is showing.
+    @Published private(set) var rawSchedule: [[String]]?
+    @Published private(set) var rawSongs: [[String]]?
+    @Published private(set) var rawSignups: [[String]]?
+    @Published private(set) var rawMembers: [[String]]?
+    @Published private(set) var rawPlan: [[String]]?
+
+    /// The one place a fresh read of the Songs tab is taken in.
+    ///
+    /// It used to be done inline in five places, each re-deriving some of
+    /// songs, shifted rows and duplicates — and one of them, the reorder,
+    /// only the songs, so a warning could outlive the problem it described.
+    private func adoptSongRows(_ rows: [[String]]) {
+        rawSongs = rows
+        songs = Self.parseSongs(rows)
+        damagedSongRows = TeamSheet.shiftedRows(in: rows)
+        duplicateSongs = TeamSheet.duplicateSongRows(in: rows)
+    }
+
+    /// 워크플로 점검 over what was last loaded. See SheetAudit.
+    func audit(accounts: SheetAudit.Accounts) -> [SheetAudit.Finding] {
+        // Nothing loaded yet is not a broken sheet.
+        guard lastLoaded != nil else { return [] }
+        var accounts = accounts
+        accounts.churchSheetProblem = churchSheetProblem
+        #if DEBUG
+        // The sample team's member stands in for a real sign-in.
+        if isSample {
+            accounts.churchEmail = sampleActingEmail
+            accounts.mainEmail = accounts.mainEmail ?? "youtube@example.com"
+            accounts.mainHasYouTube = true
+        }
+        #endif
+        return SheetAudit.run(SheetAudit.Input(
+            schedule: rawSchedule, songs: rawSongs, signups: rawSignups,
+            members: rawMembers, plan: rawPlan, accounts: accounts))
+    }
+
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published private(set) var lastLoaded: Date?
@@ -345,9 +381,19 @@ final class TeamStore: ObservableObject {
         self.members = roster
         self.churchNotes = churchNotes
         self.attachments = attachments
+        // A minimal sheet behind the sample, so 워크플로 점검 has tabs to
+        // read — and, with -uiTestDuplicates, a real repeated song in them.
+        let day = TeamSheet.dateFormatter.string(from: services.first { !$0.isPast }?.date ?? Date())
+        var songRows: [[String]] = [["Date", "Order", "Title", "YouTubeURL"],
+                                    [day, "1", "Sample", "https://youtu.be/AAAAAAAAAAA"]]
         if DebugHarness.seedDuplicates {
-            duplicateSongs = TeamSheet.DuplicateSongs(rows: [17, 18, 19], renumber: [])
+            songRows += [[day, "2", "Sample", "https://youtu.be/AAAAAAAAAAA"],
+                         [day, "3", "Sample", "https://youtu.be/AAAAAAAAAAA"]]
         }
+        adoptSongRows(songRows)
+        rawSchedule = [["Date", "Service"], [day, "주일 2부예배"]]
+        rawSignups = [["Date", "Role", "MemberEmail", "MemberName", "Status"]]
+        rawMembers = [["Name", "Email"]] + members.sorted().map { ["", $0] }
         self.isReadOnly = false
         self.lastLoaded = Date()
     }
@@ -471,9 +517,10 @@ final class TeamStore: ObservableObject {
             services = Self.parseSchedule(schedule, roles: roles)
             roleColumns = Self.scheduleRoleColumns(schedule)
             playlistColumn = Self.schedulePlaylistColumn(schedule)
-            songs = Self.parseSongs(songData)
-            damagedSongRows = TeamSheet.shiftedRows(in: songData)
-            duplicateSongs = TeamSheet.duplicateSongRows(in: songData)
+            adoptSongRows(songData)
+            rawSchedule = schedule
+            rawSignups = signupData
+            rawPlan = planData
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
@@ -530,7 +577,8 @@ final class TeamStore: ObservableObject {
     /// sharing is what actually protects it.
     private func loadMembers(sheetId: String, client: SheetsClient) async -> Set<String> {
         guard let rows = try? await client.read(sheetId: sheetId, range: TeamSheet.membersTab),
-              rows.count > 1 else { members = []; return [] }
+              rows.count > 1 else { members = []; rawMembers = nil; return [] }
+        rawMembers = rows
 
         let header = rows[0]
         // Name before Email is just as natural to write, and reading by
@@ -1360,7 +1408,7 @@ final class TeamStore: ObservableObject {
             if hasPlanTab {
                 plans = Self.parsePlan(try await client.read(sheetId: sheetId, range: TeamSheet.planTab))
             } else {
-                songs = Self.parseSongs(try await rawSongRows(sheetId: sheetId))
+                adoptSongRows(try await rawSongRows(sheetId: sheetId))
             }
             return nil
         } catch {
@@ -1542,10 +1590,7 @@ final class TeamStore: ObservableObject {
             // CHANGE with the account, when in fact the reload was the first
             // honest look at the sheet. What is shown is now always what the
             // sheet holds.
-            let after = try await rawSongRows(sheetId: sheetId)
-            songs = Self.parseSongs(after)
-            damagedSongRows = TeamSheet.shiftedRows(in: after)
-            duplicateSongs = TeamSheet.duplicateSongRows(in: after)
+            adoptSongRows(try await rawSongRows(sheetId: sheetId))
             errorMessage = nil
 
             // And checked: the song must now be in the 콘티 as the app reads
@@ -1572,7 +1617,7 @@ final class TeamStore: ObservableObject {
     func repairDuplicateSongs(sheetId: String) async -> String? {
         #if DEBUG
         if isSample {
-            duplicateSongs = TeamSheet.DuplicateSongs(rows: [], renumber: [])
+            adoptSongRows(Array((rawSongs ?? []).prefix(2)))
             return nil
         }
         #endif
@@ -1598,10 +1643,7 @@ final class TeamStore: ObservableObject {
             }
             try await client.batchWrite(sheetId: sheetId, updates: updates)
 
-            let fresh = try await rawSongRows(sheetId: sheetId)
-            songs = Self.parseSongs(fresh)
-            damagedSongRows = TeamSheet.shiftedRows(in: fresh)
-            duplicateSongs = TeamSheet.duplicateSongRows(in: fresh)
+            adoptSongRows(try await rawSongRows(sheetId: sheetId))
             return nil
         } catch SheetsClient.SheetsError.http(403, _) {
             isReadOnly = true
@@ -1636,12 +1678,9 @@ final class TeamStore: ObservableObject {
                     row: cells
                 )
             }
-            let fresh = try await rawSongRows(sheetId: sheetId)
-            songs = Self.parseSongs(fresh)
-            damagedSongRows = TeamSheet.shiftedRows(in: fresh)
-            // Moving rows back can reveal copies that were hidden while
-            // they sat in the wrong columns.
-            duplicateSongs = TeamSheet.duplicateSongRows(in: fresh)
+            // Re-checked as a whole: moving rows back can reveal copies
+            // that were hidden while they sat in the wrong columns.
+            adoptSongRows(try await rawSongRows(sheetId: sheetId))
             return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

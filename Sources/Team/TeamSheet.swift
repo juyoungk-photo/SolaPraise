@@ -235,6 +235,28 @@ enum TeamSheet {
         return out
     }
 
+    // MARK: 응답 words
+
+    /// Every spelling of an answer the app understands, by its meaning.
+    ///
+    /// One list for the parser and the sheet audit alike. Anything not in
+    /// it is still read as 가능 — a blank cell means "nobody objected" — but
+    /// the audit reports it, because a hand-typed 「X」 or 「no」 counted as
+    /// available is the opposite of what the person meant.
+    static let statusWords: [String: String] = [
+        "available": "available", "가능": "available", "참석": "available",
+        "maybe": "maybe", "미정": "maybe", "아마": "maybe", "tentative": "maybe",
+        "declined": "declined", "불가": "declined", "어려움": "declined",
+        "away": "away", "자리비움": "away", "부재": "away"
+    ]
+
+    /// The answer's meaning, "available" for a blank cell, nil when the
+    /// word is not one the app knows.
+    static func signupStatus(_ raw: String) -> String? {
+        let key = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        return key.isEmpty ? "available" : statusWords[key]
+    }
+
     // MARK: Songs entered more than once
 
     /// The same song more than once on one service, and how to tidy it.
