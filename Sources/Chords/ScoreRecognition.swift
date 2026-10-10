@@ -71,10 +71,125 @@ enum ScoreRecognition {
             }
             merge(mapped, into: &found)
         }
+        // Last: ink on a chord line that no pass read. Each unread blob is
+        // cut out on its own, with white around it, enlarged and read
+        // alone. A lone capital at the start of a line — 「C」 — went
+        // unread by every whole-line pass, in either language order and
+        // at twice the size; by itself it reads at once.
+        merge(unreadBlobs(in: image, around: found), into: &found)
+
         return found.sorted {
             abs($0.box.minY - $1.box.minY) > 0.01 ? $0.box.minY < $1.box.minY
                                                    : $0.box.minX < $1.box.minX
         }
+    }
+
+    /// Chords read from the ink on each chord line that nothing covers yet.
+    private static func unreadBlobs(in image: CGImage, around found: [Found]) -> [Found] {
+        var out: [Found] = []
+        for line in chordLines(found) {
+            let h = line.maxY - line.minY
+            let band = CGRect(x: 0, y: line.minY - h * 0.2, width: 1, height: h * 1.4)
+            let pixels = CGRect(x: 0, y: band.minY * CGFloat(image.height),
+                                width: CGFloat(image.width),
+                                height: band.height * CGFloat(image.height)).integral
+            guard let strip = image.cropping(to: pixels),
+                  let ink = columnInk(strip) else { continue }
+
+            // Words are ink separated by a gap wider than a letter gap.
+            let gap = max(4, Int(Double(strip.height) * 0.35))
+            for segment in segments(ink, minimumGap: gap) {
+                let x0 = CGFloat(segment.lowerBound) / CGFloat(image.width)
+                let x1 = CGFloat(segment.upperBound) / CGFloat(image.width)
+                let covered = line.items.contains { $0.box.maxX > x0 && $0.box.minX < x1 }
+                guard !covered else { continue }
+
+                let pad = strip.height / 2
+                let rect = CGRect(x: max(0, segment.lowerBound - pad), y: 0,
+                                  width: min(strip.width, segment.upperBound + pad) - max(0, segment.lowerBound - pad),
+                                  height: strip.height)
+                guard let piece = strip.cropping(to: rect),
+                      let alone = padded(piece, margin: strip.height, scale: 3) else { continue }
+                let read = recognise(alone, languages: ["en-US"]).chords
+                    + recognise(alone, languages: ["ko-KR", "en-US"]).chords
+                guard let chord = read.first else { continue }
+                out.append(Found(
+                    original: chord.original,
+                    box: CGRect(x: x0, y: band.minY + band.height * 0.15,
+                                width: x1 - x0, height: band.height * 0.7),
+                    confidence: chord.confidence))
+            }
+        }
+        return out
+    }
+
+    private struct ChordLine { var items: [Found]; var minY: CGFloat; var maxY: CGFloat }
+
+    /// Found chords grouped into lines by vertical overlap.
+    private static func chordLines(_ found: [Found]) -> [ChordLine] {
+        var lines: [ChordLine] = []
+        for item in found.sorted(by: { $0.box.midY < $1.box.midY }) {
+            if let index = lines.lastIndex(where: { item.box.midY > $0.minY && item.box.midY < $0.maxY }) {
+                lines[index].items.append(item)
+                lines[index].minY = min(lines[index].minY, item.box.minY)
+                lines[index].maxY = max(lines[index].maxY, item.box.maxY)
+            } else {
+                lines.append(ChordLine(items: [item], minY: item.box.minY, maxY: item.box.maxY))
+            }
+        }
+        return lines
+    }
+
+    /// How many dark pixels each column of an image holds.
+    private static func columnInk(_ image: CGImage) -> [Int]? {
+        let width = image.width, height = image.height
+        var gray = [UInt8](repeating: 255, count: width * height)
+        guard let context = CGContext(
+            data: &gray, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+        else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var ink = [Int](repeating: 0, count: width)
+        for y in 0..<height {
+            let row = y * width
+            for x in 0..<width where gray[row + x] < 128 { ink[x] += 1 }
+        }
+        return ink
+    }
+
+    /// Runs of inked columns, joined across gaps narrower than `minimumGap`.
+    private static func segments(_ ink: [Int], minimumGap: Int) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        var start: Int?
+        var lastInk = -minimumGap - 1
+        for (x, count) in ink.enumerated() where count > 0 {
+            if let s = start, x - lastInk > minimumGap {
+                out.append(s..<(lastInk + 1))
+                start = x
+            } else if start == nil {
+                start = x
+            }
+            lastInk = x
+        }
+        if let s = start { out.append(s..<(lastInk + 1)) }
+        return out
+    }
+
+    /// The image enlarged and set on a white margin, the way a single
+    /// symbol is easiest to read.
+    private static func padded(_ image: CGImage, margin: Int, scale: Int) -> CGImage? {
+        let width = (image.width + margin * 2) * scale
+        let height = (image.height + margin * 2) * scale
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: margin * scale, y: margin * scale,
+                                       width: image.width * scale, height: image.height * scale))
+        return context.makeImage()
     }
 
     /// One recognition pass: the chords it read, and the lines of Hangul,
@@ -211,11 +326,23 @@ enum ScoreRecognition {
     /// chart moved ten steps up reads the same and a person thinks of it as
     /// two down.
     static func shift(fromScoreChords symbols: [String], toKey teamKey: String?) -> Int? {
-        guard let teamKey, let target = keyRoot(teamKey),
+        guard let teamKey, var target = keyRoot(teamKey),
               let source = ScoreChordText.likelyRoot(of: symbols) else { return nil }
+        // likelyRoot answers in major; a minor team key is compared as its
+        // relative major — 「Em」 means the chart should sound in G's chords.
+        if isMinorKey(teamKey) { target = (target + 3) % 12 }
         var shift = ((target - source) % 12 + 12) % 12
         if shift > 6 { shift -= 12 }
         return shift
+    }
+
+    /// Whether a key as typed names a minor key: 「Em」, 「F#m」, 「C minor」.
+    static func isMinorKey(_ raw: String) -> Bool {
+        let first = raw.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "키", with: "").split(separator: " ")
+        guard let token = first.first else { return false }
+        if first.count > 1, ["minor", "min", "단조"].contains(first[1].lowercased()) { return true }
+        return token.count > 1 && token.hasSuffix("m")
     }
 
     /// The root of a key as a leader types it — "A", "Bb", "F#m", "E major",

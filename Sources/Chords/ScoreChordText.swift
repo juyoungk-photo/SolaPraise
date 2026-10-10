@@ -135,16 +135,42 @@ enum ScoreChordText {
         return transpose(parsed, by: semitones)
     }
 
-    /// The key a page is probably in: the most common root among its chords,
-    /// which is a decent proxy and the only one available from symbols alone.
+    /// The MAJOR key a chart is probably in, as a root (0 = C), in the
+    /// order its chords appear.
+    ///
+    /// Not the most common root, which was the first rule and was wrong on
+    /// a real chart: a song in G with one more D chord than G chords came
+    /// out "in D", and the whole page was transposed six steps instead of
+    /// one. A key is the set of chords that belong to it, so each of the
+    /// twelve keys is scored by how well the chords fit — the I, IV and V
+    /// count most, ii, iii and vi a little less, a chord outside the key
+    /// counts against it — and songs tend to open and close on the tonic.
+    /// A minor song comes out as its relative major, which shares its
+    /// chords; ScoreRecognition.shift compares like with like.
     static func likelyRoot(of symbols: [String]) -> Int? {
-        var counts: [Int: Int] = [:]
-        for symbol in symbols {
-            guard let parsed = parse(symbol) else { continue }
-            counts[parsed.root, default: 0] += 1
+        let chords = symbols.compactMap(parse)
+        guard !chords.isEmpty else { return nil }
+
+        func isMinor(_ c: Parsed) -> Bool {
+            c.suffix.hasPrefix("m") && !c.suffix.hasPrefix("maj")
         }
-        return counts.max { a, b in
-            a.value != b.value ? a.value < b.value : a.key > b.key
-        }?.key
+        var best: (key: Int, score: Double)?
+        for key in 0..<12 {
+            var score = 0.0
+            for chord in chords {
+                switch ((chord.root - key) % 12 + 12) % 12 {
+                case 0, 5, 7: score += isMinor(chord) ? 0.3 : 2      // I, IV, V
+                case 2, 4, 9: score += isMinor(chord) ? 1.5 : 0.5    // ii, iii, vi
+                case 10:      score += 0.2                           // ♭VII, common in worship
+                default:      score -= 1
+                }
+            }
+            if let first = chords.first, first.root == key, !isMinor(first) { score += 2 }
+            if let last = chords.last, last.root == key, !isMinor(last) { score += 3 }
+            // The relative minor's tonic at the edges points here too.
+            if let last = chords.last, last.root == (key + 9) % 12, isMinor(last) { score += 2 }
+            if best == nil || score > best!.score { best = (key, score) }
+        }
+        return best?.key
     }
 }

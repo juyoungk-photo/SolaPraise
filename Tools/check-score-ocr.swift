@@ -41,94 +41,107 @@ struct CheckScoreOCR {
     /// A chord as drawn: its text and the x it starts at, in points.
     struct Placed { let text: String; let x: CGFloat; let lineY: CGFloat }
 
-    static func main() {
+    typealias Row = (chords: [(String, CGFloat)], lyric: String)
+
+    /// Draws a page — chord lines over lyric lines — and returns the image
+    /// and where each chord went.
+    static func render(rows: [Row], chordSize: CGFloat, lyricSize: CGFloat,
+                       spacing: CGFloat) -> (CGImage, [Placed])? {
         // A4 at 2× — the size the app rasterises a PDF page to.
         let width = 1190, height = 1684
         guard let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { print("no context"); exit(1) }
-
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-
-        let graphics = NSGraphicsContext(cgContext: context, flipped: true)
-        NSGraphicsContext.current = graphics
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         // Flip so y grows downward, like a page.
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
 
-        let chordFont = NSFont.boldSystemFont(ofSize: 30)
-        let lyricFont = NSFont.systemFont(ofSize: 34)
-
-        // Chords spaced as a real chart spaces them: over the syllable they
-        // fall on, not evenly. Includes a slash chord, a flat, a seventh,
-        // a sus, and a sharp — the forms whose characters OCR mangles.
-        let rows: [(chords: [(String, CGFloat)], lyric: String)] = [
-            ([("G", 120), ("D/F#", 420), ("Em", 700), ("C", 960)],
-             "주 하나님 지으신 모든 세계 내 마음 속에"),
-            ([("Am7", 120), ("D", 480), ("Gsus4", 720), ("G", 1000)],
-             "그리어 볼 때 하늘의 별 울려 퍼지는"),
-            ([("Bb", 140), ("F", 440), ("Cm", 720), ("Eb", 980)],
-             "주님의 권능 우주에 찼네"),
-            ([("C", 120), ("G/B", 400), ("Am", 680), ("D7", 960)],
-             "내 영혼아 찬양하라"),
-            // Lone capitals only — the line Vision is worst at, with no
-            // longer symbol on it to anchor a second look.
-            ([("C", 130), ("E", 470), ("A", 800), ("D", 1020)],
-             "주님께 영광 돌리세"),
-        ]
-
+        let chordFont = NSFont.boldSystemFont(ofSize: chordSize)
+        let lyricFont = NSFont.systemFont(ofSize: lyricSize)
         var placed: [Placed] = []
         var y: CGFloat = 160
-        // Rows 190pt apart, five rows: the page is A4 at 2×, so this fits.
         for row in rows {
             for (chord, x) in row.chords {
                 (chord as NSString).draw(at: CGPoint(x: x, y: y),
-                                         withAttributes: [.font: chordFont,
-                                                          .foregroundColor: NSColor.black])
+                                         withAttributes: [.font: chordFont, .foregroundColor: NSColor.black])
                 placed.append(Placed(text: chord, x: x, lineY: y))
             }
-            (row.lyric as NSString).draw(at: CGPoint(x: 110, y: y + 46),
-                                         withAttributes: [.font: lyricFont,
-                                                          .foregroundColor: NSColor.black])
-            y += 190
+            (row.lyric as NSString).draw(at: CGPoint(x: 110, y: y + chordSize * 1.5),
+                                         withAttributes: [.font: lyricFont, .foregroundColor: NSColor.black])
+            y += spacing
         }
         // A title and a credit line: Latin text that is NOT a chord.
         ("Amazing Grace - Arr. by Example" as NSString)
             .draw(at: CGPoint(x: 110, y: 60),
-                  withAttributes: [.font: NSFont.systemFont(ofSize: 36),
-                                   .foregroundColor: NSColor.black])
+                  withAttributes: [.font: NSFont.systemFont(ofSize: 36), .foregroundColor: NSColor.black])
+        return context.makeImage().map { ($0, placed) }
+    }
 
-        guard let image = context.makeImage() else { print("no image"); exit(1) }
-
-        let found = ScoreRecognition.chords(in: image)
-        print("found:", found.map(\.original))
-
-        // Every drawn chord found, by its normalised spelling.
-        let wanted = placed.map(\.text)
-        let got = found.map { $0.original.replacingOccurrences(of: "♯", with: "#") }
-        let missing = wanted.filter { want in !got.contains(want) }
-        check("every chord on the page is found", missing.isEmpty, "missing \(missing)")
-
-        // Nothing invented from the title or the lyrics.
-        let extra = got.filter { !wanted.contains($0) }
-        check("no word of the title is taken for a chord", extra.isEmpty, "extra \(extra)")
-
-        // Each found chord sits where it was drawn. Within a third of a
-        // chord-width horizontally is enough to paint over the right one.
-        var misplaced: [String] = []
-        for item in found {
-            let x = item.box.minX * CGFloat(width)
-            let top = item.box.minY * CGFloat(height)
-            let near = placed.contains { p in
-                p.text == item.original && abs(p.x - x) < 30 && abs(p.lineY - top) < 30
-            }
-            if !near { misplaced.append("\(item.original)@\(Int(x)),\(Int(top))") }
+    /// Runs the recogniser on a page and checks what came back.
+    static func audit(_ name: String, rows: [Row], chordSize: CGFloat, lyricSize: CGFloat,
+                      spacing: CGFloat, tolerance: CGFloat) {
+        guard let (image, placed) = render(rows: rows, chordSize: chordSize,
+                                           lyricSize: lyricSize, spacing: spacing) else {
+            check("\(name): page renders", false); return
         }
-        check("every chord's box is where it was drawn", misplaced.isEmpty,
+        let found = ScoreRecognition.chords(in: image)
+        print("\(name) found \(found.count)/\(placed.count):", found.map(\.original))
+
+        // Every drawn chord, counted — a page with two G's needs two found.
+        var remaining = found
+        var missing: [String] = []
+        var misplaced: [String] = []
+        for p in placed {
+            if let index = remaining.firstIndex(where: { item in
+                item.original.replacingOccurrences(of: "♯", with: "#") == p.text
+                    && abs(item.box.minX * CGFloat(image.width) - p.x) < tolerance
+                    && abs(item.box.minY * CGFloat(image.height) - p.lineY) < tolerance
+            }) {
+                remaining.remove(at: index)
+            } else if found.contains(where: { $0.original == p.text }) {
+                misplaced.append("\(p.text)@\(Int(p.x))")
+            } else {
+                missing.append("\(p.text)@\(Int(p.x))")
+            }
+        }
+        check("\(name): every chord on the page is found", missing.isEmpty, "missing \(missing)")
+        check("\(name): every chord's box is where it was drawn", misplaced.isEmpty,
               "misplaced \(misplaced)")
+        let wanted = Set(placed.map(\.text))
+        let extra = remaining.map(\.original).filter { !wanted.contains($0) }
+        check("\(name): no word of the title or lyrics is taken for a chord", extra.isEmpty,
+              "extra \(extra)")
+    }
+
+    static func main() {
+        // Chords spaced as a real chart spaces them: over the syllable they
+        // fall on, not evenly. Includes a slash chord, a flat, a seventh,
+        // a sus, and a sharp — the forms whose characters OCR mangles.
+        audit("standard page", rows: [
+            ([("G", 120), ("D/F#", 420), ("Em", 700), ("C", 960)], "주 하나님 지으신 모든 세계 내 마음 속에"),
+            ([("Am7", 120), ("D", 480), ("Gsus4", 720), ("G", 1000)], "그리어 볼 때 하늘의 별 울려 퍼지는"),
+            ([("Bb", 140), ("F", 440), ("Cm", 720), ("Eb", 980)], "주님의 권능 우주에 찼네"),
+            ([("C", 120), ("G/B", 400), ("Am", 680), ("D7", 960)], "내 영혼아 찬양하라"),
+            // Lone capitals only — the line Vision is worst at, with no
+            // longer symbol on it to anchor a second look.
+            ([("C", 130), ("E", 470), ("A", 800), ("D", 1020)], "주님께 영광 돌리세"),
+        ], chordSize: 30, lyricSize: 34, spacing: 190, tolerance: 30)
+
+        // A DENSE CHART, the kind a team actually prints: small chords,
+        // several to a bar, close enough that two can read as one word.
+        // This is the page the user reported chords missing from.
+        audit("dense page", rows: [
+            ([("G", 110), ("D/F#", 170), ("Em7", 260), ("C", 340), ("Dsus4", 420), ("D", 520),
+              ("G", 640), ("C/E", 700), ("D", 790), ("G", 860)], "주 하나님 지으신 모든 세계 내 마음 속에 그리어 볼 때"),
+            ([("Am7", 110), ("D7", 190), ("Bm", 260), ("Em", 330), ("Am", 420), ("D", 500),
+              ("G", 600), ("E", 660), ("A", 720), ("D", 780)], "하늘의 별 울려 퍼지는 뇌성 주님의 권능 우주에 찼네"),
+            ([("F", 110), ("C", 170), ("Bb", 230), ("F/A", 300), ("Gm7", 390), ("C7", 470),
+              ("F", 560), ("Dm", 620), ("Bb", 690), ("C", 760)], "내 영혼아 찬양하라 주님의 높고 위대하심을"),
+        ], chordSize: 20, lyricSize: 22, spacing: 120, tolerance: 22)
 
         // The key: these chords are mostly G-family on rows 1, 2 and 4.
         check("score in G, team plays in A → +2",
@@ -136,6 +149,10 @@ struct CheckScoreOCR {
                                      toKey: "A") == 2)
         check("score in G, team plays in F → −2, not +10",
               ScoreRecognition.shift(fromScoreChords: ["G", "C", "G", "D"], toKey: "F") == -2)
+        check("a minor team key compares with the relative major: G chart, team in Em → 0",
+              ScoreRecognition.shift(fromScoreChords: ["G", "C", "D", "Em", "G"], toKey: "Em") == 0)
+        check("G chart, team in F#m → +2 (A major)",
+              ScoreRecognition.shift(fromScoreChords: ["G", "C", "D", "Em", "G"], toKey: "F#m") == 2)
         check("no team key → no default shift",
               ScoreRecognition.shift(fromScoreChords: ["G"], toKey: nil) == nil)
         check("key spellings: Bb, F#m, E major, D키",

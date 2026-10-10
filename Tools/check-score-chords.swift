@@ -105,6 +105,21 @@ struct CheckScoreChords {
               "got \(ScoreChordText.likelyRoot(of: ["G", "C", "G", "D", "G"]) ?? -1)")
         check("no chords, no key", ScoreChordText.likelyRoot(of: ["Verse", "주님"]) == nil)
 
+        // THE CHART THAT SHIPPED WRONG: a song in G with more D chords than
+        // G chords. By most-common-root it was "in D", and the page was
+        // moved six steps instead of one.
+        let dense = ["G", "D/F#", "Em7", "C", "Dsus4", "D", "G", "C/E", "D", "G",
+                     "Am7", "D7", "Bm", "Em", "Am", "D", "G", "E", "A", "D",
+                     "C", "G/B", "Am", "G", "F", "C/E", "Dm7", "G7", "C"]
+        check("a G chart with many D chords is in G",
+              ScoreChordText.likelyRoot(of: dense) == 7,
+              "got \(ScoreChordText.likelyRoot(of: dense) ?? -1)")
+        check("a D chart is in D",
+              ScoreChordText.likelyRoot(of: ["D", "A", "Bm", "G", "D", "A", "G", "D"]) == 2)
+        check("a song in Em reads as its relative major, G",
+              ScoreChordText.likelyRoot(of: ["Em", "C", "G", "D", "Em", "C", "D", "Em"]) == 7)
+        check("Bb with flats", ScoreChordText.likelyRoot(of: ["Bb", "F", "Gm", "Eb", "F", "Bb"]) == 10)
+
         print(failures == 0
               ? "\nall score chord checks passed"
               : "\n\(failures) failure(s)")

@@ -36,8 +36,28 @@ struct ScoreStandView: View {
     var uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var index: Int
     @StateObject private var model = ScoreStandModel()
+    /// Edit mode: drag a chord, tap it to correct or remove it, press and
+    /// hold on the page to add one recognition missed.
+    @State private var editing = false
+    @State private var chordAction: ChordAction?
+    @State private var entry: ChordEntry?
+    @State private var choosingPage = false
+    /// Where an added chord starts: near the top left of the page, clear of
+    /// the title, ready to be dragged.
+    static let addPoint = CGPoint(x: 0.2, y: 0.08)
+
+    struct ChordAction: Identifiable { let page: Int; let chord: UUID; var id: UUID { chord } }
+    /// Typing a chord: correcting one (chord set) or adding one at a point.
+    struct ChordEntry: Identifiable {
+        let page: Int
+        let chord: UUID?
+        let point: CGPoint
+        var text: String
+        let id = UUID()
+    }
 
     init(items: [ScoreStandItem], startAt: Int = 0,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
@@ -90,6 +110,52 @@ struct ScoreStandView: View {
         .sheet(item: $model.export) { file in
             ShareSheet(items: [file.url])
         }
+        .confirmationDialog("코드", isPresented: .constant(chordAction != nil),
+                            titleVisibility: .hidden, presenting: chordAction) { action in
+            Button("코드 고치기") {
+                let shown = item.map { model.displayed(action.chord, page: action.page, in: $0) } ?? ""
+                entry = ChordEntry(page: action.page, chord: action.chord, point: .zero, text: shown ?? "")
+                chordAction = nil
+            }
+            Button("이 코드 지우기", role: .destructive) {
+                if let item { model.remove(item, page: action.page, chord: action.chord) }
+                chordAction = nil
+            }
+            Button("취소", role: .cancel) { chordAction = nil }
+        } message: { _ in
+            Text("코드가 아닌 글자를 잘못 읽었다면 지우세요. 지우면 원래 인쇄된 글자가 그대로 보입니다.")
+        }
+        .confirmationDialog("어느 쪽에 넣을까요?", isPresented: $choosingPage, titleVisibility: .visible) {
+            ForEach(0..<(item.flatMap { model.states[$0.id]?.pages.count } ?? 0), id: \.self) { page in
+                Button("\(page + 1)쪽") {
+                    entry = ChordEntry(page: page, chord: nil, point: Self.addPoint, text: "")
+                }
+            }
+            Button("취소", role: .cancel) {}
+        }
+        .alert(entry?.chord == nil ? "코드 추가" : "코드 고치기",
+               isPresented: .constant(entry != nil)) {
+            TextField("예: G, D/F#, Em7", text: Binding(
+                get: { entry?.text ?? "" }, set: { entry?.text = $0 }))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                // Latin letters: on a Korean keyboard 「B」 types 「ㅠ」.
+                .keyboardType(.asciiCapable)
+            Button("저장") {
+                if let entry, let item {
+                    if let failure = model.write(entry.text, item, page: entry.page,
+                                                 chord: entry.chord, at: entry.point) {
+                        model.note = failure
+                    }
+                }
+                entry = nil
+            }
+            Button("취소", role: .cancel) { entry = nil }
+        } message: {
+            Text(entry?.chord == nil
+                 ? "지금 화면에 보이는 키로 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요."
+                 : "지금 화면에 보이는 키로 적으세요.")
+        }
     }
 
     // MARK: - Header
@@ -108,7 +174,12 @@ struct ScoreStandView: View {
                 }
                 Spacer(minLength: 0)
             }
-            if let state, state.isReady {
+            if editing {
+                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(2)
+            } else if let state, state.isReady {
                 Text(keyLine(item, state))
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.7))
@@ -147,19 +218,28 @@ struct ScoreStandView: View {
         if let state, state.isReady {
             ScrollView {
                 VStack(spacing: 12) {
-                    ForEach(Array(state.pages.enumerated()), id: \.offset) { _, page in
-                        ScorePageView(page: page,
-                                      shift: state.showsOriginal ? 0 : state.shift,
-                                      useFlats: state.useFlats)
+                    ForEach(Array(state.pages.enumerated()), id: \.offset) { pageIndex, page in
+                        ScorePageView(
+                            page: page,
+                            shift: state.showsOriginal ? 0 : state.shift,
+                            useFlats: state.useFlats,
+                            scale: model.chordScale,
+                            editing: editing,
+                            onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
+                            onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) })
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
             }
+            // No page scroll while editing: a drag moves a chord.
+            .scrollDisabled(editing)
             // Swipe sideways between songs; vertical is the page scroll.
+            // Not while editing, where a sideways drag is a chord being moved.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 50)
                     .onEnded { value in
+                        guard !editing else { return }
                         guard abs(value.translation.width) > abs(value.translation.height) * 1.5
                         else { return }
                         if value.translation.width < -60 { go(1) }
@@ -191,10 +271,34 @@ struct ScoreStandView: View {
     // MARK: - Controls
 
     private func controls(_ item: ScoreStandItem) -> some View {
+        // Two rows on a phone: one long row ran past the edge, and 편집,
+        // + 코드 and the export sat out of sight behind a scroll nobody
+        // knew was there. A wide screen keeps one row.
+        Group {
+            if sizeClass == .regular {
+                controlRow { transposeButtons(item); toolButtons(item) }
+            } else {
+                VStack(spacing: 8) {
+                    controlRow { transposeButtons(item) }
+                    controlRow { toolButtons(item) }
+                }
+            }
+        }
+        .padding(.vertical, 10)
+        .background(Color.white.opacity(0.06))
+    }
+
+    private func controlRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) { content() }
+                .padding(.horizontal, 16)
+        }
+    }
+
+    @ViewBuilder
+    private func transposeButtons(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
                 if items.count > 1 {
                     Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
                         .disabled(index == 0)
@@ -229,6 +333,52 @@ struct ScoreStandView: View {
                     }
                 }
 
+                if items.count > 1 {
+                    Button { go(1) } label: { pill(Image(systemName: "chevron.right")) }
+                        .disabled(index >= items.count - 1)
+                        .accessibilityLabel("다음 곡")
+                }
+    }
+
+    @ViewBuilder
+    private func toolButtons(_ item: ScoreStandItem) -> some View {
+        let state = model.states[item.id]
+        let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
+                // Chord size, for charts printed small. Applies to the
+                // export too, and is remembered on this device.
+                Button { model.resize(by: -0.1) } label: { pill(Text("A").font(.system(size: 13, weight: .bold))) }
+                    .disabled(!ready || model.chordScale <= 0.71)
+                    .accessibilityLabel("코드 글자 작게")
+                Button { model.resize(by: 0.1) } label: { pill(Text("A").font(.system(size: 21, weight: .bold))) }
+                    .disabled(!ready || model.chordScale >= 2.49)
+                    .accessibilityLabel("코드 글자 크게")
+
+                Button { editing.toggle() } label: {
+                    pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
+                }
+                .disabled(!(state?.isReady ?? false))
+                .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
+
+                if editing {
+                    // Added near the top of the page, then dragged into
+                    // place — the reader sees where it landed, which a
+                    // press-and-hold at a guessed point did not show.
+                    Button {
+                        if (state?.pages.count ?? 0) > 1 { choosingPage = true }
+                        else { entry = ChordEntry(page: 0, chord: nil, point: Self.addPoint, text: "") }
+                    } label: {
+                        pill(Text("+ 코드").font(.system(size: 14, weight: .semibold)), wide: true)
+                    }
+                    .accessibilityLabel("빠진 코드 넣기")
+                }
+
+                if editing, state?.isEdited == true {
+                    Button { Task { await model.resetEdits(item) } } label: {
+                        pill(Text("되돌리기").font(.system(size: 13, weight: .semibold)), wide: true)
+                    }
+                    .accessibilityLabel("손으로 고친 것을 모두 지우고 다시 인식")
+                }
+
                 Button {
                     Task { await model.exportPDF(item) }
                 } label: {
@@ -248,16 +398,6 @@ struct ScoreStandView: View {
                     .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
                 }
 
-                if items.count > 1 {
-                    Button { go(1) } label: { pill(Image(systemName: "chevron.right")) }
-                        .disabled(index >= items.count - 1)
-                        .accessibilityLabel("다음 곡")
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(.vertical, 10)
-        .background(Color.white.opacity(0.06))
     }
 
     private func shiftLabel(_ state: ScoreStandModel.State?) -> String {
@@ -282,12 +422,20 @@ struct ScoreStandView: View {
 
 // MARK: - One page
 
-/// A page image with each found chord covered and rewritten — the same
-/// patch and size ScoreTransposer uses for the export.
+/// A page image with each chord covered and rewritten, laid out by
+/// ScoreLayout — the same call the PDF export makes — so the preview is
+/// the file.
 private struct ScorePageView: View {
     let page: ScoreTransposer.Page
     let shift: Int
     let useFlats: Bool?
+    let scale: CGFloat
+    let editing: Bool
+    let onMove: (UUID, CGSize) -> Void
+    let onTapChord: (UUID) -> Void
+
+    /// The chord being dragged and how far, in view points.
+    @State private var dragging: (id: UUID, by: CGSize)?
 
     var body: some View {
         Image(uiImage: page.image)
@@ -295,12 +443,19 @@ private struct ScorePageView: View {
             .aspectRatio(contentMode: .fit)
             .overlay {
                 GeometryReader { geo in
-                    if shift % 12 != 0 {
-                        ForEach(page.chords) { chord in
-                            if let moved = ScoreTransposer.symbol(chord.original, by: shift,
-                                                                  useFlats: useFlats) {
-                                label(moved, box: chord.box, size: geo.size)
-                            }
+                    let size = geo.size
+                    let labels = ScoreLayout.labels(
+                        chords: page.chords, chordHeight: page.chordHeight, shift: shift,
+                        useFlats: useFlats, scale: scale, alwaysDraw: editing, in: size)
+                    ZStack(alignment: .topLeading) {
+                        ForEach(labels.compactMap(\.cover).indices, id: \.self) { i in
+                            let cover = labels.compactMap(\.cover)[i]
+                            Rectangle().fill(.white)
+                                .frame(width: cover.width, height: cover.height)
+                                .position(x: cover.midX, y: cover.midY)
+                        }
+                        ForEach(labels) { label in
+                            chordView(label, size: size)
                         }
                     }
                 }
@@ -309,24 +464,37 @@ private struct ScorePageView: View {
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private func label(_ text: String, box: CGRect, size: CGSize) -> some View {
-        let patch = ScoreTransposer.patchRect(for: box, textHeight: page.chordHeight, in: size)
-        let height = patch.height / 1.3
-        return Text(text)
-            .font(.system(size: ScoreTransposer.fontSize(forBoxHeight: page.chordHeight * size.height),
-                          weight: .bold))
+    private func chordView(_ label: ScoreLayout.Label, size: CGSize) -> some View {
+        let moving = dragging?.id == label.id ? dragging!.by : .zero
+        return Text(label.text)
+            .font(.system(size: label.fontSize, weight: .bold))
             .foregroundStyle(.black)
             .lineLimit(1)
-            .minimumScaleFactor(0.5)
-            .frame(width: patch.width, height: patch.height, alignment: .leading)
-            .padding(.leading, height * 0.15)
-            .frame(width: patch.width, height: patch.height, alignment: .leading)
+            .fixedSize()
+            .padding(.leading, label.textOrigin.x - label.patch.minX)
+            .frame(width: label.patch.width, height: label.patch.height, alignment: .leading)
             .background(Color.white)
-            // Highlighted lightly, so a reader can see at a glance which
-            // symbols were changed — and which were not, which is the
-            // thing to check on a chart that was read badly.
-            .overlay(Rectangle().stroke(Color.accentColor.opacity(0.35), lineWidth: 1))
-            .position(x: patch.midX, y: patch.midY)
+            // Outlined lightly, so a reader can see which symbols were
+            // changed — and which were not, the thing to check on a chart
+            // that was read badly. Stronger while editing.
+            .overlay(Rectangle().stroke(Color.accentColor.opacity(editing ? 0.9 : 0.35),
+                                        lineWidth: editing ? 1.5 : 1))
+            // A finger-sized target. On a phone a chord on a dense chart is
+            // eight points tall — too small to press, let alone drag — so
+            // the touch area reaches past it. Taller than wide: neighbours
+            // on a line are close, the lines above and below are not.
+            .contentShape(Rectangle().inset(by: -max(0, (36 - label.patch.height) / 2)))
+            .position(x: label.patch.midX + moving.width, y: label.patch.midY + moving.height)
+            .gesture(editing ? DragGesture(minimumDistance: 4)
+                .onChanged { value in dragging = (label.id, value.translation) }
+                .onEnded { value in
+                    dragging = nil
+                    onMove(label.id, CGSize(width: value.translation.width / size.width,
+                                            height: value.translation.height / size.height))
+                } : nil)
+            .onTapGesture { if editing { onTapChord(label.id) } }
+            .allowsHitTesting(editing)
+            .accessibilityLabel("코드 \(label.text)")
     }
 }
 
@@ -347,6 +515,8 @@ final class ScoreStandModel: ObservableObject {
         var showsOriginal = false
         /// Nil spells by the key the chart lands in; the ♭ button flips it.
         var flatsOverride: Bool?
+        /// Chords moved, corrected, removed or added by hand on this device.
+        var isEdited = false
 
         var chordCount: Int { pages.reduce(0) { $0 + $1.chords.count } }
 
@@ -372,6 +542,15 @@ final class ScoreStandModel: ObservableObject {
     @Published var export: ExportFile?
     @Published var isExporting = false
     @Published var isUploading = false
+    /// The reader's chord size, 1 = as printed. Per device: a stand at arm's
+    /// length and a keyboard at two metres want different sizes.
+    @Published private(set) var chordScale: CGFloat =
+        (UserDefaults.standard.object(forKey: "score.chordScale") as? Double).map { CGFloat($0) } ?? 1
+
+    func resize(by step: CGFloat) {
+        chordScale = min(2.5, max(0.7, (chordScale + step) * 10).rounded() / 10)
+        UserDefaults.standard.set(Double(chordScale), forKey: "score.chordScale")
+    }
 
     /// Read once per attachment per launch: recognition is seconds a page,
     /// and paging back to a song should not run it again.
@@ -393,7 +572,11 @@ final class ScoreStandModel: ObservableObject {
             states[item.id]?.failure = "악보를 내려받지 못했습니다. 연결을 확인하세요."
             return
         }
-        guard let read = await ScoreTransposer.read(data: data), !read.pages.isEmpty else {
+        // A chart corrected by hand opens as corrected, and skips the
+        // seconds of recognition it no longer needs.
+        let saved = ScoreEditStore.load(item.id)
+        guard var read = await ScoreTransposer.read(data: data, recognise: saved == nil),
+              !read.pages.isEmpty else {
             // Drive answers a file that is not shared by link with a
             // sign-in page, which is neither a PDF nor an image.
             states[item.id]?.failure = "이 파일은 악보로 열 수 없습니다. PDF나 이미지인지, 링크 공유가 켜져 있는지 확인하세요."
@@ -401,6 +584,13 @@ final class ScoreStandModel: ObservableObject {
         }
 
         var state = State()
+        if let saved, saved.count == read.pages.count {
+            for index in read.pages.indices { read.pages[index].chords = saved[index] }
+            state.isEdited = true
+        } else if saved != nil {
+            // The file changed shape since the edits were made.
+            ScoreEditStore.remove(item.id)
+        }
         state.pages = read.pages
         state.source = read.source
         let symbols = read.pages.flatMap { $0.chords.map(\.original) }
@@ -443,6 +633,80 @@ final class ScoreStandModel: ObservableObject {
         update(item) { $0.showsOriginal.toggle() }
     }
 
+    // MARK: Editing by hand
+
+    func move(_ item: ScoreStandItem, page: Int, chord: UUID, to offset: CGSize) {
+        edit(item, page: page, chord: chord) { $0.offset.width += offset.width; $0.offset.height += offset.height }
+    }
+
+    func remove(_ item: ScoreStandItem, page: Int, chord: UUID) {
+        update(item) { state in
+            guard state.pages.indices.contains(page) else { return }
+            state.pages[page].chords.removeAll { $0.id == chord }
+            state.isEdited = true
+        }
+        saveEdits(item)
+    }
+
+    /// The chord as the reader sees it now — the key on screen.
+    func displayed(_ chord: UUID, page: Int, in item: ScoreStandItem) -> String? {
+        guard let state = states[item.id], state.pages.indices.contains(page),
+              let found = state.pages[page].chords.first(where: { $0.id == chord }) else { return nil }
+        let shift = state.showsOriginal ? 0 : state.shift
+        return ScoreTransposer.symbol(found.original, by: shift, useFlats: state.useFlats) ?? found.original
+    }
+
+    /// Corrects a chord, or adds one at a point. The text is in the key on
+    /// screen and is stored in the score's own key, so changing the
+    /// transposition later moves it with the rest. Returns a message when
+    /// the text is not a chord.
+    func write(_ text: String, _ item: ScoreStandItem, page: Int,
+               chord: UUID?, at point: CGPoint) -> String? {
+        let typed = text.trimmingCharacters(in: .whitespaces)
+        guard let state = states[item.id], ScoreChordText.parse(typed) != nil else {
+            return "「\(typed)」은 코드로 읽을 수 없습니다. 예: G, D/F#, Em7, Bbsus4"
+        }
+        let shift = state.showsOriginal ? 0 : state.shift
+        let original = ScoreChordText.transpose(text: typed, by: -shift) ?? typed
+        if let chord {
+            edit(item, page: page, chord: chord) { $0.original = original }
+        } else {
+            update(item) { state in
+                guard state.pages.indices.contains(page) else { return }
+                let h = state.pages[page].chordHeight
+                // Centred where the finger was, a typical chord wide.
+                let box = CGRect(x: point.x - h, y: point.y - h / 2, width: h * 2, height: h)
+                state.pages[page].chords.append(ScoreChord(original: original, box: box, userAdded: true))
+                state.isEdited = true
+            }
+            saveEdits(item)
+        }
+        return nil
+    }
+
+    /// Forgets every hand edit and reads the chart again.
+    func resetEdits(_ item: ScoreStandItem) async {
+        ScoreEditStore.remove(item.id)
+        Self.cache[item.id] = nil
+        states[item.id] = nil
+        await load(item)
+    }
+
+    private func edit(_ item: ScoreStandItem, page: Int, chord: UUID, _ change: (inout ScoreChord) -> Void) {
+        update(item) { state in
+            guard state.pages.indices.contains(page),
+                  let index = state.pages[page].chords.firstIndex(where: { $0.id == chord }) else { return }
+            change(&state.pages[page].chords[index])
+            state.isEdited = true
+        }
+        saveEdits(item)
+    }
+
+    private func saveEdits(_ item: ScoreStandItem) {
+        guard let state = states[item.id] else { return }
+        ScoreEditStore.save(state.pages.map(\.chords), for: item.id)
+    }
+
     private func update(_ item: ScoreStandItem, _ change: (inout State) -> Void) {
         guard var state = states[item.id] else { return }
         change(&state)
@@ -467,8 +731,9 @@ final class ScoreStandModel: ObservableObject {
         let pages = state.pages
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
+        let scale = chordScale
         return await Task.detached(priority: .userInitiated) {
-            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats)
+            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale)
         }.value
     }
 
@@ -530,4 +795,34 @@ private struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// Hand edits to a chart, kept on this device per attachment, so a chart
+/// corrected once stays corrected — and opens without being read again.
+enum ScoreEditStore {
+    private static var folder: URL? {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let url = base?.appendingPathComponent("ScoreEdits", isDirectory: true)
+        if let url { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    private static func file(_ id: String) -> URL? {
+        let safe = id.replacingOccurrences(of: "[^A-Za-z0-9_-]", with: "_", options: .regularExpression)
+        return folder?.appendingPathComponent(safe + ".json")
+    }
+
+    static func load(_ id: String) -> [[ScoreChord]]? {
+        guard let url = file(id), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode([[ScoreChord]].self, from: data)
+    }
+
+    static func save(_ pages: [[ScoreChord]], for id: String) {
+        guard let url = file(id), let data = try? JSONEncoder().encode(pages) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func remove(_ id: String) {
+        if let url = file(id) { try? FileManager.default.removeItem(at: url) }
+    }
 }
