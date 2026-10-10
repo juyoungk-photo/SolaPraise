@@ -445,6 +445,38 @@ extension PlayerCoordinator {
         post({ event: 'media',
                pip: typeof v.webkitSetPresentationMode === 'function' });
       }
+      // A tap on the bare video shows the controls; it does not pause.
+      //
+      // YouTube's mobile embed does both from one click on its controls
+      // background, so the first tap of a double-tap stopped the music —
+      // and a skip had nothing left to skip. Blocking the click stopped
+      // the pause but also the controls. So the click goes through and
+      // only the pause it would cause is declined: a pause() asked for
+      // within a moment of a tap on the background is ignored. The pause
+      // button, the app's own pause and everything else still pause.
+      var surface = '.player-controls-background, .html5-video-container, video';
+      var declineUntil = 0;
+      window.addEventListener('click', function (e) {
+        var t = e.target;
+        if (t && t.closest && t.closest(surface) && !t.closest('button, a, [role="button"]')) {
+          declineUntil = Date.now() + 400;
+        }
+      }, true);
+      var originalPause = HTMLMediaElement.prototype.pause;
+      HTMLMediaElement.prototype.pause = function () {
+        if (Date.now() < declineUntil) {
+          // The video keeps playing; YouTube's own player has already
+          // marked itself paused, so tell it it is not. Nothing stops, so
+          // there is no gap in the sound — only the controls appear.
+          var video = this;
+          setTimeout(function () {
+            video.dispatchEvent(new Event('play'));
+            video.dispatchEvent(new Event('playing'));
+          }, 0);
+          return;
+        }
+        return originalPause.apply(this, arguments);
+      };
       new MutationObserver(scan).observe(document.documentElement,
                                          { childList: true, subtree: true });
       document.addEventListener('DOMContentLoaded', scan);
