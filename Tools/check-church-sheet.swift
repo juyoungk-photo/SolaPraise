@@ -42,6 +42,15 @@ struct CheckChurchSheet {
     /// One expected note: date, sermon, dedication. nil means "absent".
     private typealias Want = (date: String, sermon: String?, song: String?)
 
+    /// The 설교제목 cell taken apart: title, passage, preacher.
+    private static let cells: [(String, String?, String?, String?)] = [
+        ("기브아의 비극 (삿 19:1-30) 박요셉 목사", "기브아의 비극", "삿 19:1-30", "박요셉 목사"),
+        ("마음은 원이로되 / 수 24:14-31", "마음은 원이로되", "수 24:14-31", nil),
+        ("믿음의 경주 - 히브리서 12장", "믿음의 경주", "히브리서 12장", nil),
+        ("다시 세우시는 하나님", "다시 세우시는 하나님", nil, nil),
+        ("「함께 걷는 길」 요한복음 15:1-11 / 김은혜 전도사님", "함께 걷는 길", "요한복음 15:1-11", "김은혜 전도사"),
+    ]
+
     private struct Case {
         let name: String
         let rows: [[String]]
@@ -97,6 +106,28 @@ struct CheckChurchSheet {
 
     static func main() {
         var failures = 0
+
+        for (cell, title, passage, preacher) in cells {
+            let got = ChurchSheet.sermonParts(cell)
+            let ok = got.title == title && got.passage == passage && got.preacher == preacher
+            if !ok { failures += 1 }
+            print("\(ok ? "ok  " : "FAIL") 설교 cell 「\(cell)」")
+            if !ok { print("       got \(got)") }
+        }
+
+        // A bare 설교 column beside 설교제목 is who preaches; a 본문 column
+        // is the passage.
+        let both = ChurchSheet.notes(from: [["날짜", "설교", "설교제목", "본문"],
+                                            ["2026-12-13", "박목사", "기다리는 사람들", "사 40:1-11"]])
+        let note = both.values.first
+        let columnsOK = note?.preacher == "박목사" && note?.passage == "사 40:1-11" && note?.sermonTitle == "기다리는 사람들"
+        if !columnsOK { failures += 1 }
+        print("\(columnsOK ? "ok  " : "FAIL") 설교 and 본문 columns beside 설교제목")
+        let withPreacher = ChurchSheet.notes(from: [["날짜", "설교자", "설교제목"], ["2026-12-20", "이은혜 전도사", "빛으로 오신"]])
+        let preacherOK = withPreacher.values.first?.preacher == "이은혜 전도사"
+            && withPreacher.values.first?.sermonTitle == "빛으로 오신"
+        if !preacherOK { failures += 1 }
+        print("\(preacherOK ? "ok  " : "FAIL") a 설교자 column is not taken for the title")
 
         for test in cases {
             let got = ChurchSheet.notes(from: test.rows)

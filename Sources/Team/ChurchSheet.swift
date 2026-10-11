@@ -34,8 +34,14 @@ struct ChurchNote: Equatable {
     /// "there is no 헌신찬양 this week".
     var dedicationSong: String?
     var sermonTitle: String?
+    /// The passage preached: its own 본문 column, or read out of the
+    /// 설교제목 cell — 「기브아의 비극 (삿 19:1-30)」.
+    var passage: String? = nil
+    /// Who preaches: a 설교자 column, a bare 설교 column beside 설교제목
+    /// holding a name, or a name with its title in the cell — 「박요셉 목사」.
+    var preacher: String? = nil
 
-    var isEmpty: Bool { dedicationSong == nil && sermonTitle == nil }
+    var isEmpty: Bool { dedicationSong == nil && sermonTitle == nil && passage == nil && preacher == nil }
 }
 
 enum ChurchSheet {
@@ -54,6 +60,8 @@ enum ChurchSheet {
     private static let dateNames = ["날짜", "일자", "date", "주일"]
     private static let dedicationNames = ["헌신찬양", "헌신 찬양", "헌신"]
     private static let sermonNames = ["설교제목", "설교 제목", "설교", "말씀제목", "말씀 제목"]
+    private static let passageNames = ["성경본문", "성경 본문", "말씀본문", "본문"]
+    private static let preacherNames = ["설교자", "설교 자", "강사", "말씀 전하실", "preacher"]
 
     /// A1 notation for the whole tab, quoted because the name has a slash in
     /// it, and percent-encoded here rather than later.
@@ -85,7 +93,14 @@ enum ChurchSheet {
 
         guard let dateColumn = column(header, matching: dateNames) else { return [:] }
         let dedicationColumn = column(header, matching: dedicationNames)
-        let sermonColumn = column(header, matching: sermonNames)
+        let preacherColumn = column(header, matching: preacherNames)
+        let passageColumn = column(header, matching: passageNames)
+        // 「설교」 is contained in 「설교자」: the title column is never the
+        // preacher's.
+        let sermonColumn = column(header, matching: sermonNames, excluding: [preacherColumn, passageColumn])
+        // A bare 「설교」 column beside 「설교제목」 holds who preaches.
+        let bareSermonColumn = column(header, matching: ["설교"], exactly: true,
+                                      excluding: [sermonColumn, preacherColumn, passageColumn])
         guard dedicationColumn != nil || sermonColumn != nil else { return [:] }
 
         var result: [Date: ChurchNote] = [:]
@@ -93,10 +108,16 @@ enum ChurchSheet {
             guard let raw = row[safe: dateColumn],
                   let date = TeamSheet.day(raw) else { continue }
 
+            let cell = sermonColumn.flatMap { row[safe: $0] }.nonEmpty
+            let parts: (title: String?, passage: String?, preacher: String?) = cell.map(sermonParts) ?? (nil, nil, nil)
+            let bare = bareSermonColumn.flatMap { row[safe: $0] }.nonEmpty
             let note = ChurchNote(
                 date: date,
                 dedicationSong: dedicationColumn.flatMap { row[safe: $0] }.nonEmpty,
-                sermonTitle: sermonColumn.flatMap { row[safe: $0] }.nonEmpty
+                sermonTitle: parts.title,
+                passage: passageColumn.flatMap { row[safe: $0] }.nonEmpty ?? parts.passage,
+                preacher: preacherColumn.flatMap { row[safe: $0] }.nonEmpty ?? parts.preacher
+                    ?? bare.flatMap { sermonParts($0).preacher ?? (looksLikeName($0) ? $0 : nil) }
             )
             guard !note.isEmpty else { continue }
 
@@ -112,17 +133,54 @@ enum ChurchSheet {
     ///
     /// Longest candidate first, so "설교제목" is preferred over the bare
     /// "설교" when a sheet happens to carry both.
-    private static func column(_ header: [String], matching names: [String]) -> Int? {
+    private static func column(_ header: [String], matching names: [String], exactly: Bool = false,
+                               excluding taken: [Int?] = []) -> Int? {
         let cells = header.map {
             $0.trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: " ", with: "")
                 .lowercased()
         }
+        let skip = Set(taken.compactMap { $0 })
         for name in names.sorted(by: { $0.count > $1.count }) {
             let needle = name.replacingOccurrences(of: " ", with: "").lowercased()
-            if let index = cells.firstIndex(where: { $0.contains(needle) }) { return index }
+            if let index = cells.indices.first(where: {
+                !skip.contains($0) && (exactly ? cells[$0] == needle : cells[$0].contains(needle))
+            }) { return index }
         }
         return nil
+    }
+
+    // MARK: - The 설교제목 cell
+
+    private static let titles = "목사|전도사|강도사|선교사|교수|장로|사모|집사|형제|자매|박사"
+
+    /// The title, the passage and the preacher out of one cell, as the office
+    /// writes it: 「기브아의 비극 (삿 19:1-30) 박요셉 목사」, 「마음은 원이로되 /
+    /// 수 24:14-31」, 「믿음의 경주 - 히브리서 12장」. What is neither passage
+    /// nor name is the title.
+    static func sermonParts(_ text: String) -> (title: String?, passage: String?, preacher: String?) {
+        var rest = text
+        var preacher: String?
+        if let range = rest.range(of: #"([가-힣]{2,4})\s*(?:"# + titles + #")(?:님)?"#, options: .regularExpression) {
+            preacher = String(rest[range]).replacingOccurrences(of: "님$", with: "", options: .regularExpression)
+            rest.removeSubrange(range)
+        }
+        var passage: String?
+        let reference = #"[가-힣]{1,7}\s?\d{1,3}\s*(?::\s*\d{1,3}(?:\s*[-~–]\s*\d{1,3}(?::\d{1,3})?)?|[장편](?:\s*\d{1,3}\s*(?:[-~–]\s*\d{1,3}\s*)?절)?)"#
+        if let range = rest.range(of: reference, options: .regularExpression) {
+            passage = String(rest[range]).trimmingCharacters(in: .whitespaces)
+            rest.removeSubrange(range)
+        }
+        let title = rest
+            .replacingOccurrences(of: #"\(\s*\)|\[\s*\]|「\s*」"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "|/-–—·,:()[]「」\"'")))
+        return (title.isEmpty ? nil : title, passage, preacher)
+    }
+
+    /// 「박목사」, 「김철수」: a short Korean name, with or without a title.
+    private static func looksLikeName(_ text: String) -> Bool {
+        text.range(of: #"^[가-힣]{2,4}(?:"# + titles + #")?(?:님)?$"#, options: .regularExpression) != nil
     }
 }
 

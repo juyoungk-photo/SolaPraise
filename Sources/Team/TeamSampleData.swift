@@ -118,7 +118,7 @@ enum TeamSampleData {
         }
 
         func watch(_ id: String) -> URL? { YouTubeID.watchURL(id) }
-        let plan = [
+        var plan = [
             PlanItem(order: 1, kind: .announcement, title: "환영과 광고", minutes: 3,
                      person: nil, key: nil, url: nil, notes: nil, row: 2),
             PlanItem(order: 2, kind: .song, title: "주의 약속하신 말씀 위에 서",
@@ -135,6 +135,20 @@ enum TeamSampleData {
                      minutes: 4, person: "은혜", key: "A",
                      url: watch("0FM4gDmnPrk"), notes: nil, row: 7)
         ]
+
+        // With a sample 콘티 file, a 순서 whose songs are the charts in it.
+        if DebugHarness.sampleContiPath != nil {
+            plan = [
+                PlanItem(order: 1, kind: .song, title: "주 예수 내 산 소망", minutes: 5, person: "주영",
+                         key: "D", url: nil, notes: nil, row: 2),
+                PlanItem(order: 2, kind: .song, title: "거룩하신 전능의 주", minutes: 5, person: "주영",
+                         key: "A", url: nil, notes: nil, row: 3),
+                PlanItem(order: 3, kind: .prayer, title: "대표기도", minutes: 4, person: "민수",
+                         key: nil, url: nil, notes: nil, row: 4),
+                PlanItem(order: 4, kind: .song, title: "어려운 일 당할 때", minutes: 4, person: "은혜",
+                         key: "F", url: nil, notes: nil, row: 5),
+            ]
+        }
 
         var plans: [Date: [PlanItem]] = [:]
         for service in services where !service.isRehearsal {
@@ -167,6 +181,14 @@ enum TeamSampleData {
         // the service's 연주모드 button without uploading anything:
         //   -uiTestTeam -uiTestSampleScore /path/to/score.pdf
         var attachments: [Date: [Attachment]] = [:]
+        if let path = DebugHarness.sampleContiPath {
+            for service in services where !service.isRehearsal {
+                let day = calendar.startOfDay(for: service.date)
+                attachments[day] = [Attachment(date: day, song: "", name: "팀원 콘티.pdf",
+                                               fileId: "sample-conti-\(day.timeIntervalSince1970)",
+                                               url: URL(fileURLWithPath: path), addedBy: "")]
+            }
+        }
         if let path = DebugHarness.sampleScorePath {
             for service in services where !service.isRehearsal {
                 let day = calendar.startOfDay(for: service.date)

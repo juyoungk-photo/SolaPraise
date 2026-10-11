@@ -95,6 +95,13 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// Attach a local 콘티 file to every sample service, whole, with a 순서
+    /// of the songs in it (with -uiTestTeam): -uiTestSampleConti /path.pdf
+    static var sampleContiPath: String? {
+        guard let i = args.firstIndex(of: "-uiTestSampleConti"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate
     static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }

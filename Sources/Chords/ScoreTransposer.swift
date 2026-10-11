@@ -78,11 +78,13 @@ enum ScoreTransposer {
     /// link that is not shared by link returns: an HTML sign-in page.
     /// `recognise: false` skips the chord reading — for a chart whose
     /// chords the reader has already corrected and saved.
-    static func read(data: Data, recognise: Bool = true) async -> (pages: [Page], source: Source)? {
+    /// `only`: the page indices to read, for one song's pages of a 콘티 file.
+    static func read(data: Data, recognise: Bool = true, only: [Int]? = nil) async -> (pages: [Page], source: Source)? {
         // Off the main thread: recognition is several seconds a page.
         await Task.detached(priority: .userInitiated) {
             if let document = PDFDocument(data: data), document.pageCount > 0 {
-                let pages = (0..<document.pageCount).compactMap { index -> Page? in
+                let indices = only?.filter { $0 < document.pageCount } ?? Array(0..<document.pageCount)
+                let pages = indices.compactMap { index -> Page? in
                     guard let page = document.page(at: index) else { return nil }
                     let image = render(page)
                     return Page(image: image,

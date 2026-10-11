@@ -566,6 +566,34 @@ enum ScoreRecognition {
 
     /// The image enlarged and set on a white margin, the way a single
     /// symbol is easiest to read.
+    /// The lines at the top of a page, largest type first: where a chart
+    /// names its song. For splitting a 콘티 file onto the 순서.
+    static func titleLines(in image: CGImage) -> [String] {
+        let top = CGRect(x: 0, y: 0, width: image.width, height: image.height * 3 / 10)
+        guard let crop = image.cropping(to: top) else { return [] }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["ko-KR", "en-US"]
+        request.minimumTextHeight = 0
+        do { try VNImageRequestHandler(cgImage: crop, options: [:]).perform([request]) } catch { return [] }
+        return (request.results ?? [])
+            .compactMap { observation -> (String, CGFloat)? in
+                guard let text = observation.topCandidates(1).first?.string else { return nil }
+                // A chord line is no title.
+                let words = text.split(separator: " ").map(String.init)
+                if !words.isEmpty, words.allSatisfy({ ScoreChordText.parse(repairedChordWord($0)) != nil }) { return nil }
+                // Nor a tempo mark or a row of symbols — 「♩= 68」 read as
+                // 「68111/777」: a title is mostly letters.
+                let letters = text.filter(\.isLetter).count
+                guard letters >= 2, Double(letters) / Double(max(text.filter { !$0.isWhitespace }.count, 1)) >= 0.6
+                else { return nil }
+                return (text, observation.boundingBox.height)
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
     /// A lone glyph read by showing it three times: 「F F F」.
     ///
     /// Vision reads words, and a single capital with nothing beside it —

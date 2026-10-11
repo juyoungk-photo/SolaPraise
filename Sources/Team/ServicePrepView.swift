@@ -133,6 +133,7 @@ struct ServicePrepView: View {
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
+    @State private var preparingStand = false
     @State private var confirmTidy = false
     @State private var tidying = false
     @State private var tidyNote: String?
@@ -382,7 +383,7 @@ struct ServicePrepView: View {
             }
             if let url = teamSheetURL {
                 Button { openURL(url) } label: { Image(systemName: "tablecells") }
-                    .accessibilityLabel("구글 시트에서 편집")
+                    .accessibilityLabel("플래너 Sheet 열기")
             }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
         }
@@ -449,6 +450,21 @@ struct ServicePrepView: View {
                 .buttonStyle(.plain)
 
                 Spacer(minLength: 0)
+
+                // 워크플로 점검, at the end of this line rather than a line
+                // of its own: pinned, because the warnings sit at the top of
+                // the list and the list opens scrolled past them.
+                if let counts = sheetHealthCounts {
+                    Button { showHealth = true } label: {
+                        Label(counts, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(counts.contains("문제") ? .red : .orange)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("워크플로 점검: \(counts)")
+                }
             }
             .font(.caption)
 
@@ -458,17 +474,6 @@ struct ServicePrepView: View {
                     .foregroundStyle(.orange)
             }
 
-            // Pinned, because the warnings themselves sit at the top of the
-            // list and the list opens scrolled to the next service — below
-            // them. A sheet problem the screen opens past is one nobody sees.
-            if let summary = sheetHealthSummary {
-                Button { showHealth = true } label: {
-                    Label(summary, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-                .buttonStyle(.plain)
-            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -563,8 +568,9 @@ struct ServicePrepView: View {
             team.audit(accounts: SheetHealthView.accounts(auth: auth, planning: planning)))
     }
 
-    /// "워크플로 점검 · 문제 1 · 확인 2 — 눌러서 보기", or nil when clean.
-    private var sheetHealthSummary: String? {
+    /// "점검 · 문제 1 · 확인 2", or nil when clean — short enough to sit at
+    /// the end of the account line.
+    private var sheetHealthCounts: String? {
         let found = attention
         guard !found.isEmpty else { return nil }
         let problems = found.filter { $0.severity == .problem }.count
@@ -572,7 +578,7 @@ struct ServicePrepView: View {
         var parts: [String] = []
         if problems > 0 { parts.append("문제 \(problems)") }
         if warnings > 0 { parts.append("확인 \(warnings)") }
-        return "워크플로 점검 · " + parts.joined(separator: " · ") + " — 눌러서 보기"
+        return "점검 · " + parts.joined(separator: " · ")
     }
 
     private var rowList: String {
@@ -596,12 +602,13 @@ struct ServicePrepView: View {
             Section {
                 if let url = teamSheetURL {
                     Button { openURL(url) } label: {
-                        Label("구글 시트에서 편집", systemImage: "tablecells")
+                        Label("플래너 Sheet", systemImage: "tablecells")
                     }
                 }
                 if let url = ChurchSheetSource.url {
                     Button { openURL(url) } label: {
-                        Label("교회 정보 시트 열기", systemImage: "building.columns")
+                        Label([AppSecrets.churchName, "예배 정보 Sheet"].compactMap { $0 }.joined(separator: " "),
+                              systemImage: "building.columns")
                     }
                     if let problem = team.churchSheetProblem {
                         Text(problem)
@@ -729,10 +736,16 @@ struct ServicePrepView: View {
                 if let sermon = note.sermonTitle {
                     churchNoteLine("설교", sermon)
                 }
+                if let passage = note.passage {
+                    churchNoteLine("본문", passage)
+                }
+                if let preacher = note.preacher {
+                    churchNoteLine("설교자", preacher)
+                }
                 if let song = note.dedicationSong {
                     churchNoteLine("헌신찬양", song)
                 }
-                Text("교회 시트에서 가져옴")
+                Text("\([AppSecrets.churchName, "예배 정보 Sheet"].compactMap { $0 }.joined(separator: " "))에서 가져옴")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -1014,7 +1027,12 @@ struct ServicePrepView: View {
             // 순서 into a column of identical icons.
             if item.kind == .song {
             AttachmentMenu(service: service, song: item.title, sheetId: sheetId) {
-                let count = team.attachments(for: service, song: item.title).count
+                // Its own files, and its pages of a 콘티 file if any.
+                let fromConti = team.attachments(for: service).contains {
+                    $0.belongsToService && !ContiPages.isBuilt($0)
+                        && !ContiPages.pages(of: $0.fileId, for: item.title).isEmpty
+                }
+                let count = team.attachments(for: service, song: item.title).count + (fromConti ? 1 : 0)
                 HStack(spacing: 2) {
                     Image(systemName: count > 0 ? "paperclip.circle.fill" : "paperclip")
                     if count > 1 {
@@ -1087,7 +1105,7 @@ struct ServicePrepView: View {
     /// whole point is that whoever opens it has the current one.
     @ViewBuilder
     private func servicePDFRow(_ service: TeamService) -> some View {
-        let built = team.attachments(for: service).first(where: \.belongsToService)
+        let built = team.attachments(for: service).first { $0.belongsToService && ContiPages.isBuilt($0) }
         let pieces = team.attachments(for: service).filter { !$0.belongsToService }
         let serviceFiles = team.attachments(for: service).filter(\.belongsToService)
 
@@ -1113,9 +1131,23 @@ struct ServicePrepView: View {
                 // the 순서 gives it — the set, on one stand. A 콘티 file a
                 // teammate made whole opens there too.
                 if !standItems(service).isEmpty {
-                    Button { standService = service } label: {
-                        Label("악보 연주모드", systemImage: "music.note.list")
+                    Button {
+                        Task {
+                            preparingStand = true
+                            await placeContiPages(service)
+                            preparingStand = false
+                            standService = service
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Label("악보 연주모드", systemImage: "music.note.list")
+                            if preparingStand {
+                                ProgressView().controlSize(.small)
+                                Text("콘티 파일을 곡별로 나누는 중…").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
                     }
+                    .disabled(preparingStand)
                 }
 
                 // A 콘티 already made — by a teammate, in another app, as
@@ -1145,22 +1177,55 @@ struct ServicePrepView: View {
     /// gives that song.
     private func standItems(_ service: TeamService) -> [ScoreStandItem] {
         let plan = team.plan(for: service)
-        let order = plan.enumerated().reduce(into: [String: Int]()) { out, pair in
-            out[pair.element.title] = pair.offset
-        }
-        let songs = team.attachments(for: service)
-            .filter { !$0.belongsToService }
-            .sorted { (order[$0.song] ?? .max) < (order[$1.song] ?? .max) }
-            .map { item in
-                ScoreStandItem(attachment: item, song: item.song,
-                               teamKey: plan.first { $0.title == item.song }?.key)
+        let attachments = team.attachments(for: service)
+        // A 콘티 file a teammate uploaded whole; the app's own built PDF is
+        // the songs' charts again and is not.
+        let contis = attachments.filter { $0.belongsToService && !ContiPages.isBuilt($0) }
+        var items: [ScoreStandItem] = []
+        var used: [String: Set<Int>] = [:]
+        // The 순서, song by song: its own charts — every one of them — or,
+        // when it has none, its pages of a 콘티 file, in the song's key.
+        for song in plan where song.kind == .song {
+            let own = attachments.filter { !$0.belongsToService && $0.song == song.title }
+            if !own.isEmpty {
+                items += own.map { ScoreStandItem(attachment: $0, song: song.title, teamKey: song.key) }
+                continue
             }
-        // Charts on the songs, when there are any. Otherwise the 콘티 as a
-        // teammate uploaded it whole: shown as it is, in its own key —
-        // it holds many songs, and no one 순서 key applies to all of them.
-        guard songs.isEmpty else { return songs }
-        return team.attachments(for: service).filter(\.belongsToService).map {
-            ScoreStandItem(attachment: $0, song: ($0.name as NSString).deletingPathExtension, teamKey: nil)
+            for conti in contis {
+                let pages = ContiPages.pages(of: conti.fileId, for: song.title)
+                guard !pages.isEmpty else { continue }
+                used[conti.fileId, default: []].formUnion(pages)
+                items.append(ScoreStandItem(attachment: conti, song: song.title, teamKey: song.key, pages: pages))
+                break
+            }
+        }
+        // Charts on songs no longer in the 순서, after it.
+        let inPlan = Set(plan.map(\.title))
+        items += attachments.filter { !$0.belongsToService && !inPlan.contains($0.song) }
+            .map { ScoreStandItem(attachment: $0, song: $0.song, teamKey: nil) }
+        // What of a 콘티 file is no song of the 순서 — a cover, a song not on
+        // it — or all of it when its pages could not be placed, as it is.
+        for conti in contis {
+            let name = (conti.name as NSString).deletingPathExtension
+            guard let placed = ContiPages.cached(conti.fileId), !placed.isEmpty else {
+                items.append(ScoreStandItem(attachment: conti, song: name, teamKey: nil))
+                continue
+            }
+            let taken = used[conti.fileId] ?? []
+            let count = ContiPages.pageCount(conti.fileId) ?? ((placed.keys.max() ?? 0) + 1)
+            let rest = (0..<count).filter { !taken.contains($0) && placed[$0] == nil }
+            if !rest.isEmpty {
+                items.append(ScoreStandItem(attachment: conti, song: "\(name) · 나머지", teamKey: nil, pages: rest))
+            }
+        }
+        return items
+    }
+
+    /// Works out, once per file, which 콘티 page is which song of the 순서.
+    private func placeContiPages(_ service: TeamService) async {
+        let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
+        for conti in team.attachments(for: service) where conti.belongsToService && !ContiPages.isBuilt(conti) {
+            await ContiPages.compute(for: conti, songs: songs)
         }
     }
 
@@ -1206,8 +1271,9 @@ struct ServicePrepView: View {
         let who = team.actingEmail(auth: auth, planning: planning) ?? ""
 
         // Replace rather than accumulate: a service has one current 콘티 PDF
-        // and a list of five dated ones is a list nobody reads.
-        if let old = team.attachments(for: service).first(where: \.belongsToService) {
+        // and a list of five dated ones is a list nobody reads. Only the
+        // app's own — never a 콘티 file a teammate uploaded.
+        if let old = team.attachments(for: service).first(where: { $0.belongsToService && ContiPages.isBuilt($0) }) {
             _ = await team.removeAttachment(old, sheetId: sheetId)
         }
         if let failure = await team.attach(
@@ -1697,8 +1763,10 @@ struct ServicePrepView: View {
                                 // question asked of a service you have not
                                 // opened; 헌신찬양 waits inside, where the
                                 // 순서 it belongs beside is.
-                                if let sermon = team.churchNote(for: upcoming)?.sermonTitle {
-                                    Text(sermon)
+                                if let note = team.churchNote(for: upcoming),
+                                   let sermon = note.sermonTitle ?? note.passage {
+                                    Text([sermon, note.sermonTitle == nil ? nil : note.passage]
+                                        .compactMap { $0 }.joined(separator: " · "))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)

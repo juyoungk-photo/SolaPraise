@@ -73,6 +73,15 @@ enum AppSecrets {
         return trimmed
     }
 
+    /// The church's short name, for labels — 「… 예배 정보 Sheet」. From the
+    /// gitignored config: the repository is public and names no church.
+    static var churchName: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ChurchName") as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("$(") else { return nil }
+        return trimmed
+    }
+
     /// Addresses that see features still under development.
     ///
     /// Out of the gitignored config rather than the source: the repository

@@ -32,7 +32,9 @@ struct AttachmentMenu<Content: View>: View {
     let sheetId: String?
     @ViewBuilder var label: Content
 
-    @State private var photo: PhotosPickerItem?
+    /// Several at once: a song often has a chart, a lead sheet and a
+    /// lyric page, and a 콘티 is a stack of photos.
+    @State private var photos: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var isUploading = false
@@ -44,8 +46,32 @@ struct AttachmentMenu<Content: View>: View {
                      : team.attachments(for: service, song: song)
     }
 
+    /// This song's pages of a 콘티 file uploaded whole, as worked out.
+    private var contiPages: [(file: Attachment, pages: [Int])] {
+        guard !song.isEmpty else { return [] }
+        return team.attachments(for: service)
+            .filter { $0.belongsToService && !ContiPages.isBuilt($0) }
+            .compactMap { file in
+                let pages = ContiPages.pages(of: file.fileId, for: song)
+                return pages.isEmpty ? nil : (file, pages)
+            }
+    }
+
     var body: some View {
         Menu {
+            if !contiPages.isEmpty {
+                Section("콘티 파일에서") {
+                    ForEach(contiPages, id: \.file.id) { entry in
+                        Button {
+                            stand = ScoreStandItem(attachment: entry.file, song: song,
+                                                   teamKey: team.plan(for: service).first { $0.title == song }?.key,
+                                                   pages: entry.pages)
+                        } label: {
+                            Label("\(pageLabel(entry.pages)) · \(entry.file.name)", systemImage: "doc.on.doc")
+                        }
+                    }
+                }
+            }
             if !existing.isEmpty {
                 Section("첨부된 파일") {
                     ForEach(existing) { item in
@@ -115,17 +141,20 @@ struct AttachmentMenu<Content: View>: View {
         // at all, so a member without the second grant must still be able
         // to tap through to what the team has put up.
         .disabled(isUploading || sheetId == nil)
-        .photosPicker(isPresented: $showPhotos, selection: $photo,
+        .photosPicker(isPresented: $showPhotos, selection: $photos,
                       matching: .any(of: [.images]))
         .fileImporter(isPresented: $showFiles,
                       allowedContentTypes: [.pdf, .image],
-                      allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { await upload(from: url) }
+                      allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            Task { for url in urls { await upload(from: url) } }
         }
-        .onChange(of: photo) { _, item in
-            guard let item else { return }
-            Task { await upload(from: item) }
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            Task {
+                for item in items { await upload(from: item) }
+                photos = []
+            }
         }
         .fullScreenCover(item: $stand) { item in
             ScoreStandView(items: [item],
@@ -165,12 +194,12 @@ struct AttachmentMenu<Content: View>: View {
     // MARK: - Uploading
 
     private func upload(from item: PhotosPickerItem) async {
-        defer { photo = nil }
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             note = "사진을 읽지 못했습니다."
             return
         }
-        let name = "\(stem)-\(Int(Date().timeIntervalSince1970)).jpg"
+        // Unique even for several picked in the same second.
+        let name = "\(stem)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4)).jpg"
         await send(data: data, name: name, mime: "image/jpeg")
     }
 
@@ -202,7 +231,24 @@ struct AttachmentMenu<Content: View>: View {
             song: song, to: service, sheetId: sheetId, by: who
         ) {
             note = failure
+            return
         }
+        // A 콘티 file is split onto the 순서 straight away, so each song's
+        // clip shows its pages without anyone opening the stand first.
+        if song.isEmpty {
+            let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
+            for file in team.attachments(for: service)
+            where file.belongsToService && file.name == name && !ContiPages.isBuilt(file)
+                && ContiPages.cached(file.fileId) == nil {
+                ScoreFileCache.save(data, for: file.fileId)
+                await ContiPages.compute(for: file, songs: songs)
+            }
+        }
+    }
+
+    private func pageLabel(_ pages: [Int]) -> String {
+        guard let first = pages.first, let last = pages.last else { return "" }
+        return first == last ? "\(first + 1)쪽" : "\(first + 1)–\(last + 1)쪽"
     }
 
     private func remove(_ item: Attachment) async {

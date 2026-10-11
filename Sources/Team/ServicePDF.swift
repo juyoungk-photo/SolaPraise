@@ -100,6 +100,12 @@ enum ServicePDF {
             if let sermon = note?.sermonTitle {
                 y = draw("설교  \(sermon)", at: y, font: .systemFont(ofSize: 13))
             }
+            if let passage = note?.passage {
+                y = draw("본문  \(passage)", at: y, font: .systemFont(ofSize: 13))
+            }
+            if let preacher = note?.preacher {
+                y = draw("설교자  \(preacher)", at: y, font: .systemFont(ofSize: 13))
+            }
             if let song = note?.dedicationSong {
                 y = draw("헌신찬양  \(song)", at: y, font: .systemFont(ofSize: 13))
             }

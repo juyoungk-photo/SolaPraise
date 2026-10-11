@@ -25,8 +25,15 @@ struct ScoreStandItem: Identifiable, Hashable {
     let song: String
     /// The key in the 순서, as the leader typed it. Nil when unset.
     let teamKey: String?
+    /// Some pages of the file only — one song's pages of a 콘티 file. Nil
+    /// for the whole file.
+    var pages: [Int]? = nil
 
-    var id: String { attachment.id }
+    /// The file and the pages: one 콘티 file is several songs on the stand,
+    /// each read, transposed and corrected on its own.
+    var id: String {
+        pages.map { "\(attachment.id)#\($0.map(String.init).joined(separator: ","))" } ?? attachment.id
+    }
 }
 
 struct ScoreStandView: View {
@@ -761,7 +768,7 @@ final class ScoreStandModel: ObservableObject {
         // nor the seconds of recognition. A new upload is a new file id,
         // so a replaced chart is never served stale.
         let data: Data
-        if let kept = ScoreFileCache.load(item.id) {
+        if let kept = ScoreFileCache.load(item.attachment.fileId) {
             data = kept
         } else {
             do {
@@ -776,7 +783,7 @@ final class ScoreStandModel: ObservableObject {
         // it by hand — then their corrections win over any new reading.
         var saved = ScoreEditStore.load(item.id)
         if let old = saved, !old.edited, old.version != ScoreRecognition.version { saved = nil }
-        guard var read = await ScoreTransposer.read(data: data, recognise: saved == nil),
+        guard var read = await ScoreTransposer.read(data: data, recognise: saved == nil, only: item.pages),
               !read.pages.isEmpty else {
             // Drive answers a file that is not shared by link with a
             // sign-in page, which is neither a PDF nor an image.
@@ -786,7 +793,7 @@ final class ScoreStandModel: ObservableObject {
 
         // Only a real chart is kept: a sign-in page Drive sent in its place
         // has been rejected above and never reaches here.
-        ScoreFileCache.save(data, for: item.id)
+        ScoreFileCache.save(data, for: item.attachment.fileId)
 
         var state = State()
         if let saved, saved.pages.count == read.pages.count {
@@ -796,7 +803,7 @@ final class ScoreStandModel: ObservableObject {
             if saved != nil {
                 // The file changed shape since; read it afresh.
                 ScoreEditStore.remove(item.id)
-                if let fresh = await ScoreTransposer.read(data: data) { read = fresh }
+                if let fresh = await ScoreTransposer.read(data: data, only: item.pages) { read = fresh }
             }
             ScoreEditStore.save(read.pages.map(\.chords), edited: false, for: item.id)
         }
