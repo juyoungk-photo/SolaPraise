@@ -187,15 +187,22 @@ struct AttachmentMenu<Content: View>: View {
     private func sendTransposed(_ item: ScoreStandItem, data: Data, name: String) async -> String? {
         guard let sheetId else { return "시트가 연결되어 있지 않습니다." }
         let who = team.actingEmail(auth: auth, planning: planning) ?? ""
+        // The same song in the same key, sent again, replaces the last one.
         return await team.attach(data: data, name: name, mimeType: "application/pdf",
-                                 song: song, to: service, sheetId: sheetId, by: who)
+                                 song: song, to: service, sheetId: sheetId, by: who,
+                                 replacingSameName: true)
     }
 
     // MARK: - Uploading
 
     private func upload(from item: PhotosPickerItem) async {
-        guard let data = try? await item.loadTransferable(type: Data.self) else {
-            note = "사진을 읽지 못했습니다."
+        // Photos come as they were taken — usually HEIC — and went up as
+        // that under a .jpg name, which a teammate's browser or Android
+        // phone then could not show. Sent as a real JPEG, at most 3000 px
+        // on its long side: a chart, not a print.
+        guard let original = try? await item.loadTransferable(type: Data.self),
+              let data = Self.chartJPEG(original) else {
+            addNote("사진을 읽지 못했습니다.")
             return
         }
         // Unique even for several picked in the same second.
@@ -210,15 +217,21 @@ struct AttachmentMenu<Content: View>: View {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let data = try? Data(contentsOf: url) else {
-            note = "파일을 읽지 못했습니다."
+        guard var data = try? Data(contentsOf: url) else {
+            addNote("파일을 읽지 못했습니다.")
             return
+        }
+        var uploadName = url.lastPathComponent
+        // A photo from Files is a photo all the same: HEIC becomes JPEG.
+        if url.pathExtension.lowercased() != "pdf", let jpeg = Self.chartJPEG(data) {
+            data = jpeg
+            uploadName = (uploadName as NSString).deletingPathExtension + ".jpg"
         }
         let mime = url.pathExtension.lowercased() == "pdf"
             ? "application/pdf"
             : (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                ?? "application/octet-stream")
-        await send(data: data, name: url.lastPathComponent, mime: mime)
+        await send(data: data, name: uploadName, mime: url.pathExtension.lowercased() == "pdf" ? mime : "image/jpeg")
     }
 
     private func send(data: Data, name: String, mime: String) async {
@@ -230,7 +243,7 @@ struct AttachmentMenu<Content: View>: View {
             data: data, name: name, mimeType: mime,
             song: song, to: service, sheetId: sheetId, by: who
         ) {
-            note = failure
+            addNote(failure)
             return
         }
         // A 콘티 file is split onto the 순서 straight away, so each song's
@@ -244,6 +257,26 @@ struct AttachmentMenu<Content: View>: View {
                 await ContiPages.compute(for: file, songs: songs)
             }
         }
+    }
+
+    /// Several files go up one after another; each one's message is kept.
+    private func addNote(_ text: String) {
+        note = note.map { "\($0)\n\(text)" } ?? text
+    }
+
+    /// An image as a JPEG for the team, no larger than 3000 px long.
+    static func chartJPEG(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let long = max(image.size.width * image.scale, image.size.height * image.scale)
+        let factor = min(1, 3000 / max(long, 1))
+        let size = CGSize(width: image.size.width * image.scale * factor,
+                          height: image.size.height * image.scale * factor)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return drawn.jpegData(compressionQuality: 0.88)
     }
 
     private func pageLabel(_ pages: [Int]) -> String {

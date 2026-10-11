@@ -101,9 +101,30 @@ enum TeamSheet {
     enum Live { static let date = 0, order = 1, updatedAt = 2, by = 3 }
     enum Attachments {
         static let date = 0, song = 1, name = 2,
-                   fileId = 3, url = 4, addedBy = 5, addedAt = 6
-        static let width = 7
-        static let header = ["Date", "Song", "Name", "FileId", "URL", "AddedBy", "AddedAt"]
+                   fileId = 3, url = 4, addedBy = 5, addedAt = 6, hash = 7
+        static let width = 8
+        static let header = ["Date", "Song", "Name", "FileId", "URL", "AddedBy", "AddedAt", "Hash"]
+
+        /// The file already attached to this service's song with the same
+        /// contents, by name — whoever uploaded it, from whichever device.
+        /// Rows from before the Hash column carry none and never match.
+        static func duplicate(in rows: [[String]], date: Date, song: String, hash: String) -> String? {
+            guard let header = rows.first,
+                  let hashCol = column(header, ["hash", "해시"]) else { return nil }
+            let dateCol = column(header, ["date", "날짜"]) ?? Attachments.date
+            let songCol = column(header, ["song", "곡", "찬양"]) ?? Attachments.song
+            let nameCol = column(header, ["name", "이름", "파일"]) ?? Attachments.name
+            let wantSong = song.trimmingCharacters(in: .whitespaces)
+            for row in rows.dropFirst() {
+                func cell(_ i: Int) -> String { row.indices.contains(i) ? row[i].trimmingCharacters(in: .whitespaces) : "" }
+                guard cell(hashCol) == hash, !hash.isEmpty,
+                      cell(songCol) == wantSong,
+                      let day = TeamSheet.day(cell(dateCol)),
+                      Calendar.current.isDate(day, inSameDayAs: date) else { continue }
+                return cell(nameCol)
+            }
+            return nil
+        }
     }
     enum Plan {
         static let date = 0, order = 1, type = 2, title = 3,

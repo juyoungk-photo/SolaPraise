@@ -12,6 +12,7 @@
 //
 
 import Foundation
+import CryptoKit
 import SwiftUI
 
 // MARK: - What a service is made of
@@ -43,6 +44,8 @@ struct Attachment: Identifiable, Hashable {
     let addedBy: String
     /// 1-based row on the Attachments tab, so it can be cleared.
     var row: Int?
+    /// The contents' fingerprint, for telling the same file uploaded twice.
+    var hash: String? = nil
 
     var id: String { fileId }
     var belongsToService: Bool { song.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -852,6 +855,7 @@ final class TeamStore: ObservableObject {
         let idCol = TeamSheet.column(header, ["fileid", "파일id"]) ?? TeamSheet.Attachments.fileId
         let urlCol = TeamSheet.column(header, ["url", "link", "링크"]) ?? TeamSheet.Attachments.url
         let byCol = TeamSheet.column(header, ["addedby", "올린사람", "작성자"])
+        let hashCol = TeamSheet.column(header, ["hash", "해시"])
 
         var out: [Date: [Attachment]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
@@ -865,7 +869,7 @@ final class TeamStore: ObservableObject {
             out[Calendar.current.startOfDay(for: date), default: []].append(
                 Attachment(date: date, song: cell(songCol), name: cell(nameCol),
                            fileId: cell(idCol), url: url, addedBy: cell(byCol),
-                           row: offset + 1)
+                           row: offset + 1, hash: cell(hashCol).isEmpty ? nil : cell(hashCol))
             )
         }
         attachments = out
@@ -901,9 +905,31 @@ final class TeamStore: ObservableObject {
         song: String,
         to service: TeamService,
         sheetId: String,
-        by email: String
+        by email: String,
+        replacingSameName: Bool = false
     ) async -> String? {
         guard let client, let drive else { return "구글 계정에 연결되어 있지 않습니다." }
+
+        // The tab first, then Drive: a sheet that will not take the row
+        // should not leave a file behind in Drive to clean up.
+        let header: [String]
+        let rows: [[String]]
+        do {
+            (header, rows) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+        } catch {
+            if case SheetsClient.SheetsError.http(403, _) = error { isReadOnly = true }
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+
+        // ONE FILE, ONE ATTACHMENT. The same photo picked twice, a retry
+        // after a slow upload, or the same PDF sent from the iPad and the
+        // phone used to become two Drive files and two charts on the stand.
+        // Contents are fingerprinted; the same contents on the same song of
+        // the same service are not uploaded again.
+        let hash = Self.fingerprint(data)
+        if let existing = TeamSheet.Attachments.duplicate(in: rows, date: service.date, song: song, hash: hash) {
+            return "이미 올린 파일입니다 — 「\(existing)」. 같은 파일은 한 번만 올라갑니다."
+        }
 
         let uploaded: DriveClient.Uploaded
         do {
@@ -915,7 +941,6 @@ final class TeamStore: ObservableObject {
         do {
             // Placed by the tab's own column names, so a tab whose columns
             // were rearranged still gets each value in its column.
-            let header = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
             let row = TeamSheet.place([
                 (["date", "날짜"], TeamSheet.dateFormatter.string(from: service.date)),
                 (["song", "곡", "찬양"], song),
@@ -923,17 +948,23 @@ final class TeamStore: ObservableObject {
                 (["fileid", "파일id"], uploaded.fileId),
                 (["url", "link", "링크"], uploaded.link.absoluteString),
                 (["addedby", "by", "올린사람"], email),
-                (["addedat", "at", "올린시각"], ISO8601DateFormatter().string(from: Date()))
+                (["addedat", "at", "올린시각"], ISO8601DateFormatter().string(from: Date())),
+                (["hash", "해시"], hash)
             ], header: header)
             let written = try await client.append(
                 sheetId: sheetId, tab: TeamSheet.attachmentsTab, row: row
             )
             let day = Calendar.current.startOfDay(for: service.date)
+            // A transposed chart sent again in the same key replaces the
+            // one before rather than piling up beside it.
+            let replaced = replacingSameName
+                ? attachments(for: service, song: song).filter { $0.name == name } : []
             attachments[day, default: []].append(
                 Attachment(date: service.date, song: song, name: name,
                            fileId: uploaded.fileId, url: uploaded.link,
-                           addedBy: email, row: written)
+                           addedBy: email, row: written, hash: hash)
             )
+            for old in replaced { _ = await removeAttachment(old, sheetId: sheetId) }
             errorMessage = nil
             return nil
         } catch {
@@ -978,11 +1009,24 @@ final class TeamStore: ObservableObject {
     /// Google refusing to create 「Attachments」 a second time. Adding a TAB
     /// is safe where adding a COLUMN is not: a new tab cannot shift
     /// anything the team already has.
-    private func ensureAttachmentsTab(sheetId: String, client: SheetsClient) async throws -> [String] {
+    private func ensureAttachmentsTab(sheetId: String, client: SheetsClient) async throws -> (header: [String], rows: [[String]]) {
         let tab = TeamSheet.attachmentsTab
-        let rows = (try? await client.readTable(sheetId: sheetId, tab: tab)) ?? []
-        if let header = rows.first, TeamSheet.headerIndex(rows, tab: tab) != nil {
-            return header
+        // Raw, for where the header really is; anchored, as every reader
+        // of this tab sees it.
+        let raw = (try? await client.read(sheetId: sheetId, range: tab)) ?? []
+        let rows = TeamSheet.anchorHeader(raw, tab: tab)
+        if var header = rows.first, let index = TeamSheet.headerIndex(raw, tab: tab) {
+            // A tab from before fingerprints gets the column added at the
+            // end of its header, where it disturbs nothing.
+            if TeamSheet.column(header, ["hash", "해시"]) == nil {
+                let at = (header.lastIndex { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? -1) + 1
+                let cell = "\(tab)!\(TeamSheet.columnLetter(at))\(index + 1)"
+                if (try? await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: ["Hash"])) != nil {
+                    while header.count < at { header.append("") }
+                    header.insert("Hash", at: at)
+                }
+            }
+            return (header, rows)
         }
         if !(try await client.tabTitles(sheetId: sheetId)).contains(tab) {
             try await client.addSheet(sheetId: sheetId, title: tab)
@@ -998,7 +1042,12 @@ final class TeamStore: ObservableObject {
         try await client.write(sheetId: sheetId,
                                range: "\(tab)!A1:\(TeamSheet.columnLetter(header.count - 1))1",
                                row: header)
-        return header
+        return (header, [header])
+    }
+
+    /// A file's contents, fingerprinted: SHA-256, hex.
+    static func fingerprint(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Removes an attachment from the sheet and from Drive.

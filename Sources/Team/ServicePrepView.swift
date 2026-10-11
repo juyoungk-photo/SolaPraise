@@ -1271,14 +1271,13 @@ struct ServicePrepView: View {
         let who = team.actingEmail(auth: auth, planning: planning) ?? ""
 
         // Replace rather than accumulate: a service has one current 콘티 PDF
-        // and a list of five dated ones is a list nobody reads. Only the
-        // app's own — never a 콘티 file a teammate uploaded.
-        if let old = team.attachments(for: service).first(where: { $0.belongsToService && ContiPages.isBuilt($0) }) {
-            _ = await team.removeAttachment(old, sheetId: sheetId)
-        }
+        // and a list of five dated ones is a list nobody reads. Replaced
+        // only once the new one is up — removing first lost the old PDF
+        // whenever the upload then failed — and only the app's own, never a
+        // 콘티 file a teammate uploaded.
         if let failure = await team.attach(
             data: pdf, name: "\(day)-콘티.pdf", mimeType: "application/pdf",
-            song: "", to: service, sheetId: sheetId, by: who
+            song: "", to: service, sheetId: sheetId, by: who, replacingSameName: true
         ) {
             pushNote = failure
         }
