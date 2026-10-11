@@ -383,7 +383,7 @@ struct ServicePrepView: View {
             }
             if let url = teamSheetURL {
                 Button { openURL(url) } label: { Image(systemName: "tablecells") }
-                    .accessibilityLabel("플래너 Sheet 열기")
+                    .accessibilityLabel("찬양팀 Sheet 열기")
             }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
         }
@@ -602,7 +602,7 @@ struct ServicePrepView: View {
             Section {
                 if let url = teamSheetURL {
                     Button { openURL(url) } label: {
-                        Label("플래너 Sheet", systemImage: "tablecells")
+                        Label("찬양팀 Sheet", systemImage: "tablecells")
                     }
                 }
                 if let url = ChurchSheetSource.url {
