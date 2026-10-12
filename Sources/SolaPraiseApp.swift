@@ -104,6 +104,11 @@ struct SolaPraiseApp: App {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
+        } else if let path = DebugHarness.contiPagesPath {
+            ContiPagesSheet(attachment: Attachment(date: Date(), song: "", name: "팀원 콘티.pdf",
+                                                   fileId: "debug-conti", url: URL(fileURLWithPath: path),
+                                                   addedBy: ""),
+                            songs: ["주 예수 내 산 소망", "거룩하신 전능의 주", "어려운 일 당할 때"])
         } else if let path = DebugHarness.scorePath {
             // Several scores, as a set: paths joined by 「::」.
             ScoreStandView(items: path.components(separatedBy: "::").map { path in

@@ -20,13 +20,45 @@ enum ScorePageMatcher {
     ///
     /// - pageTitles: per page, the lines at its top, largest type first.
     static func assign(pageTitles: [[String]], songs: [String]) -> [Int: String] {
-        var result: [Int: String] = [:]
-        var previous: String?
+        // Pass 1: a page whose title names a song is that song.
+        var named: [Int: String] = [:]
         for (page, lines) in pageTitles.enumerated() {
-            if let song = best(lines, songs) {
-                result[page] = song
+            if let song = best(lines, songs) { named[page] = song }
+        }
+
+        // Pass 2: a page that opens a chart but whose title matched nothing
+        // — a different spelling, an English title, a title set as an
+        // image — takes the next song of the 순서 not yet placed, when it
+        // sits between pages that keep the 순서's order. A 콘티 is made in
+        // the order it is sung; one teammate's file matched only its first
+        // page by title, and every other page was left for nobody.
+        var result = named
+        var used = Set(named.values)
+        var lastSong = -1
+        for page in pageTitles.indices {
+            if let song = named[page], let index = songs.firstIndex(of: song) {
+                lastSong = max(lastSong, index)
+                continue
+            }
+            guard looksLikeAnotherTitle(pageTitles[page]) else { continue }
+            // The next unplaced song after the last one placed, and before
+            // the next page that names one.
+            let nextNamed = named.filter { $0.key > page }.min { $0.key < $1.key }
+                .flatMap { songs.firstIndex(of: $0.value) } ?? songs.count
+            if let index = songs.indices.first(where: { $0 > lastSong && $0 < nextNamed && !used.contains(songs[$0]) }),
+               plausible(pageTitles[page], songs[index]) {
+                result[page] = songs[index]
+                used.insert(songs[index])
+                lastSong = index
+            }
+        }
+
+        // Pass 3: a page with no title of its own continues the song before.
+        var previous: String?
+        for page in pageTitles.indices {
+            if let song = result[page] {
                 previous = song
-            } else if let previous, !looksLikeAnotherTitle(lines) {
+            } else if let previous, !looksLikeAnotherTitle(pageTitles[page]) {
                 result[page] = previous
             } else {
                 previous = nil
@@ -58,6 +90,19 @@ enum ScorePageMatcher {
         // Two songs scoring alike — 「주님」 and 「주님 뜻대로」 — the longer,
         // more specific title wins only if it is clearly ahead.
         return winner.song
+    }
+
+    /// Whether a page's title could be this song under another spelling:
+    /// its Korean shares at least a third with the song's, or it has no
+    /// Korean to judge by (an English title). 「은혜 아니면」 is not 「주님
+    /// 뜻대로 살기로 했네」 and is left unplaced.
+    private static func plausible(_ lines: [String], _ song: String) -> Bool {
+        func hangul(_ text: String) -> String {
+            String(text.unicodeScalars.filter { (0xAC00...0xD7A3).contains($0.value) }.map(Character.init))
+        }
+        let title = lines.prefix(2).map(hangul).max { $0.count < $1.count } ?? ""
+        guard title.count >= 2 else { return true }
+        return similarity(title, hangul(song)) >= 0.35
     }
 
     /// A page that opens with a big title of its own — a song not in this

@@ -102,6 +102,12 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// Open 곡별 페이지 지정 for a local 콘티 file: -uiTestContiPages /path.pdf
+    static var contiPagesPath: String? {
+        guard let i = args.firstIndex(of: "-uiTestContiPages"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate
     static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }

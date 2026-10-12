@@ -101,9 +101,11 @@ enum TeamSheet {
     enum Live { static let date = 0, order = 1, updatedAt = 2, by = 3 }
     enum Attachments {
         static let date = 0, song = 1, name = 2,
-                   fileId = 3, url = 4, addedBy = 5, addedAt = 6, hash = 7
-        static let width = 8
-        static let header = ["Date", "Song", "Name", "FileId", "URL", "AddedBy", "AddedAt", "Hash"]
+                   fileId = 3, url = 4, addedBy = 5, addedAt = 6, hash = 7, edits = 8
+        static let width = 9
+        /// Edits: the Drive file holding the team's hand corrections to
+        /// this chart's chords — see SharedEdits.
+        static let header = ["Date", "Song", "Name", "FileId", "URL", "AddedBy", "AddedAt", "Hash", "Edits"]
 
         /// The file already attached to this service's song with the same
         /// contents, by name — whoever uploaded it, from whichever device.

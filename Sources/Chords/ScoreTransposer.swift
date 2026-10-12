@@ -93,7 +93,22 @@ enum ScoreTransposer {
                 }
                 return (pages, .pdf)
             }
-            guard let image = UIImage(data: data)?.normalisedOrientation() else { return nil }
+            guard var image = UIImage(data: data)?.normalisedOrientation() else { return nil }
+            // A small image — a chart saved off a web page or a messenger,
+            // 600 px across — lost chords that the same chart at 1600 px
+            // gave whole: 「B7」 read as 「B」, an 「E7」 gone. Enlarged first,
+            // to read and to show alike.
+            let pixelWidth = image.size.width * image.scale
+            if pixelWidth < 1400 {
+                let factor = 1600 / max(pixelWidth, 1)
+                let size = CGSize(width: 1600, height: image.size.height * image.scale * factor)
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                    context.cgContext.interpolationQuality = .high
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                }
+            }
             let width: CGFloat = 595
             let size = CGSize(width: width,
                               height: width * image.size.height / max(image.size.width, 1))

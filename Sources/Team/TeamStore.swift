@@ -46,6 +46,8 @@ struct Attachment: Identifiable, Hashable {
     var row: Int?
     /// The contents' fingerprint, for telling the same file uploaded twice.
     var hash: String? = nil
+    /// The Drive file with the team's corrections to its chords, if any.
+    var editsFileId: String? = nil
 
     var id: String { fileId }
     var belongsToService: Bool { song.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -856,6 +858,7 @@ final class TeamStore: ObservableObject {
         let urlCol = TeamSheet.column(header, ["url", "link", "링크"]) ?? TeamSheet.Attachments.url
         let byCol = TeamSheet.column(header, ["addedby", "올린사람", "작성자"])
         let hashCol = TeamSheet.column(header, ["hash", "해시"])
+        let editsCol = TeamSheet.column(header, ["edits", "교정"])
 
         var out: [Date: [Attachment]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
@@ -869,7 +872,8 @@ final class TeamStore: ObservableObject {
             out[Calendar.current.startOfDay(for: date), default: []].append(
                 Attachment(date: date, song: cell(songCol), name: cell(nameCol),
                            fileId: cell(idCol), url: url, addedBy: cell(byCol),
-                           row: offset + 1, hash: cell(hashCol).isEmpty ? nil : cell(hashCol))
+                           row: offset + 1, hash: cell(hashCol).isEmpty ? nil : cell(hashCol),
+                           editsFileId: cell(editsCol).isEmpty ? nil : cell(editsCol))
             )
         }
         attachments = out
@@ -1016,14 +1020,15 @@ final class TeamStore: ObservableObject {
         let raw = (try? await client.read(sheetId: sheetId, range: tab)) ?? []
         let rows = TeamSheet.anchorHeader(raw, tab: tab)
         if var header = rows.first, let index = TeamSheet.headerIndex(raw, tab: tab) {
-            // A tab from before fingerprints gets the column added at the
-            // end of its header, where it disturbs nothing.
-            if TeamSheet.column(header, ["hash", "해시"]) == nil {
+            // A tab from before these columns gets each added at the end of
+            // its header, where it disturbs nothing.
+            for (name, aliases) in [("Hash", ["hash", "해시"]), ("Edits", ["edits", "교정"])]
+            where TeamSheet.column(header, aliases) == nil {
                 let at = (header.lastIndex { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? -1) + 1
                 let cell = "\(tab)!\(TeamSheet.columnLetter(at))\(index + 1)"
-                if (try? await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: ["Hash"])) != nil {
+                if (try? await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [name])) != nil {
                     while header.count < at { header.append("") }
-                    header.insert("Hash", at: at)
+                    if header.count == at { header.append(name) } else { header[at] = name }
                 }
             }
             return (header, rows)
@@ -1048,6 +1053,67 @@ final class TeamStore: ObservableObject {
     /// A file's contents, fingerprinted: SHA-256, hex.
     static func fingerprint(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Shared corrections
+
+    /// The attachment as last read from the sheet, by file id.
+    func attachment(fileId: String) -> Attachment? {
+        attachments.values.lazy.flatMap { $0 }.first { $0.fileId == fileId }
+    }
+
+    /// Puts this chart's hand corrections where the team reads them: a
+    /// small JSON file in Drive, named in the chart's Edits cell. A 콘티 file
+    /// holds several songs, so the file is a map — one entry per song's
+    /// pages — and an update keeps the other entries. Returns the new
+    /// file's id, or a sentence on failure.
+    func shareEdits(fileId: String, key: String, pages: [[ScoreChord]]) async -> Result<String, ShareEditsError> {
+        await updateShared(fileId: fileId) { $0.charts[key] = pages }
+    }
+
+    /// Which page of a 콘티 file is which song, as set by hand, for the team.
+    func sharePageAssignment(fileId: String, pages: [Int: String]) async -> Result<String, ShareEditsError> {
+        await updateShared(fileId: fileId) { file in
+            file.pages = Dictionary(uniqueKeysWithValues: pages.map { (String($0.key), $0.value) })
+        }
+    }
+
+    private func updateShared(fileId: String,
+                              _ change: (inout SharedEdits.File) -> Void) async -> Result<String, ShareEditsError> {
+        guard let client, let drive, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
+        guard let item = attachment(fileId: fileId), let row = item.row else { return .failure(.notFound) }
+        do {
+            let (header, _) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            guard let column = TeamSheet.column(header, ["edits", "교정"]) else { return .failure(.notFound) }
+            guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [fileId],
+                                sheetId: sheetId, client: client) else { return .failure(.moved) }
+            // Whatever another member shared since, then this song's entry.
+            var file = await SharedEdits.fetch(item.editsFileId) ?? SharedEdits.File()
+            change(&file)
+            let data = try JSONEncoder().encode(file)
+            let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
+                                                  mimeType: "application/json")
+            let cell = "\(TeamSheet.attachmentsTab)!\(TeamSheet.columnLetter(column))\(row)"
+            do {
+                try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [uploaded.fileId])
+            } catch {
+                try? await drive.delete(fileId: uploaded.fileId)
+                throw error
+            }
+            if let old = item.editsFileId { try? await drive.delete(fileId: old) }
+            for (day, list) in attachments {
+                if let i = list.firstIndex(where: { $0.fileId == fileId }) {
+                    attachments[day]?[i].editsFileId = uploaded.fileId
+                }
+            }
+            return .success(uploaded.fileId)
+        } catch {
+            return .failure(.failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+        }
+    }
+
+    enum ShareEditsError: Error {
+        case noAccess, notFound, moved, failed(String)
     }
 
     /// Removes an attachment from the sheet and from Drive.

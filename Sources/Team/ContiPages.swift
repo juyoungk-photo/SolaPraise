@@ -16,7 +16,7 @@ import UIKit
 
 enum ContiPages {
 
-    private static let key = "conti.pages"
+    private static let key = "conti.pages.v2"  // v2: the 순서-order fallback; older guesses are worked out again
 
     /// Page index → song title, as last worked out for this file.
     static func cached(_ fileId: String) -> [Int: String]? {
@@ -47,8 +47,28 @@ enum ContiPages {
 
     /// Works the pages out for a file, reading it if needed. Nil when the
     /// file cannot be read.
+    /// Pages set by hand — here, or by a teammate and shared — which win
+    /// over anything worked out.
+    static func setManual(_ pages: [Int: String], for fileId: String, count: Int) {
+        // "" marks a page that is no song; it is stored as unplaced.
+        store(pages.filter { !$0.value.isEmpty }, count: count, for: fileId)
+        var manual = Set(UserDefaults.standard.stringArray(forKey: key + ".manual") ?? [])
+        manual.insert(fileId)
+        UserDefaults.standard.set(Array(manual), forKey: key + ".manual")
+    }
+
+    static func isManual(_ fileId: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: key + ".manual") ?? []).contains(fileId)
+    }
+
     @discardableResult
     static func compute(for attachment: Attachment, songs: [String]) async -> [Int: String]? {
+        // Someone on the team set the pages by hand: that is the answer.
+        if let shared = await SharedEdits.fetch(attachment.editsFileId)?.pages {
+            let pages = Dictionary(uniqueKeysWithValues: shared.compactMap { k, v in Int(k).map { ($0, v) } })
+            setManual(pages, for: attachment.fileId, count: max(pageCount(attachment.fileId) ?? 0, (pages.keys.max() ?? -1) + 1))
+            return pages.filter { !$0.value.isEmpty }
+        }
         if let known = cached(attachment.fileId) { return known }
         let data: Data
         if let kept = ScoreFileCache.load(attachment.fileId) {

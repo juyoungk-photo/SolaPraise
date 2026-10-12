@@ -50,6 +50,21 @@ struct CheckPageMatcher {
         check("…and so is its second page", placed[6] == nil, "got \(placed[6] ?? "-")")
         check("a song with no page gets none", !placed.values.contains("주님 뜻대로 살기로 했네"))
 
+        // A teammate's 콘티 whose titles do not read as the 순서 spells them:
+        // the first page matches, the rest follow the 순서's order.
+        let set = ["주님 뜻대로 살기로 했네", "은혜", "나의 믿음 주께 있네"]
+        let unnamed: [[String]] = [
+            ["주님 뜻대로 살기로 했네", "F"],
+            ["I've decided to follow Jesus"],      // continues page 1? No — a title of its own, but Latin
+            ["Grace 그 사랑 그 은혜로"],             // 은혜, titled otherwise
+            ["", "2. 나의 갈 길"],                  // continues it
+            ["My faith is in You 주께 믿음 있네"],    // 나의 믿음 주께 있네, titled otherwise
+        ]
+        let follow = ScorePageMatcher.assign(pageTitles: unnamed, songs: set)
+        check("titled otherwise, pages follow the 순서's order",
+              follow[0] == set[0] && follow[2] == set[1] && follow[3] == set[1] && follow[4] == set[2],
+              "got \(follow.sorted { $0.key < $1.key })")
+
         print(failures == 0 ? "\nall page matcher checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

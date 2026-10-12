@@ -40,6 +40,7 @@ struct AttachmentMenu<Content: View>: View {
     @State private var isUploading = false
     @State private var note: String?
     @State private var stand: ScoreStandItem?
+    @State private var assigning: Attachment?
 
     private var existing: [Attachment] {
         // The service's own: 콘티 files uploaded whole. The app's built 콘티
@@ -70,6 +71,16 @@ struct AttachmentMenu<Content: View>: View {
                                                    pages: entry.pages)
                         } label: {
                             Label("\(pageLabel(entry.pages)) · \(entry.file.name)", systemImage: "doc.on.doc")
+                        }
+                    }
+                }
+            }
+            // A 콘티 file: which page is which song, by hand.
+            if song.isEmpty, !existing.isEmpty {
+                Section {
+                    ForEach(existing) { file in
+                        Button { assigning = file } label: {
+                            Label("곡별 페이지 지정 · \(file.name)", systemImage: "rectangle.split.3x1")
                         }
                     }
                 }
@@ -157,6 +168,11 @@ struct AttachmentMenu<Content: View>: View {
                 for item in items { await upload(from: item) }
                 photos = []
             }
+        }
+        .sheet(item: $assigning) { file in
+            ContiPagesSheet(attachment: file,
+                            songs: team.plan(for: service).filter { $0.kind == .song }.map(\.title))
+                .environmentObject(team)
         }
         .fullScreenCover(item: $stand) { item in
             ScoreStandView(items: [item],

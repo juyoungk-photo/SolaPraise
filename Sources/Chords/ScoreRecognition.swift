@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 4
+    static let version = 5
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -569,7 +569,7 @@ enum ScoreRecognition {
     /// The lines at the top of a page, largest type first: where a chart
     /// names its song. For splitting a 콘티 file onto the 순서.
     static func titleLines(in image: CGImage) -> [String] {
-        let top = CGRect(x: 0, y: 0, width: image.width, height: image.height * 3 / 10)
+        let top = CGRect(x: 0, y: 0, width: image.width, height: image.height * 35 / 100)
         guard let crop = image.cropping(to: top) else { return [] }
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
