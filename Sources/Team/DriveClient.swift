@@ -162,6 +162,15 @@ actor DriveClient {
             folderId = cached
             return cached
         }
+        // The folder this account already has, made by the app on another
+        // device. The id was remembered per device, so the iPad and the
+        // phone of one account each made a 「SolaPraise 악보」 of their own.
+        // drive.file sees what this app created, from any device.
+        if let existing = await existingFolder() {
+            folderId = existing
+            UserDefaults.standard.set(existing, forKey: Self.folderKey)
+            return existing
+        }
         struct NewFolder: Encodable {
             let name: String
             let mimeType = "application/vnd.google-apps.folder"
@@ -179,6 +188,28 @@ actor DriveClient {
         folderId = created.id
         UserDefaults.standard.set(created.id, forKey: Self.folderKey)
         return created.id
+    }
+
+    /// The oldest 「SolaPraise 악보」 folder this app made for this account,
+    /// in My Drive or moved into a Shared Drive.
+    private func existingFolder() async -> String? {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        components.queryItems = [
+            .init(name: "q", value: "name = '\(Self.folderName)' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"),
+            .init(name: "fields", value: "files(id)"),
+            .init(name: "orderBy", value: "createdTime"),
+            .init(name: "pageSize", value: "1"),
+            .init(name: "supportsAllDrives", value: "true"),
+            .init(name: "includeItemsFromAllDrives", value: "true"),
+            .init(name: "corpora", value: "allDrives")
+        ]
+        guard let url = components.url, let token = try? await tokenProvider() else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        struct List: Decodable { struct F: Decodable { let id: String }; let files: [F] }
+        return (try? JSONDecoder().decode(List.self, from: data))?.files.first?.id
     }
 
     private func isUsableFolder(_ id: String) async -> Bool {
