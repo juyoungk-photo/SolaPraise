@@ -10,7 +10,8 @@
 //
 //  Run:
 //      swiftc -O -o /tmp/contifolder \
-//          Sources/Team/ContiFolder.swift Tools/check-conti-folder.swift
+//          Sources/Team/ContiFolder.swift Sources/Feed/SharedChannelList.swift \
+//          Tools/check-conti-folder.swift
 //      /tmp/contifolder
 //
 
@@ -65,6 +66,25 @@ struct CheckContiFolder {
         check("「Dec 20」 seen in October is last year's", same(ContiFolder.listingDate("Dec 20", now: now), "2025-12-20"))
         let dated = ContiFolder.parseFolderPage(#"<div id="entry-1AbCdEfGhIjK"><div class="flip-entry-title">20261011 콘티.pdf</div><div class="flip-entry-last-modified"><div>Oct 10</div>"#)
         check("the listing's modified date is read", dated.first?.modified != nil)
+        // The church's 관심 채널 list sits in the same folder as a Doc.
+        let withDoc = page + #"<div class="flip-entry" id="entry-1DoCiD123"><a href="https://docs.google.com/document/d/1DoCiD123/edit?usp=drive_web"><div class="flip-entry-title">SolaPraise 관심채널</div></a></div>"#
+        let entries = ContiFolder.entries(inFolderPage: withDoc)
+        check("every entry is listed, of any kind", entries.map(\.name) == ["20261011 주일예배 찬양.pdf", "Notes & plan.docx", "SolaPraise 관심채널"], "got \(entries.map(\.name))")
+        check("an entry's link is its own, not the next one's",
+              entries.map(\.link) == ["x", nil, "https://docs.google.com/document/d/1DoCiD123/edit?usp=drive_web"], "got \(entries.map(\.link))")
+        check("PDFs are still all the 콘티 reader sees", ContiFolder.parseFolderPage(withDoc).count == 1)
+        check("a Doc is read as text", SharedChannelList.exportURLs(id: "1DoCiD123", link: entries.last?.link).map(\.absoluteString)
+              == ["https://docs.google.com/document/d/1DoCiD123/export?format=txt"])
+        let listText = """
+        주일 예배 2026
+        https://www.youtube.com/playlist?list=PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        수요 예배 — https://youtube.com/playlist?list=PLbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&jct=SECRET
+        https://www.youtube.com/watch?v=abcdefghijk&list=PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        https://www.youtube.com/playlist?list=WL
+        """
+        check("playlist links are found among notes, each once, without invite tokens",
+              SharedChannelList.playlistIds(in: listText) == ["PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "PLbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+              "got \(SharedChannelList.playlistIds(in: listText))")
         check("a folder link gives its id",
               ContiFolder.folderId(fromLink: "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMn?usp=share_link") == "1AbCdEfGhIjKlMn")
 

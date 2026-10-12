@@ -250,10 +250,16 @@ final class CachedPlaylist {
     /// series being preached now.
     var publishedAt: Date?
 
+    /// Put here by the church's shared list (SharedChannelList) rather than
+    /// by this member, so it leaves again when the list drops it. One a
+    /// member added by hand is never marked, and never removed by the list.
+    var isSharedListed: Bool = false
+
     init(playlistId: String, channelId: String, title: String,
          thumbnailURLString: String? = nil, itemCount: Int = 0,
          purpose: Purpose? = nil, isPinned: Bool = false,
-         titleFilter: String? = nil, inviteURLString: String? = nil) {
+         titleFilter: String? = nil, inviteURLString: String? = nil,
+         isSharedListed: Bool = false) {
         self.playlistId = playlistId
         self.channelId = channelId
         self.title = title
@@ -264,6 +270,7 @@ final class CachedPlaylist {
         self.isPinned = isPinned
         self.titleFilter = titleFilter
         self.inviteURLString = inviteURLString
+        self.isSharedListed = isSharedListed
     }
 
     var inviteURL: URL? { inviteURLString.flatMap(URL.init(string:)) }

@@ -136,21 +136,39 @@ enum ContiFolder {
         return parseFolderPage(html)
     }
 
-    /// The entries of Drive's public folder listing page.
-    static func parseFolderPage(_ html: String) -> [File] {
+    /// One entry of Drive's public folder listing page, of any kind.
+    struct Entry: Equatable {
+        let id: String
+        let name: String
+        /// Where the entry opens — a Doc, a Sheet or a file — which says
+        /// what kind it is.
+        let link: String?
+        let modified: Date?
+    }
+
+    /// Every entry of Drive's public folder listing page.
+    static func entries(inFolderPage html: String) -> [Entry] {
         guard let regex = try? NSRegularExpression(
-            pattern: #"id="entry-([A-Za-z0-9_-]+)".*?class="flip-entry-title">(.*?)</div>(?:.*?flip-entry-last-modified"><div>([^<]*))?"#,
+            pattern: #"id="entry-([A-Za-z0-9_-]+)"(?:(?:(?!id="entry-).)*?href="([^"]*)")?(?:(?!id="entry-).)*?class="flip-entry-title">(.*?)</div>(?:(?:(?!id="entry-).)*?flip-entry-last-modified"><div>([^<]*))?"#,
             options: [.dotMatchesLineSeparators]) else { return [] }
         return regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
-            guard let id = Range(match.range(at: 1), in: html), let name = Range(match.range(at: 2), in: html) else { return nil }
-            let modified = Range(match.range(at: 3), in: html).flatMap { listingDate(String(html[$0])) }
+            guard let id = Range(match.range(at: 1), in: html), let name = Range(match.range(at: 3), in: html) else { return nil }
+            let link = Range(match.range(at: 2), in: html).map { String(html[$0]) }
+            let modified = Range(match.range(at: 4), in: html).flatMap { listingDate(String(html[$0])) }
             let title = String(html[name])
                 .replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&#39;", with: "'")
                 .replacingOccurrences(of: "&quot;", with: "\"")
-            let lower = title.lowercased()
+            return Entry(id: String(html[id]), name: title, link: link, modified: modified)
+        }
+    }
+
+    /// The PDFs and images of Drive's public folder listing page.
+    static func parseFolderPage(_ html: String) -> [File] {
+        entries(inFolderPage: html).compactMap { entry in
+            let lower = entry.name.lowercased()
             guard lower.hasSuffix(".pdf") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg")
                     || lower.hasSuffix(".png") || lower.hasSuffix(".heic") else { return nil }
-            return File(id: String(html[id]), name: title, modified: modified)
+            return File(id: entry.id, name: entry.name, modified: entry.modified)
         }
     }
 

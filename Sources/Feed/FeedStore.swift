@@ -133,7 +133,11 @@ final class FeedStore: ObservableObject {
         try? context.save()
         await fillMissingDurations(context: context, client: client)
         await refreshChannelPlaylists(channels: channels, context: context, client: client)
+        if purpose == nil || purpose == .fellowship, client != nil {
+            await syncSharedList(context: context)
+        }
         await fillMissingPlaylistDetails(context: context, client: client)
+        if let client { await addSharedListChannels(context: context, client: client) }
 
         let now = Date()
         lastRefreshedAt = now
@@ -150,6 +154,46 @@ final class FeedStore: ObservableObject {
     /// read "재생목록 0" with no artwork until somebody opened it. One call
     /// covers fifty of them for a single unit, so this is cheap enough to
     /// run on an ordinary refresh.
+    /// The church's shared list of unlisted playlists (SharedChannelList):
+    /// what it names is added to 관심 채널, and what it no longer names
+    /// leaves — only what the list itself added. A list that could not be
+    /// read changes nothing. Details and the channel come in the next step.
+    private func syncSharedList(context: ModelContext) async {
+        var read: [String]?
+        #if DEBUG
+        // -uiTestSharedList "<the list's text>": as if the folder held it.
+        if let at = DebugHarness.args.firstIndex(of: "-uiTestSharedList"), at + 1 < DebugHarness.args.count {
+            read = SharedChannelList.playlistIds(in: DebugHarness.args[at + 1])
+        }
+        #endif
+        if read == nil, let folderId = ContiFolder.folderId { read = await SharedChannelList.fetch(folderId: folderId) }
+        guard let ids = read else { return }
+        let cached = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        let known = Set(cached.map(\.playlistId))
+        for id in ids where !known.contains(id) {
+            context.insert(CachedPlaylist(playlistId: id, channelId: "", title: "재생목록",
+                                          purpose: .fellowship, isSharedListed: true))
+        }
+        let listed = Set(ids)
+        for playlist in cached where playlist.isSharedListed && !listed.contains(playlist.playlistId) {
+            context.delete(playlist)
+        }
+        // A channel the list brought in leaves with its last listed playlist.
+        let key = Self.sharedListChannelsKey
+        var added = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        let stillListed = Set(cached.filter { $0.isSharedListed && listed.contains($0.playlistId) }.map(\.channelId))
+        for channel in (try? context.fetch(FetchDescriptor<Channel>())) ?? []
+        where added.contains(channel.youtubeChannelId) && !stillListed.contains(channel.youtubeChannelId) {
+            context.delete(channel)
+            added.remove(channel.youtubeChannelId)
+        }
+        UserDefaults.standard.set(Array(added), forKey: key)
+        try? context.save()
+        #if DEBUG
+        print("[SolaPraise] shared list: \(ids.count) playlist(s)")
+        #endif
+    }
+
     private func fillMissingPlaylistDetails(
         context: ModelContext, client: YouTubeAPIClient?
     ) async {
@@ -175,11 +219,39 @@ final class FeedStore: ObservableObject {
             // from a channel with nothing public — shows on that channel's
             // page as well as where it was pinned.
             if playlist.channelId.isEmpty, let owner = detail.snippet?.channelId { playlist.channelId = owner }
+            if playlist.publishedAt == nil { playlist.publishedAt = detail.snippet?.publishedAt }
             // The placeholder title a pinned link starts with.
             if playlist.title == "재생목록" || playlist.title.isEmpty, !detail.title.isEmpty {
                 playlist.title = detail.title
             }
         }
+        try? context.save()
+    }
+
+    /// A playlist on the church's list shows on its channel's page, so that
+    /// channel joins 관심 채널 if this member does not have it — once: a
+    /// channel the member then removes stays removed.
+    private static let sharedListChannelsKey = "sharedList.addedChannels"
+
+    private func addSharedListChannels(context: ModelContext, client: YouTubeAPIClient) async {
+        let key = Self.sharedListChannelsKey
+        var added = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        let playlists = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
+        let channels = (try? context.fetch(FetchDescriptor<Channel>())) ?? []
+        let have = Set(channels.map(\.youtubeChannelId))
+        let wanted = Set(playlists.filter(\.isSharedListed).map(\.channelId))
+            .filter { !$0.isEmpty && !have.contains($0) && !added.contains($0) }
+        guard !wanted.isEmpty else { return }
+        var order = (channels.map(\.sortOrder).max() ?? 0) + 1
+        for id in wanted.sorted() {
+            guard let found = try? await client.channel(for: .channelId(id)) else { continue }
+            context.insert(Channel(youtubeChannelId: found.id, title: found.title, handle: found.handle,
+                                   thumbnailURLString: found.thumbnailURL?.absoluteString,
+                                   purpose: .fellowship, sortOrder: order))
+            order += 1
+            added.insert(id)
+        }
+        UserDefaults.standard.set(Array(added), forKey: key)
         try? context.save()
     }
 
