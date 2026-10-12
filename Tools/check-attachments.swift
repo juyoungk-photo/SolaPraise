@@ -53,8 +53,9 @@ struct CheckAttachments {
         let old = [Array(rows[0].prefix(7)), Array(rows[1].prefix(7))]
         check("a tab with no Hash column finds nothing",
               TeamSheet.Attachments.duplicate(in: old, date: sunday, song: "은혜", hash: "aaa111") == nil)
-        check("the header written for a new tab has the Hash column",
-              TeamSheet.Attachments.header.last == "Hash" && TeamSheet.Attachments.width == TeamSheet.Attachments.header.count)
+        check("the header written for a new tab has the Hash and Edits columns",
+              TeamSheet.Attachments.header.contains("Hash") && TeamSheet.Attachments.header.last == "Edits"
+                  && TeamSheet.Attachments.width == TeamSheet.Attachments.header.count)
 
         print(failures == 0 ? "\nall attachment checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
