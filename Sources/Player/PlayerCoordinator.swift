@@ -498,13 +498,18 @@ extension PlayerCoordinator {
       }
       // A tap on the bare video shows the controls; it does not pause.
       //
-      // YouTube's mobile embed does both from one click on its controls
-      // background, so the first tap of a double-tap stopped the music —
-      // and a skip had nothing left to skip. Blocking the click stopped
-      // the pause but also the controls. So the click goes through and
-      // only the pause it would cause is declined: a pause() asked for
-      // within a moment of a tap on the background is ignored. The pause
-      // button, the app's own pause and everything else still pause.
+      // YouTube's embed does both from one click on its touch layer
+      // (.player-controls-background), so the first tap of a double-tap
+      // stopped the music — and a skip had nothing left to skip.
+      //
+      // Re-checked against the embed itself (2026-10): without this, one
+      // tap pauses; stopping the click — at the layer or any ancestor —
+      // stops the pause but YouTube's controls never appear either, since
+      // that one handler is the only thing that shows them; adding its
+      // 「fadein」 class by hand does not render them. So the click goes
+      // through and only the pause it would cause is declined: a pause()
+      // asked for within a moment of a tap on the layer is ignored. The
+      // pause button, the app's own pause and everything else still pause.
       var surface = '.player-controls-background, .html5-video-container, video';
       var declineUntil = 0;
       window.addEventListener('click', function (e) {

@@ -16,8 +16,26 @@
 import Foundation
 
 #if DEBUG
+import SwiftData
+
+/// A channel's page on its own, for -uiTestChannel.
+struct DebugChannelPage: View {
+    let name: String
+    @Query private var channels: [Channel]
+
+    var body: some View {
+        NavigationStack {
+            if let channel = channels.first(where: { $0.title.contains(name) }) {
+                ChannelDetailView(channel: channel)
+            } else {
+                Text("no channel \(name)")
+            }
+        }
+    }
+}
+
 enum DebugHarness {
-    private static var args: [String] { ProcessInfo.processInfo.arguments }
+    static var args: [String] { ProcessInfo.processInfo.arguments }
 
     /// Video id to open straight into, bypassing the sign-in gate.
     static var videoId: String? {
@@ -113,6 +131,12 @@ enum DebugHarness {
 
     /// Open 악보 연주모드 for the first service: -uiTestOpenStand
     static var openStand: Bool { args.contains("-uiTestOpenStand") }
+
+    /// Open one channel's page, by part of its title: -uiTestChannel 코너스톤교회
+    static var channelPage: String? {
+        guard let i = args.firstIndex(of: "-uiTestChannel"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
 
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate

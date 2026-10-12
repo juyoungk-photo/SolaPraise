@@ -98,7 +98,10 @@ final class Channel {
         // Drop a trailing latin transliteration ("성서유니온 Scripture Union")
         // — only after a Korean name. 「📺 Cornerstone TV」 has nothing
         // before its Latin but an emoji, and was cut to 「📺」 alone.
+        // And only a separate word: 「코너스톤TV」 is one name, and cut to
+        // 「코너스톤」 it read as the church's other channel.
         if let firstLatin = name.firstIndex(where: { $0.isASCII && $0.isLetter }),
+           firstLatin > name.startIndex, name[name.index(before: firstLatin)].isWhitespace,
            name[..<firstLatin].unicodeScalars.contains(where: { (0xAC00...0xD7A3).contains($0.value) }) {
             name = String(name[..<firstLatin]).trimmingCharacters(in: .whitespaces)
         }

@@ -55,6 +55,9 @@ struct YTPlaylist: Decodable, Identifiable, Hashable {
         let description: String?
         let publishedAt: Date?
         let thumbnails: YTThumbnails?
+        /// Whose playlist it is — for filing one added by link under its
+        /// channel.
+        var channelId: String? = nil
     }
     struct ContentDetails: Decodable, Hashable { let itemCount: Int? }
     struct Status: Decodable, Hashable { let privacyStatus: String? }

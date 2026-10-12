@@ -40,14 +40,18 @@ struct ChannelDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                if videos.isEmpty {
+                // Playlists first: a channel like this one keeps its
+                // services as playlists, and its recent uploads come second.
+                if !playlists.isEmpty { playlistSection }
+
+                if videos.isEmpty && playlists.isEmpty {
                     ContentUnavailableView(
-                        "영상이 아직 없습니다",
+                        "볼 수 있는 영상이 없습니다",
                         systemImage: "play.slash",
-                        description: Text("아래로 당겨 새로고침하세요.")
+                        description: Text(emptyExplanation)
                     )
                     .padding(.top, 40)
-                } else {
+                } else if !videos.isEmpty {
                     Text("최근 영상")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 16)
@@ -60,8 +64,6 @@ struct ChannelDetailView: View {
                     }
                     .padding(.horizontal, 16)
                 }
-
-                if !playlists.isEmpty { playlistSection }
 
                 if isLoadingPlaylist {
                     HStack(spacing: 8) {
@@ -85,14 +87,19 @@ struct ChannelDetailView: View {
         .task { if videos.isEmpty { await refresh() } }
     }
 
+    /// Why a channel shows nothing — usually that it has nothing public.
+    /// A church channel posts its services 일부 공개 (unlisted), and YouTube
+    /// lists those only to an account that manages the channel; everyone
+    /// else sees an empty channel. A playlist of them, shared by link, is
+    /// what anyone can watch without signing in.
+    private var emptyExplanation: String {
+        "이 채널에는 공개된 영상이 없습니다. '일부 공개' 영상은 채널을 관리하는 계정으로 로그인했을 때만 보입니다. "
+            + "팀원 모두가 로그인 없이 보려면, 그 영상들을 담은 재생목록(일부 공개)의 링크를 「보관함 > 관심 채널 > 추가」에서 재생목록으로 추가하세요."
+    }
+
     // MARK: - Playlists
 
-    /// Three rows and a way through to the rest.
-    ///
-    /// These were a horizontal strip, which does not survive a channel with
-    /// eighty playlists: you cannot see how many there are, you cannot skim
-    /// them, and reaching the far end is a long sideways drag. Rows read at a
-    /// glance and the full list scrolls the way lists do.
+    /// Cards with artwork, then a way through to all of them.
     private var playlistSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             NavigationLink {
@@ -120,10 +127,10 @@ struct ChannelDetailView: View {
             }
             .buttonStyle(.plain)
 
-            VStack(spacing: 6) {
-                ForEach(playlists.prefix(Self.playlistPreviewCount)) { playlist in
+            LazyVGrid(columns: columns, spacing: 16) {
+                ForEach(shownPlaylists.prefix(Self.playlistPreviewCount)) { playlist in
                     Button { Task { await play(playlist) } } label: {
-                        PlaylistBar(playlist: playlist)
+                        PlaylistCard(playlist: playlist)
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -137,7 +144,16 @@ struct ChannelDetailView: View {
         }
     }
 
-    private static let playlistPreviewCount = 3
+    /// Pinned first, then the newest.
+    private var shownPlaylists: [CachedPlaylist] {
+        playlists.sorted { a, b in
+            if a.isPinned != b.isPinned { return a.isPinned }
+            return (a.publishedAt ?? .distantPast) > (b.publishedAt ?? .distantPast)
+        }
+    }
+
+    /// As many as fill two rows of the grid.
+    private static let playlistPreviewCount = 6
 
     // MARK: - Actions
 
@@ -359,5 +375,52 @@ struct ChannelPlaylistsView: View {
         // As PlaylistPinButton: unpinned is shown nowhere.
         playlist.purposeRaw = playlist.isPinned ? channel.purpose.rawValue : nil
         onPinChanged?()
+    }
+}
+
+// MARK: - Playlist card
+
+/// A playlist as a card, the size of a video card: artwork, title, count.
+/// On a channel page the artwork is what tells one series from another.
+struct PlaylistCard: View {
+    let playlist: CachedPlaylist
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                Color(.secondarySystemBackground)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay {
+                        if let url = playlist.thumbnailURL {
+                            AsyncImage(url: url) { image in
+                                image.resizable().aspectRatio(contentMode: .fill)
+                            } placeholder: { Color.clear }
+                        } else {
+                            Image(systemName: "list.bullet.rectangle.portrait")
+                                .font(.title2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                HStack(spacing: 3) {
+                    Image(systemName: "list.bullet").font(.caption2)
+                    if playlist.itemCount > 0 { Text("\(playlist.itemCount)") }
+                }
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+                .padding(6)
+            }
+            HStack(spacing: 4) {
+                if playlist.isPinned {
+                    Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.tint)
+                }
+                Text(playlist.title)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                    .foregroundStyle(Color.primary)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }

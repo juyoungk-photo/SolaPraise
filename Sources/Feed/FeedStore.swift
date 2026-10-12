@@ -155,7 +155,7 @@ final class FeedStore: ObservableObject {
     ) async {
         guard let client else { return }
         let cached = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
-        let incomplete = cached.filter { $0.itemCount == 0 || $0.thumbnailURLString == nil }
+        let incomplete = cached.filter { $0.itemCount == 0 || $0.thumbnailURLString == nil || $0.channelId.isEmpty }
         guard !incomplete.isEmpty else { return }
 
         guard let fetched = try? await client.playlists(ids: incomplete.map(\.playlistId))
@@ -171,6 +171,10 @@ final class FeedStore: ObservableObject {
             if playlist.thumbnailURLString == nil {
                 playlist.thumbnailURLString = detail.thumbnailURL?.absoluteString
             }
+            // Its channel, so a playlist added by link — an unlisted one
+            // from a channel with nothing public — shows on that channel's
+            // page as well as where it was pinned.
+            if playlist.channelId.isEmpty, let owner = detail.snippet?.channelId { playlist.channelId = owner }
             // The placeholder title a pinned link starts with.
             if playlist.title == "재생목록" || playlist.title.isEmpty, !detail.title.isEmpty {
                 playlist.title = detail.title

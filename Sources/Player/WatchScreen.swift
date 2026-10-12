@@ -648,13 +648,8 @@ struct WatchScreen: View {
             .buttonStyle(.bordered)
             .disabled(current == nil)
 
-            if let current, let url = YouTubeID.watchURL(current.id) {
-                ShareLink(item: url) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-                .buttonStyle(.bordered)
-            }
-
+            // No 「Share」 here: YouTube's own player has one on the video.
+            // PiP stays — the embed offers none.
             PictureInPictureButton(coordinator: player)
 
             // Recording while the video plays.

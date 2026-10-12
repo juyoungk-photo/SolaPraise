@@ -216,7 +216,7 @@ struct ContentView: View {
             if let id = DebugHarness.dockVideoId {
                 playerHost.play(queue: [PlayableVideo(id: id, title: "Debug playback",
                                                       channelTitle: "Debug")])
-                playerHost.minimize()
+                if !DebugHarness.args.contains("-uiTestExpanded") { playerHost.minimize() }
             }
             #endif
         }

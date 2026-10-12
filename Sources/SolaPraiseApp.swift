@@ -104,6 +104,8 @@ struct SolaPraiseApp: App {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
+        } else if let name = DebugHarness.channelPage {
+            DebugChannelPage(name: name)
         } else if let path = DebugHarness.contiPagesPath {
             ContiPagesSheet(attachment: Attachment(date: Date(), song: "", name: "팀원 콘티.pdf",
                                                    fileId: "debug-conti", url: URL(fileURLWithPath: path),
