@@ -819,73 +819,81 @@ struct ServicePrepView: View {
                     }
                 }
 
-                let songs = items.filter { $0.kind == .song && $0.videoId != nil }
-                if !songs.isEmpty {
-                    Button {
-                        host.play(
-                            queue: songs.compactMap { item in
-                                item.videoId.map { PlayableVideo(id: $0, title: item.title) }
-                            },
-                            startIndex: 0,
-                            purpose: .worship
-                        )
-                    } label: {
-                        Label("찬양만 이어 듣기", systemImage: "play.fill")
-                    }
-
-                    // After the service, the songs outlive the 콘티 — next
-                    // week's overwrites this one. Offered from the day of the
-                    // service onwards, which is when "what we sang" becomes a
-                    // fact rather than a plan. Not `isPast`, which excludes
-                    // today: the moment this is wanted is Sunday afternoon.
-                    if hasHappened(service) {
-                    let archived = archiveStore.hasArchived(service)
-                    Button {
-                        Task { await archive(service, songs: songs) }
-                    } label: {
-                        HStack {
-                            Label(archived
-                                  ? "CCC_예배찬양곡_모음에 보관됨"
-                                  : "CCC_예배찬양곡_모음에 보관",
-                                  systemImage: archived
-                                  ? "checkmark.circle.fill" : "tray.and.arrow.down")
-                            .foregroundStyle(archived ? Color.green : Color.accentColor)
-                            Spacer()
-                            if archiveStore.isWorking {
-                                ProgressView().controlSize(.small)
-                            }
-                        }
-                    }
-                    // Once filed, the button stops being a button. Pressing
-                    // it again could only add duplicates or discover there
-                    // are none, and neither is worth a round trip or the
-                    // doubt about which one just happened.
-                    .disabled(archived || archiveStore.isWorking || !auth.isSignedIn)
-
-                    if let note = archiveStore.note {
-                        Text(note)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    }
-                }
             }
 
-            Button {
-                addingItemTo = service
-            } label: {
-                Label("순서 추가", systemImage: "plus.circle")
-            }
-            .disabled(team.isReadOnly)
-
-            if items.count > 1 {
+            // Right under the 순서, on one line: add a line, reorder them.
+            // Borderless, so each is its own button inside the list row.
+            HStack(spacing: 20) {
                 Button {
-                    reordering = service
+                    addingItemTo = service
                 } label: {
-                    Label("순서 바꾸기", systemImage: "arrow.up.arrow.down")
+                    Label("추가", systemImage: "plus.circle")
                 }
                 .disabled(team.isReadOnly)
+
+                if items.count > 1 {
+                    Button {
+                        reordering = service
+                    } label: {
+                        Label("순서 바꾸기", systemImage: "arrow.up.arrow.down")
+                    }
+                    .disabled(team.isReadOnly)
+                }
+                Spacer(minLength: 0)
             }
+            .buttonStyle(.borderless)
+
+            let songs = items.filter { $0.kind == .song && $0.videoId != nil }
+            if !songs.isEmpty {
+                Button {
+                    host.play(
+                        queue: songs.compactMap { item in
+                            item.videoId.map { PlayableVideo(id: $0, title: item.title) }
+                        },
+                        startIndex: 0,
+                        purpose: .worship
+                    )
+                } label: {
+                    Label("찬양만 이어 듣기", systemImage: "play.fill")
+                }
+
+                // After the service, the songs outlive the 콘티 — next
+                // week's overwrites this one. Offered from the day of the
+                // service onwards, which is when "what we sang" becomes a
+                // fact rather than a plan. Not `isPast`, which excludes
+                // today: the moment this is wanted is Sunday afternoon.
+                if hasHappened(service) {
+                let archived = archiveStore.hasArchived(service)
+                Button {
+                    Task { await archive(service, songs: songs) }
+                } label: {
+                    HStack {
+                        Label(archived
+                              ? "CCC_예배찬양곡_모음에 보관됨"
+                              : "CCC_예배찬양곡_모음에 보관",
+                              systemImage: archived
+                              ? "checkmark.circle.fill" : "tray.and.arrow.down")
+                        .foregroundStyle(archived ? Color.green : Color.accentColor)
+                        Spacer()
+                        if archiveStore.isWorking {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                // Once filed, the button stops being a button. Pressing
+                // it again could only add duplicates or discover there
+                // are none, and neither is worth a round trip or the
+                // doubt about which one just happened.
+                .disabled(archived || archiveStore.isWorking || !auth.isSignedIn)
+
+                if let note = archiveStore.note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                }
+            }
+
 
             servicePDFRow(service)
 
@@ -1107,69 +1115,106 @@ struct ServicePrepView: View {
     private func servicePDFRow(_ service: TeamService) -> some View {
         let built = team.attachments(for: service).first { $0.belongsToService && ContiPages.isBuilt($0) }
         let pieces = team.attachments(for: service).filter { !$0.belongsToService }
-        let serviceFiles = team.attachments(for: service).filter(\.belongsToService)
+        // 콘티 files a teammate uploaded whole — not the app's own PDF,
+        // which was counted here too and made one file read as two.
+        let uploaded = team.attachments(for: service).filter { $0.belongsToService && !ContiPages.isBuilt($0) }
+        let stand = standItems(service)
 
-        // Shown as soon as the service has songs, not only once something
-        // has been attached. Gating it on attachments made the one line
-        // that explains the feature unreachable until you had already
-        // worked the feature out.
+        // One row for everything about the charts, three plain choices:
+        //   악보 연주모드 — play from them, in the 순서's keys;
+        //   콘티 PDF      — the app's one file of the set: open, (re)make;
+        //   팀원 콘티     — a 콘티 someone made whole: upload, open.
+        // These were five lines — make, remake, open, stand, upload — each
+        // saying "콘티" a different way.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 10) {
-                    Button {
-                        Task { await buildServicePDF(service) }
-                    } label: {
-                        Label(built == nil ? "콘티 PDF 만들기" : "콘티 PDF 다시 만들기",
-                              systemImage: "doc.badge.arrow.up")
-                    }
-                    .disabled(buildingPDF || pieces.isEmpty)
-
-                    if buildingPDF { ProgressView().controlSize(.small) }
-                }
-
-                // Every chart in the order it is played, each in the key
-                // the 순서 gives it — the set, on one stand. A 콘티 file a
-                // teammate made whole opens there too.
-                if !standItems(service).isEmpty {
-                    Button {
-                        Task {
-                            preparingStand = true
-                            await placeContiPages(service)
-                            preparingStand = false
-                            standService = service
+            VStack(alignment: .leading, spacing: 6) {
+                // iPad: all three on one line. Phone: 연주모드 above, the two
+                // 콘티 files under it. Decided by size class — measuring the
+                // fit let the labels squeeze down to bare icons.
+                Group {
+                    if sizeClass == .regular {
+                        HStack(spacing: 22) {
+                            standButton(service, stand: stand)
+                            contiPDFMenu(service, built: built, pieces: pieces)
+                            teamContiMenu(service, uploaded: uploaded)
+                            Spacer(minLength: 0)
                         }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label("악보 연주모드", systemImage: "music.note.list")
-                            if preparingStand {
-                                ProgressView().controlSize(.small)
-                                Text("콘티 파일을 곡별로 나누는 중…").font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            standButton(service, stand: stand)
+                            HStack(spacing: 22) {
+                                contiPDFMenu(service, built: built, pieces: pieces)
+                                teamContiMenu(service, uploaded: uploaded)
+                                Spacer(minLength: 0)
                             }
                         }
                     }
-                    .disabled(preparingStand)
                 }
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+                .buttonStyle(.borderless)
 
-                // A 콘티 already made — by a teammate, in another app, as
-                // one PDF or a photo — goes on the service, not on a song.
-                AttachmentMenu(service: service, song: "", sheetId: sheetId) {
-                    Label(serviceFiles.isEmpty ? "콘티 파일 올리기" : "콘티 파일 \(serviceFiles.count)개",
-                          systemImage: serviceFiles.isEmpty ? "square.and.arrow.up.on.square" : "doc.on.doc")
-                }
-
-                if let built {
-                    Button { openURL(built.url) } label: {
-                        Label("콘티 PDF 열기", systemImage: "doc.richtext")
-                            .foregroundStyle(Color.accentColor)
+                if preparingStand {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("콘티 파일을 곡별로 나누는 중…")
                     }
+                    .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text(pieces.isEmpty && uploaded.isEmpty
+                         ? "곡마다 📎로 악보를 올리거나, 팀원이 만든 콘티 파일을 올리세요."
+                         : "곡별 악보 \(pieces.count)개\(uploaded.isEmpty ? "" : " · 팀원 콘티 \(uploaded.count)개") — 연주모드에서 순서대로, 순서의 키로 봅니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-
-                Text(pieces.isEmpty
-                     ? "곡에 악보를 첨부하면 한 파일로 묶을 수 있습니다."
-                     : "악보 \(pieces.count)개를 순서대로 묶습니다. 팀원은 링크로 바로 봅니다.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func standButton(_ service: TeamService, stand: [ScoreStandItem]) -> some View {
+        Button {
+            Task {
+                preparingStand = true
+                await placeContiPages(service)
+                preparingStand = false
+                standService = service
+            }
+        } label: {
+            Label("악보 연주모드", systemImage: "music.note.list")
+                .fontWeight(.semibold)
+        }
+        .disabled(stand.isEmpty || preparingStand)
+    }
+
+    /// The app's one file of the set: open it, or (re)make it from the
+    /// songs' charts.
+    private func contiPDFMenu(_ service: TeamService, built: Attachment?, pieces: [Attachment]) -> some View {
+        Menu {
+            if let built {
+                Button { openURL(built.url) } label: { Label("열기", systemImage: "doc.richtext") }
+            }
+            Button {
+                Task { await buildServicePDF(service) }
+            } label: {
+                Label(built == nil ? "만들기 — 곡별 악보를 순서대로" : "다시 만들기 — 지금 악보로",
+                      systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(pieces.isEmpty || buildingPDF)
+        } label: {
+            HStack(spacing: 4) {
+                Label("콘티 PDF", systemImage: built == nil ? "doc.badge.plus" : "doc.richtext")
+                if buildingPDF { ProgressView().controlSize(.small) }
+            }
+        }
+        .disabled(buildingPDF || (built == nil && pieces.isEmpty))
+    }
+
+    /// A 콘티 already made — by a teammate, in another app, as one PDF or a
+    /// photo — goes on the service, not on a song.
+    private func teamContiMenu(_ service: TeamService, uploaded: [Attachment]) -> some View {
+        AttachmentMenu(service: service, song: "", sheetId: sheetId) {
+            Label(uploaded.isEmpty ? "팀원 콘티 올리기" : "팀원 콘티 \(uploaded.count)",
+                  systemImage: uploaded.isEmpty ? "square.and.arrow.up.on.square" : "doc.on.doc")
         }
     }
 

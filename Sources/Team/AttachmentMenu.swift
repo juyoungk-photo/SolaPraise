@@ -42,7 +42,9 @@ struct AttachmentMenu<Content: View>: View {
     @State private var stand: ScoreStandItem?
 
     private var existing: [Attachment] {
-        song.isEmpty ? team.attachments(for: service).filter(\.belongsToService)
+        // The service's own: 콘티 files uploaded whole. The app's built 콘티
+        // PDF has its own button and is not listed twice.
+        song.isEmpty ? team.attachments(for: service).filter { $0.belongsToService && !ContiPages.isBuilt($0) }
                      : team.attachments(for: service, song: song)
     }
 
