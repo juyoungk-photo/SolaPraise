@@ -11,6 +11,9 @@ import SwiftData
 import UniformTypeIdentifiers
 
 struct PlaylistLibraryView: View {
+    /// 작업실 listed here: when it has no tab of its own (iPhone with 예배).
+    var showsStudio = false
+
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
     @EnvironmentObject private var planning: PlanningAuth
@@ -106,7 +109,7 @@ struct PlaylistLibraryView: View {
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 0))
                 } header: {
                     HStack {
-                        Text("채널")
+                        Text("관심 채널")
                         Spacer()
                         Button { showAddChannel = true } label: {
                             Label("추가", systemImage: "plus")
@@ -116,7 +119,7 @@ struct PlaylistLibraryView: View {
                         .controlSize(.mini)
                     }
                 } footer: {
-                    Text("교회 교제 채널이나 내 채널을 보관함에 둘 수 있습니다. 말씀·찬양 피드는 건드리지 않습니다.")
+                    Text("로그인 없이 볼 수 있습니다. 교회 교제 채널이나 즐겨 보는 채널을 둡니다 — 말씀·찬양 피드와는 따로입니다.")
                 }
             }
 
@@ -143,8 +146,8 @@ struct PlaylistLibraryView: View {
                 }
             }
 
-            // Chord analysis is still under development — see DevGate.
-            if DevGate.isUnlocked(auth: auth, planning: planning) {
+            // Only where 작업실 has no tab of its own — see showsStudioTab.
+            if showsStudio {
             Section {
                 NavigationLink {
                     StudioView()
@@ -222,7 +225,14 @@ struct PlaylistLibraryView: View {
                     }
                 }
             } header: {
-                Text("재생목록")
+                // Whose playlists these are, as the 예배 tab says whose
+                // sheet it writes: with several Google accounts, the list
+                // alone does not say.
+                HStack {
+                    Text("내 YouTube 재생목록")
+                    Spacer()
+                    if auth.isSignedIn { AccountTag(use: .youtube).textCase(nil) }
+                }
             }
         }
         .listStyle(.plain)
@@ -264,7 +274,9 @@ struct PlaylistLibraryView: View {
                 }
                 .frame(width: 22, height: 22)
                 .clipShape(Circle())
-            } else {
+            } else if !(channel.shortTitle.unicodeScalars.first?.properties.isEmojiPresentation ?? false) {
+                // A name that opens with its own emoji — 「📺 Cornerstone TV」
+                // — needs no generic icon beside it.
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.accentColor)

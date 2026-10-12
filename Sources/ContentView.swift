@@ -46,12 +46,20 @@ struct ContentView: View {
     @State private var selection: Tab = Tab.defaultForNow()
     @State private var showDailyGate = false
 
-    /// iPad gets 작업실 as its own tab — there is room, it is where an
-    /// interface gets plugged in, and it is where a musician would actually
-    /// read a chart. iPhone keeps it inside 보관함 rather than pushing the tab
-    /// bar to five items.
+    /// 작업실 is a tab of its own wherever it fits, and then 보관함 does not
+    /// list it again.
+    ///
+    /// iPad: always — there is room, and it is where a musician reads a
+    /// chart. iPhone: when the bar stays at five; with 예배 too it would be
+    /// six, and iOS folds a sixth tab into 「더 보기」, hiding 보관함 behind
+    /// it. Then, and only then, 작업실 stays inside 보관함.
     private var showsStudioTab: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad && showsChordAnalysis
+        guard showsChordAnalysis else { return false }
+        return UIDevice.current.userInterfaceIdiom == .pad || !showsTeamTab
+    }
+
+    private var showsTeamTab: Bool {
+        teamAccess != .unconfigured && teamAccess != .signInRequired
     }
 
     /// Chord analysis is still being worked on — see DevGate. It is hidden
@@ -72,7 +80,7 @@ struct ContentView: View {
             TabItem(tag: .word, title: "말씀", symbol: "book.closed"),
             TabItem(tag: .worship, title: "찬양", symbol: "music.note")
         ]
-        if teamAccess != .unconfigured, teamAccess != .signInRequired {
+        if showsTeamTab {
             items.append(TabItem(tag: .team, title: "예배",
                                  symbol: "calendar.badge.clock"))
         }
@@ -90,7 +98,7 @@ struct ContentView: View {
         case .home:    HomeView(selection: $selection)
         case .word:    WordFeedView()
         case .worship: WorshipFeedView()
-        case .library: PlaylistLibraryView()
+        case .library: PlaylistLibraryView(showsStudio: showsChordAnalysis && !showsStudioTab)
         // 예배 is shown whenever a sheet is configured and somebody is signed
         // in — including when that person is NOT on the roster. Hiding it for
         // a non-member was a dead end: the only way onto the roster is

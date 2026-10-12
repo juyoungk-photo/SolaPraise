@@ -58,6 +58,8 @@ struct AddToPlaylistSheet: View {
                 // The same row the search result showed. Dropping to a bare
                 // title here made the sheet look like it had lost the video.
                 VideoMetaRow(video: video)
+                // Whose YouTube it goes into.
+                AccountTag(use: .youtube)
                 if let message = errorMessage {
                     Text(message).font(.caption).foregroundStyle(.red)
                 }

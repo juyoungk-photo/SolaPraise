@@ -585,6 +585,7 @@ struct SettingsView: View {
 
     // MARK: - Account
 
+    @ViewBuilder
     private var accountSection: some View {
         Section {
             HStack(spacing: 12) {
@@ -658,6 +659,33 @@ struct SettingsView: View {
             Text(auth.isSignedIn
                  ? "내 재생목록을 보고, 곡을 추가하고, 순서를 바꿀 수 있습니다."
                  : "로그인하면 내 YouTube 재생목록을 이 앱에서 보고 편집할 수 있습니다. 나머지 기능은 로그인 없이도 그대로 동작합니다.")
+        }
+
+        // Which account each part of the app acts as — most need none.
+        Section {
+            accountUse("말씀 · 찬양 · 홈, 재생, 검색", "로그인 필요 없음", systemImage: "play.circle")
+            accountUse("콘티 폴더, 첨부된 악보 보기", "로그인 필요 없음 — 링크로 열림", systemImage: "doc.richtext")
+            accountUse("보관함 재생목록, 재생목록에 추가", auth.email ?? "YouTube 계정 로그인 필요", systemImage: "play.rectangle")
+            accountUse("예배 준비 — 시트 읽기·쓰기",
+                       team.actingEmail(auth: auth, planning: planning)
+                           .map { planning.isSignedIn ? "\($0) (교회 계정)" : $0 } ?? "로그인 필요",
+                       systemImage: "person.2")
+            accountUse("악보 올리기 (드라이브)",
+                       planning.isSignedIn ? (planning.email ?? "교회 계정") : "교회 계정·드라이브 권한 연결 필요",
+                       systemImage: "icloud.and.arrow.up")
+        } header: {
+            Text("어디에 어떤 계정을 쓰나")
+        }
+    }
+
+    private func accountUse(_ feature: String, _ account: String, systemImage: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage).foregroundStyle(.secondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(feature).font(.subheadline)
+                Text(account).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
         }
     }
 
