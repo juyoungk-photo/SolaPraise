@@ -61,6 +61,14 @@ struct CheckPageMatcher {
             ["My faith is in You 주께 믿음 있네"],    // 나의 믿음 주께 있네, titled otherwise
         ]
         let follow = ScorePageMatcher.assign(pageTitles: unnamed, songs: set)
+        // A chart's second page whose largest line is a lyric, set large.
+        let lyricTop = ScorePageMatcher.assign(pageTitles: [["주 예수 내 산 소망", "Verse 1,2"],
+                                                            ["죽음이 기신 유다의 사-자 우리의 주 부활하-셨- 네", "주님의 호흡시작됐네"],
+                                                            ["내게 있는 모든 것을"]],
+                                               songs: ["주 예수 내 산 소망", "내게 있는 모든 것을"])
+        check("a second page topped by a lyric line continues its song",
+              lyricTop[1] == "주 예수 내 산 소망" && lyricTop[2] == "내게 있는 모든 것을",
+              "got \(lyricTop.sorted { $0.key < $1.key })")
         check("titled otherwise, pages follow the 순서's order",
               follow[0] == set[0] && follow[2] == set[1] && follow[3] == set[1] && follow[4] == set[2],
               "got \(follow.sorted { $0.key < $1.key })")

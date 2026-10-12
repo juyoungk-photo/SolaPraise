@@ -1,0 +1,69 @@
+//
+//  check-conti-folder.swift
+//  SolaPraise
+//
+//  Checks how the 콘티 folder's files are dated and versioned, and how its
+//  public listing page is read.
+//
+//  WHY THIS EXISTS: a 콘티 filed under the wrong Sunday, or v1 shown as the
+//  newest, looks like the app working.
+//
+//  Run:
+//      swiftc -O -o /tmp/contifolder \
+//          Sources/Team/ContiFolder.swift Tools/check-conti-folder.swift
+//      /tmp/contifolder
+//
+
+import Foundation
+
+@main
+struct CheckContiFolder {
+
+    static var failures = 0
+
+    static func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
+        print("\(ok ? "ok  " : "FAIL") \(name)")
+        if !ok {
+            let text = detail()
+            if !text.isEmpty { print("       \(text)") }
+            failures += 1
+        }
+    }
+
+    static func day(_ text: String) -> Date {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+        return f.date(from: text)!
+    }
+
+    static func main() {
+        func same(_ a: Date?, _ b: String) -> Bool { a.map { Calendar.current.isDate($0, inSameDayAs: day(b)) } ?? false }
+        check("20261011 주일예배 찬양.pdf → 10/11", same(ContiFolder.date(in: "20261011 주일예배 찬양.pdf"), "2026-10-11"))
+        check("2026-10-18 콘티.pdf → 10/18", same(ContiFolder.date(in: "2026-10-18 콘티.pdf"), "2026-10-18"))
+        check("2026.11.1 금요 콘티 → 11/1", same(ContiFolder.date(in: "2026.11.1 금요 콘티.pdf"), "2026-11-01"))
+        check("a name with no date has none", ContiFolder.date(in: "찬양 콘티 최종.pdf") == nil)
+        check("v2 is version 2", ContiFolder.version(in: "20260913 주일예배 찬양 v2.pdf") == 2)
+        check("no version is version 1", ContiFolder.version(in: "20261011 주일예배 찬양.pdf") == 1)
+        check("「(ver3)」 is version 3", ContiFolder.version(in: "20261018 콘티 (ver3).pdf") == 3)
+        check("「love」 is no version", ContiFolder.version(in: "20261018 God is love.pdf") == 1)
+
+        let files = ["20260913 주일예배 찬양 v1.pdf", "20260913 주일예배 찬양 v2.pdf", "20261011 주일예배 찬양.pdf"]
+            .enumerated().map { ContiFolder.File(id: "id\($0.offset)", name: $0.element) }
+        let sept = ContiFolder.versions(for: day("2026-09-13"), in: files)
+        check("a service's versions, newest first", sept.map(\.name) == ["20260913 주일예배 찬양 v2.pdf", "20260913 주일예배 찬양 v1.pdf"],
+              "got \(sept.map(\.name))")
+        check("another day's file is not among them", !sept.contains { $0.name.contains("1011") })
+
+        let page = """
+        <div class="flip-entry" id="entry-1AbCdEfGhIjK" tabindex="0"><div class="flip-entry-info"><a href="x"><div class="flip-entry-title">20261011 주일예배 찬양.pdf</div></a></div></div>
+        <div class="flip-entry" id="entry-1ZyXwVuTsRqP" tabindex="0"><div class="flip-entry-title">Notes &amp; plan.docx</div></div>
+        """
+        let parsed = ContiFolder.parseFolderPage(page)
+        check("the public listing gives each PDF with its id",
+              parsed == [ContiFolder.File(id: "1AbCdEfGhIjK", name: "20261011 주일예배 찬양.pdf")], "got \(parsed)")
+        check("a folder link gives its id",
+              ContiFolder.folderId(fromLink: "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMn?usp=share_link") == "1AbCdEfGhIjKlMn")
+
+        print(failures == 0 ? "\nall conti folder checks passed" : "\n\(failures) failure(s)")
+        exit(failures == 0 ? 0 : 1)
+    }
+}

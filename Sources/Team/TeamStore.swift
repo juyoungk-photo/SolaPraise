@@ -422,7 +422,12 @@ final class TeamStore: ObservableObject {
         drive = planning.isSignedIn
             ? DriveClient { try await planning.token() }
             : nil
+        lastActingEmail = actingEmail(auth: auth, planning: planning)
     }
+
+    /// Who writes, as of the last configure — for rows written outside a
+    /// view that knows the accounts.
+    private var lastActingEmail: String?
 
     // MARK: - Rows that may have moved
 
@@ -552,6 +557,7 @@ final class TeamStore: ObservableObject {
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             await loadChurchNotes(client: client)
             await loadAttachments(sheetId: sheetId, client: client)
+            await loadContiFolder()
             lastLoaded = Date()
             needsAuthorization = false
         } catch SheetsClient.SheetsError.http(403, let message) {
@@ -1055,11 +1061,70 @@ final class TeamStore: ObservableObject {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    // MARK: - The 콘티 folder
+
+    /// The files in the church's 콘티 folder — see ContiFolder.
+    @Published private(set) var contiFiles: [ContiFolder.File] = []
+    @Published private(set) var contiFolderProblem: String?
+
+    func loadContiFolder() async {
+        guard let id = ContiFolder.folderId else { contiFiles = []; contiFolderProblem = nil; return }
+        if let files = await ContiFolder.list(folderId: id, apiKey: AppSecrets.youtubeAPIKey) {
+            contiFiles = files
+            contiFolderProblem = nil
+        } else {
+            contiFolderProblem = "콘티 폴더를 읽지 못했습니다. 폴더가 「링크가 있는 모든 사용자」에게 공유되어 있는지 확인하세요."
+        }
+    }
+
+    /// A service's 콘티 files, newest first: the folder's versions for its
+    /// day, then any uploaded through the app onto the service. The app's
+    /// own 「콘티 PDF 만들기」 output is not among them.
+    func contis(for service: TeamService) -> [Attachment] {
+        let fromFolder = ContiFolder.versions(for: service.date, in: contiFiles).map { file in
+            // The sheet's row for it, when one was made (to share its page
+            // assignment or corrections), carries its Edits.
+            attachment(fileId: file.id)
+                ?? Attachment(date: service.date, song: "", name: file.name, fileId: file.id,
+                              url: file.url, addedBy: "")
+        }
+        let uploaded = attachments(for: service)
+            .filter { $0.belongsToService && !ContiPages.isBuilt($0) && !fromFolder.map(\.fileId).contains($0.fileId) }
+            .reversed()
+        return fromFolder + uploaded
+    }
+
     // MARK: - Shared corrections
 
-    /// The attachment as last read from the sheet, by file id.
+    /// The attachment as last read from the sheet — or a file of the 콘티
+    /// folder — by file id.
     func attachment(fileId: String) -> Attachment? {
-        attachments.values.lazy.flatMap { $0 }.first { $0.fileId == fileId }
+        if let row = attachments.values.lazy.flatMap({ $0 }).first(where: { $0.fileId == fileId }) { return row }
+        guard let file = contiFiles.first(where: { $0.id == fileId }) else { return nil }
+        return Attachment(date: file.date ?? Date(), song: "", name: file.name, fileId: file.id,
+                          url: file.url, addedBy: "")
+    }
+
+    /// A row on the Attachments tab for a 콘티 folder file, so its page
+    /// assignment and corrections have an Edits cell to be shared through.
+    private func registerRow(for item: Attachment, sheetId: String, client: SheetsClient,
+                             header: [String]) async throws -> Int {
+        let who = lastActingEmail ?? ""
+        let row = TeamSheet.place([
+            (["date", "날짜"], TeamSheet.dateFormatter.string(from: item.date)),
+            (["song", "곡", "찬양"], ""),
+            (["name", "이름", "파일"], item.name),
+            (["fileid", "파일id"], item.fileId),
+            (["url", "link", "링크"], item.url.absoluteString),
+            (["addedby", "by", "올린사람"], who),
+            (["addedat", "at", "올린시각"], ISO8601DateFormatter().string(from: Date()))
+        ], header: header)
+        guard let written = try await client.append(sheetId: sheetId, tab: TeamSheet.attachmentsTab, row: row)
+        else { throw SheetsClient.SheetsError.badRange("Attachments 탭에 줄을 쓰지 못했습니다.") }
+        var registered = item
+        registered.row = written
+        attachments[Calendar.current.startOfDay(for: item.date), default: []].append(registered)
+        return written
     }
 
     /// Puts this chart's hand corrections where the team reads them: a
@@ -1081,9 +1146,16 @@ final class TeamStore: ObservableObject {
     private func updateShared(fileId: String,
                               _ change: (inout SharedEdits.File) -> Void) async -> Result<String, ShareEditsError> {
         guard let client, let drive, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
-        guard let item = attachment(fileId: fileId), let row = item.row else { return .failure(.notFound) }
+        guard let item = attachment(fileId: fileId) else { return .failure(.notFound) }
         do {
             let (header, _) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            // A 콘티 folder file gets its row the first time it is needed.
+            let row: Int
+            if let existing = item.row {
+                row = existing
+            } else {
+                row = try await registerRow(for: item, sheetId: sheetId, client: client, header: header)
+            }
             guard let column = TeamSheet.column(header, ["edits", "교정"]) else { return .failure(.notFound) }
             guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [fileId],
                                 sheetId: sheetId, client: client) else { return .failure(.moved) }

@@ -45,25 +45,22 @@ struct AttachmentMenu<Content: View>: View {
     private var existing: [Attachment] {
         // The service's own: 콘티 files uploaded whole. The app's built 콘티
         // PDF has its own button and is not listed twice.
-        song.isEmpty ? team.attachments(for: service).filter { $0.belongsToService && !ContiPages.isBuilt($0) }
-                     : team.attachments(for: service, song: song)
+        // Newest first: a song collects versions of its chart.
+        song.isEmpty ? team.attachments(for: service).filter { $0.belongsToService && !ContiPages.isBuilt($0) }.reversed()
+                     : team.attachments(for: service, song: song).reversed()
     }
 
-    /// This song's pages of a 콘티 file uploaded whole, as worked out.
+    /// This song's pages of the service's newest 콘티, as worked out.
     private var contiPages: [(file: Attachment, pages: [Int])] {
-        guard !song.isEmpty else { return [] }
-        return team.attachments(for: service)
-            .filter { $0.belongsToService && !ContiPages.isBuilt($0) }
-            .compactMap { file in
-                let pages = ContiPages.pages(of: file.fileId, for: song)
-                return pages.isEmpty ? nil : (file, pages)
-            }
+        guard !song.isEmpty, let latest = team.contis(for: service).first else { return [] }
+        let pages = ContiPages.pages(of: latest.fileId, for: song)
+        return pages.isEmpty ? [] : [(latest, pages)]
     }
 
     var body: some View {
         Menu {
             if !contiPages.isEmpty {
-                Section("콘티 파일에서") {
+                Section("콘티에서 (최신)") {
                     ForEach(contiPages, id: \.file.id) { entry in
                         Button {
                             stand = ScoreStandItem(attachment: entry.file, song: song,
@@ -75,18 +72,8 @@ struct AttachmentMenu<Content: View>: View {
                     }
                 }
             }
-            // A 콘티 file: which page is which song, by hand.
-            if song.isEmpty, !existing.isEmpty {
-                Section {
-                    ForEach(existing) { file in
-                        Button { assigning = file } label: {
-                            Label("곡별 페이지 지정 · \(file.name)", systemImage: "rectangle.split.3x1")
-                        }
-                    }
-                }
-            }
             if !existing.isEmpty {
-                Section("첨부된 파일") {
+                Section(song.isEmpty ? "올린 콘티 파일" : "첨부한 악보 — 최신부터") {
                     ForEach(existing) { item in
                         // On the stand: a song's chart in the team's key, a
                         // whole 콘티 as it was made.

@@ -150,6 +150,16 @@ enum TeamSampleData {
             ]
         }
 
+        // The real 콘티 folder against a 순서 of the songs in its 10/11 콘티:
+        //   -uiTestTeam -uiTestContiFolderPlan
+        if DebugHarness.contiFolderPlan {
+            plan = ["빚진 자", "구주 예수 의지함이", "주 예수 내 산 소망", "내게 있는 모든 것을", "이 땅의 황무함을 보소서"]
+                .enumerated().map { index, title in
+                    PlanItem(order: index + 1, kind: .song, title: title, minutes: 5, person: "주영",
+                             key: ["G", "F", "D", "E", "A"][index], url: nil, notes: nil, row: index + 2)
+                }
+        }
+
         var plans: [Date: [PlanItem]] = [:]
         for service in services where !service.isRehearsal {
             plans[calendar.startOfDay(for: service.date)] = plan
@@ -217,6 +227,7 @@ enum TeamSampleData {
             churchNotes: churchNotes,
             attachments: attachments
         )
+        Task { await store.loadContiFolder() }
     }
 }
 #endif

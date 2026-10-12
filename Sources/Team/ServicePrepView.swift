@@ -134,6 +134,7 @@ struct ServicePrepView: View {
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
     @State private var preparingStand = false
+    @State private var assigningConti: (file: Attachment, service: TeamService)?
     @State private var confirmTidy = false
     @State private var tidying = false
     @State private var tidyNote: String?
@@ -206,6 +207,13 @@ struct ServicePrepView: View {
             .refreshable { if let sheetId { await team.load(sheetId: sheetId) } }
             .task {
                 #if DEBUG
+                if DebugHarness.openStand,
+                   let first = team.services.first(where: { Calendar.current.isDateInToday($0.date) }) ?? team.services.first {
+                    // Give the folder a moment to be read, then open as a tap would.
+                    try? await Task.sleep(for: .seconds(3))
+                    await placeContiPages(first)
+                    standService = first
+                }
                 if DebugHarness.seedTeam { return }
                 #endif
                 team.configure(auth: auth, planning: planning)
@@ -251,6 +259,13 @@ struct ServicePrepView: View {
                     .environmentObject(team)
                     .environmentObject(auth)
                     .environmentObject(planning)
+            }
+            .sheet(isPresented: Binding(get: { assigningConti != nil }, set: { if !$0 { assigningConti = nil } })) {
+                if let entry = assigningConti {
+                    ContiPagesSheet(attachment: entry.file,
+                                    songs: team.plan(for: entry.service).filter { $0.kind == .song }.map(\.title))
+                        .environmentObject(team)
+                }
             }
             .fullScreenCover(item: $standService) { service in
                 ScoreStandView(items: standItems(service),
@@ -1115,40 +1130,20 @@ struct ServicePrepView: View {
     private func servicePDFRow(_ service: TeamService) -> some View {
         let built = team.attachments(for: service).first { $0.belongsToService && ContiPages.isBuilt($0) }
         let pieces = team.attachments(for: service).filter { !$0.belongsToService }
-        // 콘티 files a teammate uploaded whole — not the app's own PDF,
-        // which was counted here too and made one file read as two.
-        let uploaded = team.attachments(for: service).filter { $0.belongsToService && !ContiPages.isBuilt($0) }
+        let contis = team.contis(for: service)
         let stand = standItems(service)
 
-        // One row for everything about the charts, three plain choices:
-        //   악보 연주모드 — play from them, in the 순서's keys;
-        //   콘티 PDF      — the app's one file of the set: open, (re)make;
-        //   팀원 콘티     — a 콘티 someone made whole: upload, open.
-        // These were five lines — make, remake, open, stand, upload — each
-        // saying "콘티" a different way.
+        // Two choices: play from the charts, or the service's 콘티 — every
+        // version, the folder, and the ways to add or make one.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
             VStack(alignment: .leading, spacing: 6) {
                 // iPad: all three on one line. Phone: 연주모드 above, the two
                 // 콘티 files under it. Decided by size class — measuring the
                 // fit let the labels squeeze down to bare icons.
-                Group {
-                    if sizeClass == .regular {
-                        HStack(spacing: 22) {
-                            standButton(service, stand: stand)
-                            contiPDFMenu(service, built: built, pieces: pieces)
-                            teamContiMenu(service, uploaded: uploaded)
-                            Spacer(minLength: 0)
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 10) {
-                            standButton(service, stand: stand)
-                            HStack(spacing: 22) {
-                                contiPDFMenu(service, built: built, pieces: pieces)
-                                teamContiMenu(service, uploaded: uploaded)
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
+                HStack(spacing: 22) {
+                    standButton(service, stand: stand)
+                    contiMenu(service, contis: contis, built: built, pieces: pieces)
+                    Spacer(minLength: 0)
                 }
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
@@ -1161,9 +1156,11 @@ struct ServicePrepView: View {
                     }
                     .font(.caption2).foregroundStyle(.secondary)
                 } else {
-                    Text(pieces.isEmpty && uploaded.isEmpty
-                         ? "곡마다 📎로 악보를 올리거나, 팀원이 만든 콘티 파일을 올리세요."
-                         : "곡별 악보 \(pieces.count)개\(uploaded.isEmpty ? "" : " · 팀원 콘티 \(uploaded.count)개") — 연주모드에서 순서대로, 순서의 키로 봅니다.")
+                    Text(contis.isEmpty && pieces.isEmpty
+                         ? "콘티 폴더에 날짜로 시작하는 콘티 PDF를 두거나, 곡마다 📎로 악보를 올리세요."
+                         : [contis.first.map { "콘티 \(($0.name as NSString).deletingPathExtension)" },
+                            pieces.isEmpty ? nil : "곡별 악보 \(pieces.count)개"]
+                            .compactMap { $0 }.joined(separator: " · ") + " — 연주모드에서 순서의 키로 봅니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -1186,91 +1183,108 @@ struct ServicePrepView: View {
         .disabled(stand.isEmpty || preparingStand)
     }
 
-    /// The app's one file of the set: open it, or (re)make it from the
-    /// songs' charts.
-    private func contiPDFMenu(_ service: TeamService, built: Attachment?, pieces: [Attachment]) -> some View {
+    /// The service's 콘티: every version, newest first, each opening its
+    /// file; the folder they live in; the page assignment of the newest;
+    /// and the other ways to have one — upload a file, or make it here.
+    private func contiMenu(_ service: TeamService, contis: [Attachment], built: Attachment?,
+                           pieces: [Attachment]) -> some View {
         Menu {
-            if let built {
-                Button { openURL(built.url) } label: { Label("열기", systemImage: "doc.richtext") }
+            if !contis.isEmpty {
+                Section("콘티 — 최신부터") {
+                    ForEach(Array(contis.enumerated()), id: \.element.id) { index, conti in
+                        Button { openURL(conti.url) } label: {
+                            Label((conti.name as NSString).deletingPathExtension + (index == 0 ? " · 최신" : ""),
+                                  systemImage: index == 0 ? "doc.richtext.fill" : "doc.richtext")
+                        }
+                    }
+                }
+                if let latest = contis.first {
+                    Button { assigningConti = (latest, service) } label: {
+                        Label("곡별 페이지 지정 — 최신 콘티", systemImage: "rectangle.split.3x1")
+                    }
+                }
             }
-            Button {
-                Task { await buildServicePDF(service) }
-            } label: {
-                Label(built == nil ? "만들기 — 곡별 악보를 순서대로" : "다시 만들기 — 지금 악보로",
-                      systemImage: "arrow.triangle.2.circlepath")
+            if let folder = ContiFolder.folderURL {
+                Button { openURL(folder) } label: { Label("콘티 폴더 열기", systemImage: "folder") }
             }
-            .disabled(pieces.isEmpty || buildingPDF)
+            Section {
+                AttachmentMenu(service: service, song: "", sheetId: sheetId) {
+                    Label("콘티 파일 올리기", systemImage: "square.and.arrow.up")
+                }
+                if let built {
+                    Button { openURL(built.url) } label: { Label("앱에서 만든 콘티 PDF 열기", systemImage: "doc") }
+                }
+                Button {
+                    Task { await buildServicePDF(service) }
+                } label: {
+                    Label(built == nil ? "곡별 악보로 콘티 PDF 만들기" : "곡별 악보로 콘티 PDF 다시 만들기",
+                          systemImage: "doc.badge.plus")
+                }
+                .disabled(pieces.isEmpty || buildingPDF)
+            }
         } label: {
             HStack(spacing: 4) {
-                Label("콘티 PDF", systemImage: built == nil ? "doc.badge.plus" : "doc.richtext")
+                Label(contis.isEmpty ? "콘티" : "콘티 \(contis.count)",
+                      systemImage: contis.isEmpty ? "doc.badge.plus" : "doc.richtext")
                 if buildingPDF { ProgressView().controlSize(.small) }
             }
-        }
-        .disabled(buildingPDF || (built == nil && pieces.isEmpty))
-    }
-
-    /// A 콘티 already made — by a teammate, in another app, as one PDF or a
-    /// photo — goes on the service, not on a song.
-    private func teamContiMenu(_ service: TeamService, uploaded: [Attachment]) -> some View {
-        AttachmentMenu(service: service, song: "", sheetId: sheetId) {
-            Label(uploaded.isEmpty ? "팀원 콘티 올리기" : "팀원 콘티 \(uploaded.count)",
-                  systemImage: uploaded.isEmpty ? "square.and.arrow.up.on.square" : "doc.on.doc")
         }
     }
 
     /// The service's song charts in 순서 order, each with the key the 순서
     /// gives that song.
+    /// The stand's set: one chart per song of the 순서, then the rest.
+    ///
+    /// A song's chart is its pages of the newest 콘티 — the final version,
+    /// made after the songs' drafts — or, when the 콘티 does not have it,
+    /// the song's most recently attached chart. Older versions stay in the
+    /// song's 📎 and the 콘티 menu, not on the stand.
     private func standItems(_ service: TeamService) -> [ScoreStandItem] {
         let plan = team.plan(for: service)
         let attachments = team.attachments(for: service)
-        // A 콘티 file a teammate uploaded whole; the app's own built PDF is
-        // the songs' charts again and is not.
-        let contis = attachments.filter { $0.belongsToService && !ContiPages.isBuilt($0) }
+        let latest = team.contis(for: service).first
         var items: [ScoreStandItem] = []
-        var used: [String: Set<Int>] = [:]
-        // The 순서, song by song: its own charts — every one of them — or,
-        // when it has none, its pages of a 콘티 file, in the song's key.
+        var used: Set<Int> = []
         for song in plan where song.kind == .song {
-            let own = attachments.filter { !$0.belongsToService && $0.song == song.title }
-            if !own.isEmpty {
-                items += own.map { ScoreStandItem(attachment: $0, song: song.title, teamKey: song.key) }
-                continue
+            if let latest {
+                let pages = ContiPages.pages(of: latest.fileId, for: song.title)
+                if !pages.isEmpty {
+                    used.formUnion(pages)
+                    items.append(ScoreStandItem(attachment: latest, song: song.title, teamKey: song.key, pages: pages))
+                    continue
+                }
             }
-            for conti in contis {
-                let pages = ContiPages.pages(of: conti.fileId, for: song.title)
-                guard !pages.isEmpty else { continue }
-                used[conti.fileId, default: []].formUnion(pages)
-                items.append(ScoreStandItem(attachment: conti, song: song.title, teamKey: song.key, pages: pages))
-                break
+            // Rows are in upload order: the last is the newest.
+            if let newest = attachments.last(where: { !$0.belongsToService && $0.song == song.title }) {
+                items.append(ScoreStandItem(attachment: newest, song: song.title, teamKey: song.key))
             }
         }
         // Charts on songs no longer in the 순서, after it.
         let inPlan = Set(plan.map(\.title))
         items += attachments.filter { !$0.belongsToService && !inPlan.contains($0.song) }
             .map { ScoreStandItem(attachment: $0, song: $0.song, teamKey: nil) }
-        // What of a 콘티 file is no song of the 순서 — a cover, a song not on
-        // it — or all of it when its pages could not be placed, as it is.
-        for conti in contis {
-            let name = (conti.name as NSString).deletingPathExtension
-            guard let placed = ContiPages.cached(conti.fileId), !placed.isEmpty else {
-                items.append(ScoreStandItem(attachment: conti, song: name, teamKey: nil))
-                continue
-            }
-            let taken = used[conti.fileId] ?? []
-            let count = ContiPages.pageCount(conti.fileId) ?? ((placed.keys.max() ?? 0) + 1)
-            let rest = (0..<count).filter { !taken.contains($0) && placed[$0] == nil }
-            if !rest.isEmpty {
-                items.append(ScoreStandItem(attachment: conti, song: "\(name) · 나머지", teamKey: nil, pages: rest))
+        // What of the 콘티 is no song of the 순서 — a cover, a song not on it
+        // — or all of it, when its pages could not be placed.
+        if let latest {
+            let name = (latest.name as NSString).deletingPathExtension
+            if let placed = ContiPages.cached(latest.fileId), !placed.isEmpty {
+                let count = ContiPages.pageCount(latest.fileId) ?? ((placed.keys.max() ?? 0) + 1)
+                let rest = (0..<count).filter { !used.contains($0) && placed[$0] == nil }
+                if !rest.isEmpty {
+                    items.append(ScoreStandItem(attachment: latest, song: "\(name) · 나머지", teamKey: nil, pages: rest))
+                }
+            } else if used.isEmpty {
+                items.append(ScoreStandItem(attachment: latest, song: name, teamKey: nil))
             }
         }
         return items
     }
 
-    /// Works out, once per file, which 콘티 page is which song of the 순서.
+    /// Works out, once per file, which page of the newest 콘티 is which song.
     private func placeContiPages(_ service: TeamService) async {
         let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
-        for conti in team.attachments(for: service) where conti.belongsToService && !ContiPages.isBuilt(conti) {
-            await ContiPages.compute(for: conti, songs: songs)
+        if let latest = team.contis(for: service).first {
+            await ContiPages.compute(for: latest, songs: songs)
         }
     }
 

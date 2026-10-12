@@ -108,6 +108,12 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// A sample 순서 of the songs in the real 콘티 folder's 10/11 콘티.
+    static var contiFolderPlan: Bool { args.contains("-uiTestContiFolderPlan") }
+
+    /// Open 악보 연주모드 for the first service: -uiTestOpenStand
+    static var openStand: Bool { args.contains("-uiTestOpenStand") }
+
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate
     static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }

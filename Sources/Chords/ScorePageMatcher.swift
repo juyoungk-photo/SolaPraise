@@ -106,11 +106,16 @@ enum ScorePageMatcher {
     }
 
     /// A page that opens with a big title of its own — a song not in this
-    /// 순서 — is not a continuation of the page before.
-    private static func looksLikeAnotherTitle(_ lines: [String]) -> Bool {
+    /// 순서 — is not a continuation of the page before. A title is short:
+    /// a lyric line set large on a chart's second page — 「죽음이 기신 유다의
+    /// 사-자 우리의 주 부활하-셨- 네」 — has syllable dashes and runs long,
+    /// and was taken for a new song, leaving that page for nobody.
+    static func looksLikeAnotherTitle(_ lines: [String]) -> Bool {
         guard let first = lines.first else { return false }
         let hangul = first.unicodeScalars.filter { (0xAC00...0xD7A3).contains($0.value) }.count
-        return hangul >= 3
+        // Korean length only: 「My faith is in You 주께 믿음 있네」 is a title.
+        return (3...16).contains(hangul)
+            && !first.contains("-") && first.rangeOfCharacter(from: .decimalDigits) == nil
     }
 
     static func normalised(_ text: String) -> String {

@@ -32,6 +32,7 @@ struct SettingsView: View {
     @State private var isLoadingVersions = false
     @State private var versionsError: String?
     @State private var teamSheetInput = ReadingSettings.teamSheetId ?? ""
+    @State private var contiFolderInput = UserDefaults.standard.string(forKey: "conti.folderId") ?? ""
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
     @StateObject private var feed = FeedStore()
@@ -290,6 +291,24 @@ struct SettingsView: View {
                 } label: {
                     Label("팀원 명단", systemImage: "person.2")
                 }
+            }
+
+            // The church's 콘티 folder, read by link — see ContiFolder.
+            VStack(alignment: .leading, spacing: 6) {
+                Label("콘티 폴더 (공유 드라이브)", systemImage: "folder.badge.person.crop")
+                TextField("폴더 링크 붙여넣기", text: $contiFolderInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote)
+                    .onSubmit {
+                        UserDefaults.standard.set(ContiFolder.folderId(fromLink: contiFolderInput), forKey: "conti.folderId")
+                        Task { await team.loadContiFolder() }
+                    }
+                Text(ContiFolder.folderId == nil
+                     ? "날짜로 시작하는 콘티 PDF(예: 20261011 주일예배 찬양 v2.pdf)를 이 폴더에 두면, 예배 준비의 그 날짜에 버전별로 나타납니다."
+                     : "콘티 \(team.contiFiles.count)개를 읽었습니다." + (team.contiFolderProblem.map { " " + $0 } ?? ""))
+                    .font(.caption2)
+                    .foregroundStyle(team.contiFolderProblem == nil ? Color.secondary : Color.orange)
             }
 
             // Appears once the first 악보 has been uploaded from this device,

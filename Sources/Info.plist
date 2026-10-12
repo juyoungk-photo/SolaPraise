@@ -39,6 +39,8 @@
 	<string>$(CHURCH_NAME)</string>
 	<key>ChurchSheetId</key>
 	<string>$(CHURCH_SHEET_ID)</string>
+	<key>ContiFolderId</key>
+	<string>$(CONTI_FOLDER_ID)</string>
 	<key>DevAccounts</key>
 	<string>$(DEV_ACCOUNTS)</string>
 	<key>ESVAPIKey</key>
