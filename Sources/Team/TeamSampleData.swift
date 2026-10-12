@@ -199,7 +199,16 @@ enum TeamSampleData {
                                                url: URL(fileURLWithPath: path), addedBy: "")]
             }
         }
-        if let path = DebugHarness.sampleScorePath {
+        // With the real 콘티 folder: one song's chart attached after the 콘티,
+        // as a team does while settling a song.
+        if DebugHarness.contiFolderPlan, let path = DebugHarness.sampleScorePath {
+            for service in services where !service.isRehearsal {
+                let day = calendar.startOfDay(for: service.date)
+                attachments[day] = [Attachment(date: day, song: "주 예수 내 산 소망", name: "주 예수 내 산 소망 (C).pdf",
+                                               fileId: "sample-hope-\(day.timeIntervalSince1970)",
+                                               url: URL(fileURLWithPath: path), addedBy: "", addedAt: Date())]
+            }
+        } else if let path = DebugHarness.sampleScorePath {
             for service in services where !service.isRehearsal {
                 let day = calendar.startOfDay(for: service.date)
                 attachments[day] = ["주의 약속하신 말씀 위에 서", "주님 뜻대로 살기로 했네"]

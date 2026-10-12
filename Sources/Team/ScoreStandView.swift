@@ -28,6 +28,8 @@ struct ScoreStandItem: Identifiable, Hashable {
     /// Some pages of the file only — one song's pages of a 콘티 file. Nil
     /// for the whole file.
     var pages: [Int]? = nil
+    /// How this version is named in the stand's version menu.
+    var versionLabel: String? = nil
 
     /// The file and the pages: one 콘티 file is several songs on the stand,
     /// each read, transposed and corrected on its own.
@@ -37,7 +39,15 @@ struct ScoreStandItem: Identifiable, Hashable {
 }
 
 struct ScoreStandView: View {
-    let items: [ScoreStandItem]
+    /// The set as it stands: each song's chosen version.
+    @State private var items: [ScoreStandItem]
+    /// Every version of each song, newest first — chosen from in the header.
+    let versions: [String: [ScoreStandItem]]
+    /// The file name for the whole set made into one PDF: the next 콘티
+    /// version's, 「20261018 주일예배 찬양 v3」.
+    var setFileName: String?
+    /// Make that file as soon as the stand opens — from 「새 콘티 버전 만들기」.
+    var exportOnOpen = false
     /// Uploads a transposed PDF as a new attachment on the song, when the
     /// caller can (Drive granted, a sheet configured). Returns an error
     /// message, or nil on success.
@@ -75,8 +85,12 @@ struct ScoreStandView: View {
     }
 
     init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
+         versions: [String: [ScoreStandItem]] = [:], setFileName: String? = nil, exportOnOpen: Bool = false,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
-        self.items = items
+        _items = State(initialValue: items)
+        self.versions = versions
+        self.setFileName = setFileName
+        self.exportOnOpen = exportOnOpen
         self.setTitle = setTitle
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
@@ -98,9 +112,13 @@ struct ScoreStandView: View {
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
+                .task {
+                    // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
+                    if exportOnOpen { await model.exportSet(items, title: setTitle, fileName: setFileName) }
+                }
                 #if DEBUG
                 .task {
-                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle) }
+                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle, fileName: setFileName) }
                 }
                 #endif
             }
@@ -203,6 +221,35 @@ struct ScoreStandView: View {
 
     // MARK: - Header
 
+    /// The song's versions — each 콘티's pages, each chart attached — to
+    /// compare and choose from. The choice is the set's: it goes into the
+    /// next 콘티 made from here.
+    @ViewBuilder
+    private func versionMenu(_ item: ScoreStandItem) -> some View {
+        if let options = versions[item.song], options.count > 1 {
+            Menu {
+                ForEach(Array(options.enumerated()), id: \.element.id) { offset, option in
+                    Button {
+                        if let at = items.firstIndex(where: { $0.id == item.id }) {
+                            items[at] = option
+                            Task { await model.load(option) }
+                        }
+                    } label: {
+                        Label((option.versionLabel ?? option.attachment.name) + (offset == 0 ? " · 최신" : ""),
+                              systemImage: option.id == item.id ? "checkmark" : "doc")
+                    }
+                }
+            } label: {
+                Label("\(item.versionLabel ?? "버전") · 버전 \(options.count)개", systemImage: "square.stack")
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(Color.white.opacity(0.14)))
+            }
+            .environment(\.colorScheme, .dark)
+        }
+    }
+
     private func header(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         return VStack(alignment: .leading, spacing: 4) {
@@ -234,6 +281,7 @@ struct ScoreStandView: View {
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
             } else if let state, state.isReady {
+                versionMenu(item)
                 Text(keyLine(item, state))
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.7))
@@ -567,8 +615,11 @@ struct ScoreStandView: View {
                 } label: { Label("이 곡만 (\(item.song.isEmpty ? "현재 악보" : item.song))", systemImage: "doc") }
                 .disabled(!ready)
                 Button {
-                    Task { await model.exportSet(items, title: setTitle) }
-                } label: { Label("콘티 전체 \(items.count)곡 — 한 파일로", systemImage: "doc.on.doc") }
+                    Task { await model.exportSet(items, title: setTitle, fileName: setFileName) }
+                } label: {
+                    Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
+                          systemImage: "doc.on.doc")
+                }
             } label: { shareLabel }
             .disabled(model.isExporting)
             .accessibilityLabel("PDF로 공유·저장")
@@ -1112,7 +1163,7 @@ final class ScoreStandModel: ObservableObject {
     /// A song not opened yet is read first, so this can take a few seconds
     /// a song on a set nobody has paged through. A song whose file cannot
     /// be read is left out and named, rather than failing the whole file.
-    func exportSet(_ items: [ScoreStandItem], title: String?) async {
+    func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil) async {
         isExporting = true
         defer { isExporting = false }
         let combined = PDFDocument()
@@ -1139,7 +1190,10 @@ final class ScoreStandModel: ObservableObject {
             return
         }
         let base = (title?.isEmpty == false ? title! : "콘티").replacingOccurrences(of: "/", with: "-")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(base) 악보.pdf")
+        // As the 콘티 folder names its files, a version up, when given — to
+        // save straight into that folder from the share sheet.
+        let file = fileName.map { $0.replacingOccurrences(of: "/", with: "-") + ".pdf" } ?? "\(base) 악보.pdf"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(file)
         do {
             try data.write(to: url, options: .atomic)
             if skipped.isEmpty {

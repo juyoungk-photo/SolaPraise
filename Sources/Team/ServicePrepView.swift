@@ -134,6 +134,8 @@ struct ServicePrepView: View {
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
     @State private var preparingStand = false
+    /// The stand was opened to make the next 콘티 version.
+    @State private var makingConti = false
     @State private var assigningConti: (file: Attachment, service: TeamService)?
     @State private var confirmTidy = false
     @State private var tidying = false
@@ -269,7 +271,10 @@ struct ServicePrepView: View {
             }
             .fullScreenCover(item: $standService) { service in
                 ScoreStandView(items: standItems(service),
-                               setTitle: service.date.formatted(.dateTime.month().day()) + " " + service.title)
+                               setTitle: service.date.formatted(.dateTime.month().day()) + " " + service.title,
+                               versions: songVersions(service),
+                               setFileName: nextContiName(service),
+                               exportOnOpen: makingConti)
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
@@ -1174,6 +1179,7 @@ struct ServicePrepView: View {
                 preparingStand = true
                 await placeContiPages(service)
                 preparingStand = false
+                makingConti = false
                 standService = service
             }
         } label: {
@@ -1204,6 +1210,21 @@ struct ServicePrepView: View {
                     }
                 }
             }
+            // The other way round: the songs' charts — each in its chosen
+            // version and key — put together as the next 콘티 version, to be
+            // saved into the 콘티 folder from the share sheet.
+            Button {
+                Task {
+                    preparingStand = true
+                    await placeContiPages(service)
+                    preparingStand = false
+                    makingConti = true
+                    standService = service
+                }
+            } label: {
+                Label("새 콘티 만들기 — \(nextContiName(service))", systemImage: "doc.badge.plus")
+            }
+            .disabled(standItems(service).isEmpty)
             if let folder = ContiFolder.folderURL {
                 Button { openURL(folder) } label: { Label("콘티 폴더 열기", systemImage: "folder") }
             }
@@ -1212,12 +1233,12 @@ struct ServicePrepView: View {
                     Label("콘티 파일 올리기", systemImage: "square.and.arrow.up")
                 }
                 if let built {
-                    Button { openURL(built.url) } label: { Label("앱에서 만든 콘티 PDF 열기", systemImage: "doc") }
+                    Button { openURL(built.url) } label: { Label("순서표 + 악보 PDF 열기", systemImage: "doc") }
                 }
                 Button {
                     Task { await buildServicePDF(service) }
                 } label: {
-                    Label(built == nil ? "곡별 악보로 콘티 PDF 만들기" : "곡별 악보로 콘티 PDF 다시 만들기",
+                    Label(built == nil ? "순서표 + 원래 키 악보 PDF 만들기" : "순서표 + 원래 키 악보 PDF 다시 만들기",
                           systemImage: "doc.badge.plus")
                 }
                 .disabled(pieces.isEmpty || buildingPDF)
@@ -1233,58 +1254,102 @@ struct ServicePrepView: View {
 
     /// The service's song charts in 순서 order, each with the key the 순서
     /// gives that song.
-    /// The stand's set: one chart per song of the 순서, then the rest.
+    /// Every version of each song's chart, newest first: its pages in each
+    /// of the latest 콘티 versions and each chart attached to it.
     ///
-    /// A song's chart is its pages of the newest 콘티 — the final version,
-    /// made after the songs' drafts — or, when the 콘티 does not have it,
-    /// the song's most recently attached chart. Older versions stay in the
-    /// song's 📎 and the 콘티 menu, not on the stand.
+    /// The team works both ways. A 콘티 may come first and everything is
+    /// read from it; or each song's charts are shared first — compared,
+    /// transposed — and the 콘티 is put together from them, its versions
+    /// rising as the team agrees how to sing it. So no source wins by kind:
+    /// the newest does, whether a 콘티 or a song's chart attached after it.
+    private func songVersions(_ service: TeamService) -> [String: [ScoreStandItem]] {
+        let plan = team.plan(for: service)
+        let attachments = team.attachments(for: service)
+        let contis = Array(team.contis(for: service).prefix(3))
+        let day = DateFormatter()
+        day.dateFormat = "M/d"
+        var out: [String: [ScoreStandItem]] = [:]
+        for song in plan where song.kind == .song {
+            var sources: [(item: ScoreStandItem, at: Date?, rank: Int)] = []
+            for (rank, conti) in contis.enumerated() {
+                let pages = ContiPages.pages(of: conti.fileId, for: song.title)
+                guard !pages.isEmpty else { continue }
+                let stem = (conti.name as NSString).deletingPathExtension
+                let pageText = pages.count == 1 ? "\(pages[0] + 1)쪽" : "\(pages[0] + 1)–\(pages[pages.count - 1] + 1)쪽"
+                sources.append((ScoreStandItem(attachment: conti, song: song.title, teamKey: song.key, pages: pages,
+                                               versionLabel: "콘티 \(stem) · \(pageText)"),
+                                conti.addedAt, rank))
+            }
+            for (offset, chart) in attachments.enumerated() where !chart.belongsToService && chart.song == song.title {
+                let when = chart.addedAt.map { " · \(day.string(from: $0)) 올림" } ?? ""
+                sources.append((ScoreStandItem(attachment: chart, song: song.title, teamKey: song.key,
+                                               versionLabel: "악보 \(chart.name)\(when)"),
+                                chart.addedAt, 100 - offset))
+            }
+            // Newest first; without a time, the 콘티's own version order,
+            // then the sheet's (later rows were added later).
+            sources.sort { a, b in
+                switch (a.at, b.at) {
+                case let (x?, y?) where x != y: return x > y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return a.rank < b.rank
+                }
+            }
+            if !sources.isEmpty { out[song.title] = sources.map(\.item) }
+        }
+        return out
+    }
+
+    /// The stand's set: each song's newest version, then the rest.
     private func standItems(_ service: TeamService) -> [ScoreStandItem] {
         let plan = team.plan(for: service)
         let attachments = team.attachments(for: service)
-        let latest = team.contis(for: service).first
-        var items: [ScoreStandItem] = []
-        var used: Set<Int> = []
-        for song in plan where song.kind == .song {
-            if let latest {
-                let pages = ContiPages.pages(of: latest.fileId, for: song.title)
-                if !pages.isEmpty {
-                    used.formUnion(pages)
-                    items.append(ScoreStandItem(attachment: latest, song: song.title, teamKey: song.key, pages: pages))
-                    continue
-                }
-            }
-            // Rows are in upload order: the last is the newest.
-            if let newest = attachments.last(where: { !$0.belongsToService && $0.song == song.title }) {
-                items.append(ScoreStandItem(attachment: newest, song: song.title, teamKey: song.key))
-            }
-        }
+        let versions = songVersions(service)
+        var items = plan.filter { $0.kind == .song }.compactMap { versions[$0.title]?.first }
         // Charts on songs no longer in the 순서, after it.
         let inPlan = Set(plan.map(\.title))
         items += attachments.filter { !$0.belongsToService && !inPlan.contains($0.song) }
             .map { ScoreStandItem(attachment: $0, song: $0.song, teamKey: nil) }
-        // What of the 콘티 is no song of the 순서 — a cover, a song not on it
-        // — or all of it, when its pages could not be placed.
-        if let latest {
+        // What of the newest 콘티 is no song of the 순서, or all of it when
+        // its pages could not be placed.
+        if let latest = team.contis(for: service).first {
             let name = (latest.name as NSString).deletingPathExtension
             if let placed = ContiPages.cached(latest.fileId), !placed.isEmpty {
                 let count = ContiPages.pageCount(latest.fileId) ?? ((placed.keys.max() ?? 0) + 1)
-                let rest = (0..<count).filter { !used.contains($0) && placed[$0] == nil }
+                let rest = (0..<count).filter { placed[$0] == nil }
                 if !rest.isEmpty {
                     items.append(ScoreStandItem(attachment: latest, song: "\(name) · 나머지", teamKey: nil, pages: rest))
                 }
-            } else if used.isEmpty {
+            } else if items.isEmpty {
                 items.append(ScoreStandItem(attachment: latest, song: name, teamKey: nil))
             }
         }
         return items
     }
 
-    /// Works out, once per file, which page of the newest 콘티 is which song.
+    /// The name of the 콘티 that would come next: the latest's name a
+    /// version up — 「20261018 주일예배 찬양 v3」 — or, with none yet,
+    /// 「YYYYMMDD <service> 찬양 v1」.
+    private func nextContiName(_ service: TeamService) -> String {
+        let contis = team.contis(for: service)
+        let next = (contis.map { ContiFolder.version(in: $0.name) }.max() ?? 0) + 1
+        if let latest = contis.first {
+            let stem = (latest.name as NSString).deletingPathExtension
+                .replacingOccurrences(of: #"(?i)[\s_\-(]*v(?:er)?\.?\s*\d{1,2}\)?\s*$"#, with: "", options: .regularExpression)
+            return "\(stem) v\(next)"
+        }
+        let day = DateFormatter()
+        day.dateFormat = "yyyyMMdd"
+        return "\(day.string(from: service.date)) \(service.title) 찬양 v\(next)"
+    }
+
+    /// Works out, once per file, which page of the latest 콘티 versions is
+    /// which song.
     private func placeContiPages(_ service: TeamService) async {
         let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
-        if let latest = team.contis(for: service).first {
-            await ContiPages.compute(for: latest, songs: songs)
+        for conti in team.contis(for: service).prefix(3) {
+            await ContiPages.compute(for: conti, songs: songs)
         }
     }
 

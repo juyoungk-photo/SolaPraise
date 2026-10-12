@@ -28,6 +28,9 @@ enum ContiFolder {
     struct File: Equatable {
         let id: String
         let name: String
+        /// When it was last changed in Drive, for telling which is newer:
+        /// this 콘티, or a song's chart attached since.
+        var modified: Date? = nil
 
         /// The service day the name gives: 「20261011」, 「2026-10-11」,
         /// 「2026.10.11」.
@@ -102,7 +105,7 @@ enum ContiFolder {
         var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
         components.queryItems = [
             .init(name: "q", value: "'\(folderId)' in parents and trashed = false"),
-            .init(name: "fields", value: "files(id,name,mimeType)"),
+            .init(name: "fields", value: "files(id,name,mimeType,modifiedTime)"),
             .init(name: "pageSize", value: "200"),
             .init(name: "supportsAllDrives", value: "true"),
             .init(name: "includeItemsFromAllDrives", value: "true"),
@@ -114,10 +117,15 @@ enum ContiFolder {
         request.setValue(Bundle.main.bundleIdentifier, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        struct List: Decodable { struct F: Decodable { let id: String; let name: String; let mimeType: String }; let files: [F] }
+        struct List: Decodable {
+            struct F: Decodable { let id: String; let name: String; let mimeType: String; let modifiedTime: String? }
+            let files: [F]
+        }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return (try? JSONDecoder().decode(List.self, from: data))?.files
             .filter { $0.mimeType == "application/pdf" || $0.mimeType.hasPrefix("image/") }
-            .map { File(id: $0.id, name: $0.name) }
+            .map { File(id: $0.id, name: $0.name, modified: $0.modifiedTime.flatMap(iso.date(from:))) }
     }
 
     private static func listByPage(folderId: String) async -> [File]? {
@@ -131,17 +139,42 @@ enum ContiFolder {
     /// The entries of Drive's public folder listing page.
     static func parseFolderPage(_ html: String) -> [File] {
         guard let regex = try? NSRegularExpression(
-            pattern: #"id="entry-([A-Za-z0-9_-]+)".*?class="flip-entry-title">(.*?)</div>"#,
+            pattern: #"id="entry-([A-Za-z0-9_-]+)".*?class="flip-entry-title">(.*?)</div>(?:.*?flip-entry-last-modified"><div>([^<]*))?"#,
             options: [.dotMatchesLineSeparators]) else { return [] }
         return regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
             guard let id = Range(match.range(at: 1), in: html), let name = Range(match.range(at: 2), in: html) else { return nil }
+            let modified = Range(match.range(at: 3), in: html).flatMap { listingDate(String(html[$0])) }
             let title = String(html[name])
                 .replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&#39;", with: "'")
                 .replacingOccurrences(of: "&quot;", with: "\"")
             let lower = title.lowercased()
             guard lower.hasSuffix(".pdf") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg")
                     || lower.hasSuffix(".png") || lower.hasSuffix(".heic") else { return nil }
-            return File(id: String(html[id]), name: title)
+            return File(id: String(html[id]), name: title, modified: modified)
         }
+    }
+
+    /// The listing's 「Oct 10」, or 「10:35 PM」 for today; a date never in
+    /// the future, so a December file seen in January is last year's.
+    static func listingDate(_ text: String, now: Date = Date()) -> Date? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "h:mm a"
+        if let time = format.date(from: trimmed) {
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+            return Calendar.current.date(bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: now)
+        }
+        for pattern in ["MMM d, yyyy", "MMM d"] {
+            format.dateFormat = pattern
+            guard let day = format.date(from: trimmed) else { continue }
+            var parts = Calendar.current.dateComponents([.year, .month, .day], from: day)
+            if pattern == "MMM d" {
+                parts.year = Calendar.current.component(.year, from: now)
+                if let date = Calendar.current.date(from: parts), date > now { parts.year! -= 1 }
+            }
+            return Calendar.current.date(from: parts)
+        }
+        return nil
     }
 }

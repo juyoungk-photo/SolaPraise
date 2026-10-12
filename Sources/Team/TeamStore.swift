@@ -48,6 +48,9 @@ struct Attachment: Identifiable, Hashable {
     var hash: String? = nil
     /// The Drive file with the team's corrections to its chords, if any.
     var editsFileId: String? = nil
+    /// When it was put up — to tell a song's chart attached after the
+    /// 콘티 from one made before it.
+    var addedAt: Date? = nil
 
     var id: String { fileId }
     var belongsToService: Bool { song.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -865,6 +868,8 @@ final class TeamStore: ObservableObject {
         let byCol = TeamSheet.column(header, ["addedby", "올린사람", "작성자"])
         let hashCol = TeamSheet.column(header, ["hash", "해시"])
         let editsCol = TeamSheet.column(header, ["edits", "교정"])
+        let atCol = TeamSheet.column(header, ["addedat", "올린시각"])
+        let iso = ISO8601DateFormatter()
 
         var out: [Date: [Attachment]] = [:]
         for (offset, row) in rows.enumerated() where offset > 0 {
@@ -879,7 +884,8 @@ final class TeamStore: ObservableObject {
                 Attachment(date: date, song: cell(songCol), name: cell(nameCol),
                            fileId: cell(idCol), url: url, addedBy: cell(byCol),
                            row: offset + 1, hash: cell(hashCol).isEmpty ? nil : cell(hashCol),
-                           editsFileId: cell(editsCol).isEmpty ? nil : cell(editsCol))
+                           editsFileId: cell(editsCol).isEmpty ? nil : cell(editsCol),
+                           addedAt: iso.date(from: cell(atCol)))
             )
         }
         attachments = out
@@ -972,7 +978,7 @@ final class TeamStore: ObservableObject {
             attachments[day, default: []].append(
                 Attachment(date: service.date, song: song, name: name,
                            fileId: uploaded.fileId, url: uploaded.link,
-                           addedBy: email, row: written, hash: hash)
+                           addedBy: email, row: written, hash: hash, addedAt: Date())
             )
             for old in replaced { _ = await removeAttachment(old, sheetId: sheetId) }
             errorMessage = nil
@@ -1084,9 +1090,11 @@ final class TeamStore: ObservableObject {
         let fromFolder = ContiFolder.versions(for: service.date, in: contiFiles).map { file in
             // The sheet's row for it, when one was made (to share its page
             // assignment or corrections), carries its Edits.
-            attachment(fileId: file.id)
+            var item = attachment(fileId: file.id)
                 ?? Attachment(date: service.date, song: "", name: file.name, fileId: file.id,
                               url: file.url, addedBy: "")
+            item.addedAt = file.modified ?? item.addedAt
+            return item
         }
         let uploaded = attachments(for: service)
             .filter { $0.belongsToService && !ContiPages.isBuilt($0) && !fromFolder.map(\.fileId).contains($0.fileId) }

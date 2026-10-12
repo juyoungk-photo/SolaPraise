@@ -60,6 +60,11 @@ struct CheckContiFolder {
         let parsed = ContiFolder.parseFolderPage(page)
         check("the public listing gives each PDF with its id",
               parsed == [ContiFolder.File(id: "1AbCdEfGhIjK", name: "20261011 주일예배 찬양.pdf")], "got \(parsed)")
+        let now = day("2026-10-11")
+        check("「Oct 10」 is this year's", same(ContiFolder.listingDate("Oct 10", now: now), "2026-10-10"))
+        check("「Dec 20」 seen in October is last year's", same(ContiFolder.listingDate("Dec 20", now: now), "2025-12-20"))
+        let dated = ContiFolder.parseFolderPage(#"<div id="entry-1AbCdEfGhIjK"><div class="flip-entry-title">20261011 콘티.pdf</div><div class="flip-entry-last-modified"><div>Oct 10</div>"#)
+        check("the listing's modified date is read", dated.first?.modified != nil)
         check("a folder link gives its id",
               ContiFolder.folderId(fromLink: "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMn?usp=share_link") == "1AbCdEfGhIjKlMn")
 
