@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+  player.html — FocusPlayerKit
+
+  A page that is nothing but the player. SolaPraise serves it over loopback
+  HTTP (see LocalPlayerServer for why a real origin and Referer are needed)
+  and hands it to loadSimulatedRequest as a fallback; in both cases
+  PlayerPage.swift inlines the stylesheet and script below, so the document
+  needs no second request. Opened directly from a web server it works as-is.
+
+  The video comes from window.FOCUS_PLAYER_CONFIG when the host writes one at
+  the config marker, otherwise from the query: ?v=ID&autoplay=1&end=stop
+  One static page serves every video, and swapping videos never reloads it.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <style>
+    html, body { margin:0; padding:0; background:#000; width:100%; height:100%; overflow:hidden; }
+  </style>
+  <link rel="stylesheet" href="focus-player.css">
+</head>
+<body class="focus-player-host">
+  <div id="player"></div>
+  <!-- focus-player:config -->
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="focus-player.js"></script>
+  <script>
+    // A global the native host drives directly: evaluateJavaScript calls
+    // `player.loadVideoById(...)`, `player.seekTo(...)` and so on. Declared
+    // with var so it shadows the #player element's named window property.
+    var player = null;
+
+    (function () {
+      var config = window.FOCUS_PLAYER_CONFIG || {};
+
+      function qs(name) {
+        var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+        return m ? decodeURIComponent(m[1]) : '';
+      }
+
+      window.focusPlayer = FocusPlayer.create('player', {
+        videoId: config.videoId || qs('v'),
+        autoplay: config.autoplay != null ? !!config.autoplay : qs('autoplay') === '1',
+        endPolicy: config.endPolicy || qs('end') || undefined,
+        fit: 'window',
+        onPlayer: function (p) { player = p; }
+      });
+    })();
+  </script>
+</body>
+</html>

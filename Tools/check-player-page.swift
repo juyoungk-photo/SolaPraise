@@ -17,7 +17,9 @@
 //          Sources/Player/PlayerPage.swift Tools/check-player-page.swift
 //      /tmp/playerpagecheck
 //
-//  Reads ../FocusPlayerKit/web relative to the repository root.
+//  Reads the copy in Vendor/FocusPlayerKit/web. When FocusPlayerKit is
+//  checked out next to SolaPraise, also fails while the copy differs from
+//  it — run Tools/sync-focus-player.sh.
 //
 
 import Foundation
@@ -32,12 +34,11 @@ struct CheckPlayerPage {
             if !ok { failures += 1; print("FAIL \(what)") }
         }
 
-        let web = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("FocusPlayerKit/web")
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let web = root.appendingPathComponent("Vendor/FocusPlayerKit/web")
         func read(_ name: String) -> String {
             guard let text = try? String(contentsOf: web.appendingPathComponent(name), encoding: .utf8) else {
-                print("FAIL cannot read \(web.path)/\(name) — is FocusPlayerKit next to SolaPraise?")
+                print("FAIL cannot read \(web.path)/\(name) — run from the SolaPraise root")
                 exit(1)
             }
             return text
@@ -80,6 +81,15 @@ struct CheckPlayerPage {
         let opens = loopback.components(separatedBy: "<script").count - 1
         let closes = loopback.components(separatedBy: "</script>").count - 1
         expect(opens == closes, "script tags balanced (\(opens) open, \(closes) close)")
+
+        // The copy is the kit's, not a fork of it.
+        let upstream = root.deletingLastPathComponent().appendingPathComponent("FocusPlayerKit/web")
+        if FileManager.default.fileExists(atPath: upstream.path) {
+            for name in ["player.html", "focus-player.js", "focus-player.css"] {
+                let theirs = try? String(contentsOf: upstream.appendingPathComponent(name), encoding: .utf8)
+                expect(theirs == read(name), "\(name) matches ../FocusPlayerKit — run Tools/sync-focus-player.sh")
+            }
+        }
 
         if failures > 0 {
             print("\(failures) of \(checks) checks failed")

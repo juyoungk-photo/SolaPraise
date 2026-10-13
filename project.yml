@@ -32,9 +32,10 @@ targets:
       - path: Sources
       - path: Resources
         buildPhase: resources
-      # The player page, shared with the family hub — one copy, so a fix
-      # lands in both. Bundled as the folder `web`; see PlayerPage.swift.
-      - path: ../FocusPlayerKit/web
+      # The player page, shared with the family hub. A copy of
+      # FocusPlayerKit/web (Tools/sync-focus-player.sh), so a fresh clone
+      # builds on its own. Bundled as the folder `web`; see PlayerPage.swift.
+      - path: Vendor/FocusPlayerKit/web
         type: folder
         buildPhase: resources
     dependencies:
