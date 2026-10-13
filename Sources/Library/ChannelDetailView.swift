@@ -31,6 +31,7 @@ struct ChannelDetailView: View {
     /// The shared list holds a sealed part this device cannot open.
     @State private var listLocked = SharedChannelList.isLocked
     @State private var showsPublishing = false
+    @State private var managesChannel = false
     @State private var errorMessage: String?
 
     private var videos: [CachedVideo] {
@@ -98,10 +99,10 @@ struct ChannelDetailView: View {
         // The manager's card, one tap from the top. It used to sit at the
         // bottom of the page, under every recent video — on a channel that
         // shows thirty of them nobody scrolled that far, and it read as
-        // missing. Offered to anyone signed in to anything: the manager may
-        // be none of the accounts already connected, and connects in it.
+        // missing. Only for an account YouTube says manages this channel;
+        // that account is connected in 설정 › 계정.
         .toolbar {
-            if auth.isSignedIn || planning.isSignedIn || channelManager.isSignedIn || showsCardForReview {
+            if managesChannel || showsCardForReview {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showsPublishing = true } label: {
                         Label("멤버 공유", systemImage: SharedListPublisher.isOn(for: channel.youtubeChannelId)
@@ -128,6 +129,12 @@ struct ChannelDetailView: View {
         }
         .refreshable { await refresh() }
         .task { if videos.isEmpty { await refresh() } }
+        .task(id: channelManager.isSignedIn || auth.isSignedIn) {
+            managesChannel = SharedListPublisher.knownManagedChannels.contains(channel.youtubeChannelId)
+            guard channelManager.isSignedIn || auth.isSignedIn else { managesChannel = false; return }
+            managesChannel = await SharedListPublisher.managedChannels(auth: auth, quota: quota, manager: channelManager)
+                .contains(channel.youtubeChannelId)
+        }
     }
 
     /// -uiTestPublishCard: the manager's card, for layout review signed out.
@@ -147,7 +154,7 @@ struct ChannelDetailView: View {
     private var emptyExplanation: String {
         "이 채널에는 공개된 영상이 없습니다. '일부 공개' 영상은 채널을 관리하는 계정으로 로그인했을 때만 보입니다. "
             + "교회 공유 폴더의 「관심 채널」 시트에 링크가 올라오면, 로그인 없이도 다음 새로고침 때 여기에 나타납니다. "
-            + "채널을 관리하는 분은 오른쪽 위 사람 아이콘(멤버 공유)에서 자동 공유를 켜면 새 영상이 저절로 올라갑니다."
+            + "채널을 관리하는 분은 설정 › 계정에서 「채널 관리 계정」을 연결하면, 이 페이지 오른쪽 위에 멤버 공유 메뉴가 나타납니다."
     }
 
     // MARK: - Playlists
@@ -521,13 +528,11 @@ struct SharedListPublishCard: View {
                     Button("해제") { manager.signOut() }
                         .font(.caption)
                 } else {
-                    Text(auth.email.map { "지금은 YouTube 계정 \($0)로 읽습니다." } ?? "채널을 읽을 계정이 없습니다.")
+                    Label(auth.email.map { "YouTube 계정 \($0)" } ?? "", systemImage: "person.badge.key")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer()
-                    Button("채널 관리 계정 연결") { Task { await manager.signIn() } }
-                        .font(.caption)
                 }
             }
             if hasPassword {

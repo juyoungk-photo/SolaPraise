@@ -93,6 +93,31 @@ enum SharedListPublisher {
         return now.timeIntervalSince(last) > 3600
     }
 
+    // MARK: - Who manages what
+
+    /// The channels the connected accounts manage — the manager grant's,
+    /// and the YouTube sign-in's — asked of YouTube, not assumed. Only for
+    /// these does the 멤버 공유 menu appear: everyone else is a member, and
+    /// a member has nothing to share.
+    static func managedChannels(auth: GoogleAuthManager, quota: QuotaLedger,
+                                manager: ChannelManagerAuth) async -> Set<String> {
+        var ids = Set<String>()
+        if manager.isSignedIn,
+           let mine = try? await YouTubeAPIClient(auth: auth, quota: quota, token: { try await manager.token() }).myChannels() {
+            ids.formUnion(mine.map(\.id))
+        }
+        if auth.isSignedIn, let mine = try? await AppServices.client(auth: auth, quota: quota).myChannels() {
+            ids.formUnion(mine.map(\.id))
+        }
+        UserDefaults.standard.set(Array(ids), forKey: "sharedList.managedChannels")
+        return ids
+    }
+
+    /// The last answer, so the menu does not wait on the network to appear.
+    static var knownManagedChannels: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: "sharedList.managedChannels") ?? [])
+    }
+
     // MARK: - Publishing
 
     /// Reads the channel as its manager when that account is connected,

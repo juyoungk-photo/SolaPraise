@@ -36,6 +36,7 @@ struct SettingsView: View {
     @State private var contiFolderInput = UserDefaults.standard.string(forKey: "conti.folderId") ?? ""
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
+    @EnvironmentObject private var channelManager: ChannelManagerAuth
     @StateObject private var feed = FeedStore()
     @StateObject private var archive = ServiceArchive()
     @State private var refreshNote: String?
@@ -679,6 +680,23 @@ struct SettingsView: View {
             Text(auth.isSignedIn
                  ? "내 재생목록을 보고, 곡을 추가하고, 순서를 바꿀 수 있습니다."
                  : "로그인하면 내 YouTube 재생목록을 이 앱에서 보고 편집할 수 있습니다. 나머지 기능은 로그인 없이도 그대로 동작합니다.")
+        }
+
+        // For whoever manages the church's 교제 channel. Its own grant,
+        // read-only — see ChannelManagerAuth.
+        Section {
+            if channelManager.isSignedIn {
+                LabeledContent("채널 관리 계정", value: channelManager.email ?? "")
+                Button("연결 해제", role: .destructive) { channelManager.signOut() }
+            } else {
+                Button {
+                    Task { await channelManager.signIn() }
+                } label: {
+                    Label("채널 관리 계정 연결", systemImage: "person.badge.key")
+                }
+            }
+        } footer: {
+            Text("교회 교제 채널(예: Cornerstone TV)을 관리하는 분만 필요합니다. 연결하면 그 채널 페이지 오른쪽 위에 「멤버 공유」가 나타나, 일부 공개 예배를 암호화해 멤버에게 공유할 수 있습니다. YouTube 읽기 권한만 받으며, 위의 계정들은 바뀌지 않습니다. 브랜드 채널이면 로그인할 때 그 채널을 고르세요.")
         }
 
         // Which account each part of the app acts as — most need none.

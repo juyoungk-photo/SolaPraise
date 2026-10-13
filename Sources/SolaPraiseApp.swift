@@ -128,6 +128,8 @@ struct SolaPraiseApp: App {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
+        } else if DebugHarness.args.contains("-uiTestSettings") {
+            SettingsView()
         } else if DebugHarness.morningSettings {
             NavigationStack { MorningAlarmSettingsView() }
         } else if let name = DebugHarness.channelPage {
