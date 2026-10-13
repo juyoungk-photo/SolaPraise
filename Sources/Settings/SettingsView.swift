@@ -24,7 +24,6 @@ struct SettingsView: View {
     @State private var addingFor: Purpose?
     @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(PlayerCoordinator.autoPictureInPictureKey) private var autoPictureInPicture = true
-    @AppStorage(PlayerHost.leavesIntoPictureInPictureKey) private var leavesIntoPictureInPicture = true
     @AppStorage("reading.opensOnLaunch") private var opensReadingOnLaunch = false
     @State private var notificationsOn = ReadingSettings.notificationsEnabled
     @State private var esvKey = ReadingSettings.esvAPIKey ?? ""
@@ -38,6 +37,7 @@ struct SettingsView: View {
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
     @EnvironmentObject private var channelManager: ChannelManagerAuth
+    @State private var hasChurchPassword = SharedChannelList.password != nil
     @StateObject private var feed = FeedStore()
     @StateObject private var archive = ServiceArchive()
     @State private var refreshNote: String?
@@ -167,15 +167,11 @@ struct SettingsView: View {
 
     private var playerSection: some View {
         Section {
-            Picker("플레이어를 내리면", selection: $leavesIntoPictureInPicture) {
-                Text("PiP 창").tag(true)
-                Text("아래 미니 플레이어").tag(false)
-            }
             Toggle("앱을 나가면 PiP로 계속 재생", isOn: $autoPictureInPicture)
         } header: {
             Text("플레이어")
         } footer: {
-            Text("플레이어를 내리거나 다른 탭으로 가면, 재생 중인 곡은 PiP 창으로 계속됩니다(일시정지 중이거나 PiP를 쓸 수 없으면 아래 미니 플레이어). PiP 창의 「돌아가기」로 플레이어가 다시 열립니다. 재생 중에 홈으로 나가면 영상이 작은 창(PiP)으로 계속 재생됩니다. 끄거나 PiP 창을 닫으면 앱을 나갈 때 일시정지합니다. YouTube 약관상 영상 없이 소리만 재생할 수는 없습니다.")
+            Text("플레이어를 내리거나 다른 탭으로 가면, 재생 중인 곡은 PiP 창으로 계속됩니다. 일시정지 중이면 플레이어가 닫힙니다. PiP 창의 「돌아가기」로 플레이어가 다시 열리고, 닫기(✕)를 누르면 끝납니다. 재생 중에 홈으로 나가면 영상이 작은 창(PiP)으로 계속 재생됩니다. 끄거나 PiP 창을 닫으면 앱을 나갈 때 일시정지합니다. YouTube 약관상 영상 없이 소리만 재생할 수는 없습니다.")
         }
     }
 
@@ -685,6 +681,19 @@ struct SettingsView: View {
             Text(auth.isSignedIn
                  ? "내 재생목록을 보고, 곡을 추가하고, 순서를 바꿀 수 있습니다."
                  : "로그인하면 내 YouTube 재생목록을 이 앱에서 보고 편집할 수 있습니다. 나머지 기능은 로그인 없이도 그대로 동작합니다.")
+        }
+
+        // Members: the church's password for its sealed 관심 채널 list.
+        Section {
+            LabeledContent("교회 멤버 암호", value: hasChurchPassword ? "저장됨" : "없음")
+            if hasChurchPassword {
+                Button("암호 지우기", role: .destructive) {
+                    SharedChannelList.password = nil
+                    hasChurchPassword = false
+                }
+            }
+        } footer: {
+            Text("교회의 일부 공개 예배 목록(관심 채널)을 여는 암호입니다. 보관함이나 그 채널 페이지에서 입력하며, 이 기기에만 저장됩니다.")
         }
 
         // For whoever manages the church's 교제 channel. Its own grant,

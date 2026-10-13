@@ -24,13 +24,16 @@ import Combine
 @MainActor
 final class PlayerHost: ObservableObject {
 
+    /// There is no docked player. It was dropped for the system's own PiP
+    /// window, which moves, resizes and tucks away better than anything
+    /// drawn here — and keeping both meant a trip through the dock on the
+    /// way back from PiP, and a flicker on the way out.
     enum Mode {
         case closed
         case full
-        case mini
         /// Playing in the system's floating PiP window, inside the app or
-        /// out of it. The stage draws nothing — the web view stays where it
-        /// is, because PiP plays from it — and reserves no space.
+        /// out of it. The stage is hidden but kept — PiP plays from its web
+        /// view — and reserves no space.
         case pip
     }
 
@@ -49,13 +52,44 @@ final class PlayerHost: ObservableObject {
         // button — the player comes back: full if the song is still going
         // (that is what 「돌아가기」 means), docked if it stopped, so the
         // song is still one tap away rather than gone.
+        // The mode follows the window, not the request, and changes in one
+        // frame with no animation: the system animates the video into and
+        // out of its corner, and a fade of the player screen on top of that
+        // was the flicker.
+        //
+        // In: the moment PiP has the video, the player screen goes. Out: its
+        // 「돌아가기」 leaves the song playing — the player comes back where it
+        // was; its close pauses it — the player closes.
         pipWatch = coordinator.$isPictureInPicture
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] inPiP in
-                guard let self, !inPiP, self.mode == .pip else { return }
-                let playing = self.coordinator.state == .playing || self.coordinator.state == .buffering
-                withAnimation(WatchScreen.stageAnimation) { self.mode = playing ? .full : .mini }
+                guard let self else { return }
+                var still = Transaction()
+                still.disablesAnimations = true
+                if inPiP {
+                    self.leavingForPictureInPicture = false
+                    guard self.mode == .full else { return }
+                    // After the system's own animation, not at its start.
+                    // WebKit leaves a black backdrop where the video was
+                    // while the video flies to its corner; with the player
+                    // page removed at the start, that band hung alone over
+                    // the tab for ~0.4 s — the flicker. Kept until it is
+                    // done, the page goes in one cut.
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard let self, self.mode == .full, self.coordinator.isPictureInPicture else { return }
+                        withTransaction(still) { self.mode = .pip }
+                    }
+                } else {
+                    guard self.mode == .pip else { return }
+                    let playing = self.coordinator.state == .playing || self.coordinator.state == .buffering
+                    if playing {
+                        withTransaction(still) { self.mode = .full }
+                    } else {
+                        self.close()
+                    }
+                }
             }
         // A song ending in PiP moves on to the next one, so a 콘티 plays
         // through in the floating window. Through the screen's own handler
@@ -74,15 +108,6 @@ final class PlayerHost: ObservableObject {
             return true
         }
     }
-
-    /// Where the tab bar starts, in global coordinates.
-    ///
-    /// Measured, not assumed. A hardcoded tab-bar height was wrong often
-    /// enough to put the docked player ON the tab bar — and because the bar
-    /// is hit-testable, it then swallowed every tap meant for a tab. Two
-    /// symptoms, one cause: tabs stopped switching and the close button
-    /// became unreliable, because both were fighting the same overlap.
-    @Published var dockAnchorY: CGFloat?
 
     /// Handlers the player screen installs, so the overlays drawn over the
     /// video can act without the video having to live inside that screen.
@@ -176,41 +201,44 @@ final class PlayerHost: ObservableObject {
         return false
     }
 
-    func minimize() {
-        guard mode == .full else { return }
-        mode = .mini
-    }
+    /// Asked for, not yet confirmed — see dock().
+    private var leavingForPictureInPicture = false
 
-    /// Leaving the full player — a tab chosen, the chevron, a drag down:
-    /// into the system's PiP window when it can take the song, the docked
-    /// player when it cannot (paused, an embed PiP refuses, PiP turned off
-    /// on the device) or when 설정 asks for the dock.
-    func dock() {
-        guard mode == .full else { return }
-        guard Self.leavesIntoPictureInPicture, coordinator.enterPictureInPicture() else {
-            mode = .mini
+    /// Leaving the full player — another tab, the chevron, a pull down.
+    ///
+    /// Playing: into PiP, and nothing else — no shrinking, no dock; the
+    /// player screen goes when the window has the video. Not playing:
+    /// there is nothing to keep on screen, so the player closes. Playing
+    /// but PiP refused (an embed that will not, PiP off on the device):
+    /// `orClose` decides — a tab change closes the player rather than
+    /// leave it over the new tab; the chevron or a pull keeps it and says
+    /// why.
+    func dock(orClose: Bool = false) {
+        guard mode == .full, !leavingForPictureInPicture else { return }
+        let playing = coordinator.state == .playing || coordinator.state == .buffering
+        guard playing else { close(); return }
+        guard coordinator.enterPictureInPicture() else {
+            refusedPictureInPicture(orClose: orClose)
             return
         }
-        mode = .pip
-        // Asked for is not started: if the window has not appeared in a
-        // moment and a half, the song must not go on unseen — dock it.
+        leavingForPictureInPicture = true
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
-            guard let self, self.mode == .pip, !self.coordinator.isPictureInPicture else { return }
-            withAnimation(WatchScreen.stageAnimation) { self.mode = .mini }
+            guard let self, self.leavingForPictureInPicture, !self.coordinator.isPictureInPicture else { return }
+            self.leavingForPictureInPicture = false
+            self.refusedPictureInPicture(orClose: orClose)
         }
     }
 
-    /// 설정 › 플레이어: leaving the player goes to PiP (default) or the dock.
-    static let leavesIntoPictureInPictureKey = "player.leavesIntoPictureInPicture"
-    static var leavesIntoPictureInPicture: Bool {
-        UserDefaults.standard.object(forKey: leavesIntoPictureInPictureKey) as? Bool ?? true
+    private func refusedPictureInPicture(orClose: Bool) {
+        if orClose { close() }
+        Toast.shared.show("이 영상은 PiP로 재생할 수 없습니다", symbol: "pip.exit", tint: .orange)
     }
 
+    /// Back from PiP to the full player.
     func expand() {
-        if mode == .pip { coordinator.setPictureInPicture(false) }
-        guard mode == .mini || mode == .pip else { return }
-        mode = .full
+        guard mode == .pip else { return }
+        coordinator.setPictureInPicture(false)
     }
 
     // MARK: - 취침 타이머
@@ -271,6 +299,7 @@ final class PlayerHost: ObservableObject {
     }
 
     func close() {
+        leavingForPictureInPicture = false
         cancelSleepTimer()
         coordinator.detach()
         queue = []
@@ -283,373 +312,86 @@ final class PlayerHost: ObservableObject {
 
 /// The player and everything around it, in one place in the view hierarchy.
 ///
-/// The first version put the full player in a `fullScreenCover` and the mini
-/// player in a `safeAreaInset`. Those are separate presentation contexts, so
-/// switching between them re-parented the WKWebView — which briefly
-/// interrupted the audio and made the change a jump rather than a movement,
-/// because two different presentations cannot animate into each other.
-///
-/// Here the video is a single view whose frame changes. Nothing is re-parented
-/// and nothing reloads, so the sound is continuous and the geometry can be
-/// animated like any other layout change.
+/// The video is a single web view that is never re-parented or rebuilt —
+/// a change of presentation used to interrupt the sound. It is shown full,
+/// or hidden while the system's PiP window plays from it.
 struct PlayerStage: View {
     @ObservedObject var host: PlayerHost
 
-    static let miniWidth: CGFloat = 112
-    static let miniPadding: CGFloat = 8
-
-    /// The space the docked player occupies.
-    ///
-    /// Published so the tab content can reserve it. The player is an overlay,
-    /// which means it draws over the feed and knows nothing about it — the
-    /// bottom row of cards ended up underneath the bar, visible through the
-    /// material and impossible to tap. An overlay has to be paid for in
-    /// layout somewhere, and this is the number.
-    static var miniBarHeight: CGFloat { miniWidth * 9 / 16 + miniPadding * 2 }
-
-    /// Live vertical travel of a drag in progress. State rather than
-    /// GestureState so releasing can animate it back to rest in the same
-    /// transaction that commits the mode — otherwise the two move apart and
-    /// the player jumps at the moment you let go.
-    @State private var drag: CGFloat = 0
-    /// Whether the drag in progress began sideways — decided on its first
-    /// movement, nil between drags.
-    @State private var dragIsSideways: Bool?
-    /// The drag in progress already handed the video to PiP.
-    @State private var handedToPictureInPicture = false
+    /// Whether the pull in progress began sideways — decided on its first
+    /// movement, nil between pulls.
+    @State private var pullIsSideways: Bool?
+    /// The pull in progress already handed the video to PiP.
+    @State private var handedOver = false
 
     var body: some View {
         if host.isVisible, let current = host.current {
             GeometryReader { geo in
-                // Docked and PiP share the docked geometry; PiP just draws
-                // none of it.
-                let mini = host.mode != .full
                 let fullWidth = geo.size.width
-                // The measured top of the tab bar, converted into this
-                // view's space. Falls back to the full height only until the
-                // first measurement arrives. Known in both modes, which is
-                // what lets a drag show the dock it is heading for.
-                let dockBottom = host.dockAnchorY.map { $0 - geo.frame(in: .global).minY }
-                    ?? geo.size.height
-
-
-                // Full width, until that makes the video too tall — which is
-                // what landscape on an iPad does: 16:9 of a 1194pt width is
-                // 672pt of an 834pt screen, leaving the title, the buttons
-                // and the queue about 160pt to share. Past the share below
-                // the video stops growing and sits narrower instead, centred,
-                // so the screen stays readable in both orientations.
-                //
-                // A PHONE ON ITS SIDE IS THE OPPOSITE CASE. Half of a 402pt
-                // landscape height is a 201pt video on an 874pt-wide screen —
-                // a small picture adrift in black, with the rest of the
-                // screen spent on a page nobody turns their phone sideways to
-                // read. Turning the phone IS the request to watch, so there
-                // the video takes the height it can and the page waits below
-                // it. Measured rather than asked of the device: an iPad in a
-                // short split view should behave like the small screen it is.
+                // Full width, until that makes the video too tall — iPad in
+                // landscape — when it stops growing and sits centred. A phone
+                // on its side is the opposite case: turning it is the request
+                // to watch, so the video takes the height it can. Measured,
+                // not asked of the device, so a short split view on an iPad
+                // behaves like the small screen it is.
                 let isLandscape = geo.size.width > geo.size.height
                 let isShort = geo.size.height < 520
                 let heightShare: CGFloat = (isLandscape && isShort) ? 1 : 0.5
                 let videoHeight = min(fullWidth * 9 / 16, geo.size.height * heightShare)
                 let videoWidth = videoHeight * 16 / 9
 
-                // The two resting shapes, and the point between them the
-                // finger is currently at.
-                let fullX = (fullWidth - videoWidth) / 2
-                let miniW = PlayerStage.miniWidth
-                let miniH = miniW * 9 / 16
-                let miniX = AppLayout.floatingInset + PlayerStage.miniPadding
-                let miniY = dockBottom - PlayerStage.miniBarHeight + PlayerStage.miniPadding
-
-                // 0 is the full player, 1 is docked, and a drag lives in
-                // between — measured against the distance the player actually
-                // has to fall, not against a fixed number of points.
-                //
-                // It used to be translation/220 on a phone where the dock is
-                // some 600pt below the video, so the frame ran three times
-                // faster than the finger: you pushed it an inch and it fled.
-                // Dividing by the real travel makes y work out to exactly the
-                // finger's own displacement, so the video stays under the
-                // thumb the whole way down and shrinks as it goes.
-                let travel = max(1, miniY)
-                let base: CGFloat = mini ? 1 : 0
-                let t = min(1, max(0, base + drag / travel))
-
-                let width = videoWidth + (miniW - videoWidth) * t
-                let scale = width / max(videoWidth, 1)
-                let originX = fullX + (miniX - fullX) * t
-                let originY = miniY * t
-                let corner = (AppLayout.usesCustomTabBar ? 16 : 6) * t
-
                 ZStack(alignment: .topLeading) {
-                    // The full screen behind the player. Faded rather than
-                    // removed so the player's own frame is the thing moving.
                     WatchScreen()
                         .padding(.top, videoHeight)
                         .background(Color(.systemBackground))
-                        .opacity(1 - t)
-                        // By the mode, never by t: see the player below.
-                        .allowsHitTesting(!mini)
 
                     // The band the video sits in, full width even when the
-                    // video is narrower than the screen. Without it the
-                    // letterboxing beside a capped video showed the page
-                    // background — white in light mode, beside a black video.
-                    // Faded rather than removed. Dropped outright it
-                    // vanished on the first frame of the shrink, so the band
-                    // the video was travelling across disappeared before the
-                    // video had left it — a flash of the page behind, which
-                    // read as the animation stuttering rather than as the
-                    // backdrop going.
+                    // video is narrower: beside a capped video the page
+                    // background showed — white in light mode, beside black.
                     Color.black
                         .frame(width: fullWidth, height: videoHeight)
-                        .opacity(1 - t)
                         .allowsHitTesting(false)
-
-                    if t > 0 {
-                        // One bar, laid out across the full width, with a
-                        // gap where the player sits on top of it. The first
-                        // version positioned the chrome with padding and an
-                        // offset inside a topLeading ZStack, so it sized
-                        // itself to its content and its buttons ended up
-                        // somewhere other than where they appeared to be —
-                        // which is why stop and close did nothing.
-                        HStack(spacing: 0) {
-                            Color.clear
-                                .frame(width: PlayerStage.miniWidth + PlayerStage.miniPadding * 2)
-                            MiniChrome(host: host, current: current)
-                        }
-                        // Floating on iPad, where the tab bar below it is a
-                        // floating capsule: a full-width slab above a floating
-                        // pill left a strip of the grid showing between them,
-                        // which read as a gap rather than a layer. Edge to
-                        // edge on iPhone, where it sits on a full-width tab
-                        // bar and an inset would only break that line.
-                        .frame(width: geo.size.width - AppLayout.floatingInset * 2,
-                               height: PlayerStage.miniBarHeight)
-                        .background(
-                            .regularMaterial,
-                            in: RoundedRectangle(
-                                cornerRadius: AppLayout.usesCustomTabBar ? 16 : 0,
-                                style: .continuous)
-                        )
-                        .overlay(alignment: .top) {
-                            if !AppLayout.usesCustomTabBar { Divider() }
-                        }
-                        .shadow(color: .black.opacity(AppLayout.usesCustomTabBar ? 0.14 : 0),
-                                radius: 12, y: 4)
-                        .offset(x: AppLayout.floatingInset,
-                                y: dockBottom - PlayerStage.miniBarHeight)
-                        // Fades in as the player is pulled down, so the bar
-                        // it is heading for is visible the whole way.
-                        .opacity(t)
-                        .allowsHitTesting(mini)
-                        // No tap gesture on the bar itself: a container tap
-                        // competes with the buttons inside it, which is the
-                        // other half of why close was unreliable. Expanding
-                        // is the title's job, and dragging still works
-                        // anywhere because a drag and a tap do not collide.
-                        .gesture(dragGesture(mini: true, travel: travel))
-                        .transition(.opacity)
-                    }
 
                     ZStack {
                         Color.black
                         FocusPlayerView(videoId: current.id, coordinator: host.coordinator)
-
-                        // Everything that reflects the COORDINATOR'S state,
-                        // in a view that observes the coordinator — see
-                        // CoordinatorOverlays for why that matters.
-                        CoordinatorOverlays(coordinator: host.coordinator,
-                                            host: host,
-                                            expanded: t < 0.5)
+                        CoordinatorOverlays(coordinator: host.coordinator, host: host, expanded: true)
                     }
-                    // ALWAYS THE FULL SIZE, SHOWN SMALLER.
-                    //
-                    // The frame used to follow t, so every frame of a drag
-                    // resized the web view — 24 resizes in a 25-event drag,
-                    // each making YouTube's page refit its player — and on a
-                    // real iPad the video fell behind the finger. The web view
-                    // now keeps the full player's size in every state, and
-                    // docking, undocking and the drag between are a scale
-                    // and an offset: transforms, not layout.
                     .frame(width: videoWidth, height: videoHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: corner / max(scale, 0.01), style: .continuous))
-                    // By the MODE, not by t. Switching at t = 0.5 handed the
-                    // touch from the video to the dock in the middle of the
-                    // drag that was crossing it — the drag could stop there.
-                    .allowsHitTesting(!mini)
-                    // Docked, the video is a thumbnail rather than a player,
-                    // and pressing a thumbnail should bring the player back.
-                    //
-                    // It could not before: hit testing is off below 0.5 so
-                    // YouTube's own chrome cannot be pressed by accident in a
-                    // 100pt-wide picture, and that took the tap with it — so
-                    // the one part of the bar that most looks like a button
-                    // did nothing. This layer sits ABOVE that modifier, so
-                    // the web view stays deaf and the tap still lands.
-                    .overlay {
-                        if mini {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    withAnimation(WatchScreen.stageAnimation) {
-                                        host.expand()
-                                    }
-                                }
-                                .accessibilityLabel("플레이어 열기")
-                                .accessibilityAddTraits(.isButton)
-                        }
-                    }
-                    .scaleEffect(scale, anchor: .topLeading)
-                    .offset(x: originX, y: originY)
-                    // High priority, not a plain gesture.
-                    //
-                    // The video is a WKWebView, and a web view's own
-                    // recognisers claim a drag that starts on it — so pulling
-                    // the player down worked only when the touch happened to
-                    // begin off the video, which reads as "it does not
-                    // respond". This one wins first.
-                    .highPriorityGesture(dragGesture(mini: mini, travel: travel))
+                    .offset(x: (fullWidth - videoWidth) / 2)
+                    // High priority: the web view's own recognisers would
+                    // otherwise claim a pull that starts on the video.
+                    .highPriorityGesture(pullDown)
                 }
-                .animation(WatchScreen.stageAnimation, value: host.mode)
-                // In PiP the video is in the system's window, and what is left
-                // here is its empty frame. Kept, not removed: PiP plays from
-                // this web view.
-                .opacity(host.mode == .pip ? 0 : 1)
-                .allowsHitTesting(host.mode != .pip)
             }
-            // The top safe area is respected in both modes. Ignoring it in
-            // full mode ran the video under the status bar, and the embed
-            // puts YouTube's own chrome up there — the channel name, share,
-            // CC and fullscreen all sat behind the clock and the status
-            // icons on an iPhone, half unreadable and half untappable.
+            // Hidden in PiP, not removed: PiP plays from this web view.
+            // Switched in one frame — see PlayerHost's pipWatch.
+            .opacity(host.mode == .pip ? 0 : 1)
+            .allowsHitTesting(host.mode != .pip)
             .transition(.opacity)
         }
     }
 
-    /// Down docks it, up restores it. The threshold is generous because this
-    /// competes with the scroll view underneath.
-    /// Follows the finger from the first few points of movement.
+    /// A pull down on the video: into PiP as soon as it has clearly begun.
+    /// Nothing on screen follows the finger — the system's own animation
+    /// carries the video to its corner. Sideways swipes are left alone.
     ///
-    /// `minimumDistance` is small but not zero: the video is a web view with
-    /// YouTube's own controls inside it, and a gesture that began at zero
-    /// would swallow the taps meant for play and pause.
-    private func dragGesture(mini: Bool, travel: CGFloat) -> some Gesture {
-        // In the screen's coordinates: the player shrinks and moves under
-        // the finger, and its own coordinates move and shrink with it.
+    /// `minimumDistance` is small but not zero: a gesture that began at
+    /// zero would swallow the taps meant for YouTube's play and pause.
+    private var pullDown: some Gesture {
         DragGesture(minimumDistance: 5, coordinateSpace: .global)
             .onChanged { value in
-                // WHICH WAY, decided once, at the start. It used to be any
-                // time the finger had gone 120pt sideways — and on an iPad
-                // the dock is at the bottom LEFT, so the natural pull toward
-                // it is a diagonal that crossed 120pt sideways long before it
-                // got there: the player stopped following and sprang back.
-                // Sideways swipes still belong to whatever is underneath.
-                if dragIsSideways == nil {
-                    dragIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
+                if pullIsSideways == nil {
+                    pullIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
                 }
-                guard dragIsSideways == false, !handedToPictureInPicture else { return }
-                // STRAIGHT INTO PiP. A pull down that has clearly begun hands
-                // the video to the system's window at once: its own animation
-                // to the corner is smoother than any shrink drawn here, and
-                // the window is then dragged as the system drags it. The
-                // finger cannot be handed over with it — the window moves on
-                // the next drag.
-                if !mini, value.translation.height > 40, PlayerHost.leavesIntoPictureInPicture,
-                   host.coordinator.canPictureInPicture,
-                   host.coordinator.state == .playing || host.coordinator.state == .buffering {
-                    handedToPictureInPicture = true
-                    drag = 0
-                    host.dock()
-                    return
-                }
-                drag = value.translation.height
+                guard pullIsSideways == false, !handedOver, value.translation.height > 40 else { return }
+                handedOver = true
+                host.dock()
             }
-            .onEnded { value in
-                if handedToPictureInPicture {
-                    handedToPictureInPicture = false
-                    dragIsSideways = nil
-                    return
-                }
-                let moved = value.translation.height
-                let thrown = value.predictedEndTranslation.height
-                let sideways = dragIsSideways == true
-                dragIsSideways = nil
-                withAnimation(WatchScreen.stageAnimation) {
-                    drag = 0
-                    guard !sideways else { return }
-                    // A third of the way, or let go travelling fast enough to
-                    // get there — but never more than a thumb's reach: on an
-                    // iPad the way down is a thousand points, and a third of
-                    // it was a pull most people gave up on.
-                    let commit = min(travel * 0.33, 180)
-                    let fling = min(travel * 0.6, 360)
-                    if !mini, moved > commit || thrown > fling {
-                        host.dock()
-                    } else if mini, -moved > commit || -thrown > fling {
-                        host.expand()
-                    }
-                }
+            .onEnded { _ in
+                pullIsSideways = nil
+                handedOver = false
             }
-    }
-}
-
-// MARK: - Mini chrome
-
-/// Title and controls beside the docked player.
-private struct MiniChrome: View {
-    @ObservedObject var host: PlayerHost
-    let current: PlayableVideo
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(current.title)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                if let channel = current.channelTitle {
-                    Text(channel)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(WatchScreen.stageAnimation) { host.expand() }
-            }
-
-            Button {
-                if host.coordinator.state == .playing {
-                    host.coordinator.pause()
-                } else {
-                    host.coordinator.play()
-                }
-            } label: {
-                // 44pt, the minimum Apple specifies for a touch target. The
-                // old 34 and 30 were small enough to miss, which read as the
-                // buttons not working at all.
-                Image(systemName: host.coordinator.state == .playing
-                      ? "pause.fill" : "play.fill")
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Button { host.close() } label: {
-                Image(systemName: "xmark")
-                    .font(.footnote.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.trailing, 10)
-        .frame(maxHeight: .infinity)
     }
 }
 
@@ -786,28 +528,13 @@ struct PlayerErrorCard: View {
 
 // MARK: - Reserving the bottom chrome
 
-/// Reserves the bottom furniture a tab sits above — the docked player, and
-/// on iPad the app's own tab bar — and measures where the player's share of
-/// it ends.
+/// Reserves the bottom furniture a tab sits above — on iPad the app's own
+/// tab bar, which the system does not inset anything for.
 ///
 /// This belongs *inside* each tab's `NavigationStack`, next to that screen's
-/// own bottom furniture. On the `TabView` it reserved space below the system
-/// tab bar instead of above it, so the docked bar covered the tabs outright;
-/// wrapped around a tab it fared no better, because a NavigationStack does
-/// not pass an outer bottom inset down to the scroll view inside it — 홈's
-/// search field stayed exactly where it was and the player sat on top of it.
-/// Applied in here the inset is the innermost piece of bottom furniture, so
-/// the screen's own insets stack above it.
-///
-/// The two pieces are reserved together because they stack: the player docks
-/// directly on top of the tab bar, and the gap between "what the content
-/// must clear" and "where the player's bottom edge is" is exactly the tab
-/// bar's height. Measuring the boundary between them is what keeps the two
-/// from overlapping on iPad, where the bar is ours and the system does not
-/// inset anything for it.
+/// own bottom furniture: a NavigationStack does not pass an outer bottom
+/// inset down to the scroll view inside it.
 struct BottomChrome: ViewModifier {
-    @EnvironmentObject private var host: PlayerHost
-
     func body(content: Content) -> some View {
         content
             // iPad draws its own bar at the bottom, so the system's — which
@@ -823,39 +550,7 @@ struct BottomChrome: ViewModifier {
             .toolbarBackground(.regularMaterial, for: .navigationBar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    // The docked player's share, reserved only while it is
-                    // docked.
-                    if host.mode == .mini {
-                        Color.clear.frame(height: PlayerStage.miniBarHeight)
-                    }
-
-                    // A zero-height line where the player's bottom edge
-                    // belongs, measured in EVERY mode.
-                    //
-                    // It used to be the mini reservation itself, which meant
-                    // the line did not exist until the player was already
-                    // docking. Shrinking out of full screen therefore started
-                    // with no idea where it was going, aimed at the bottom of
-                    // the screen, and corrected once the measurement landed a
-                    // frame or two later — two animations where there should
-                    // be one, which is what made it feel late. Everything
-                    // below this line is fixed furniture, so the line sits at
-                    // the same y in both modes and the target is known before
-                    // the gesture starts.
-                    GeometryReader { proxy in
-                        Color.clear
-                            .onAppear {
-                                host.dockAnchorY = proxy.frame(in: .global).maxY
-                            }
-                            .onChange(of: proxy.frame(in: .global).maxY) { _, new in
-                                host.dockAnchorY = new
-                            }
-                    }
-                    .frame(height: 0)
-
-                    // Reserved in both modes for the same reason: a gap that
-                    // appeared only while docked would move the line by its
-                    // own height mid-animation. Zero on iPhone.
+                    // Zero on iPhone.
                     Color.clear.frame(height: AppLayout.floatingGap)
 
                     if AppLayout.usesCustomTabBar {

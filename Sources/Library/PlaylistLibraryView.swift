@@ -19,6 +19,8 @@ struct PlaylistLibraryView: View {
     @EnvironmentObject private var planning: PlanningAuth
 
     @Environment(\.modelContext) private var modelContext
+    @StateObject private var sharedFeed = FeedStore()
+    @State private var listLocked = SharedChannelList.isLocked
     @StateObject private var state = LoadState<[YTPlaylist]>()
     @State private var showSettings = false
     @State private var showAddChannel = false
@@ -91,11 +93,32 @@ struct PlaylistLibraryView: View {
             .onChange(of: auth.isSignedIn) { _, signedIn in
                 if signedIn { Task { await load() } }
             }
+            // Reads the church's list once, so a locked one is noticed here.
+            .task {
+                let client = AppServices.client(auth: auth, quota: quota)
+                await sharedFeed.refresh(purpose: .fellowship, context: modelContext, client: client)
+                listLocked = SharedChannelList.isLocked
+            }
         }
     }
 
     private var list: some View {
         List {
+            // The church's list is sealed and this device has no password
+            // yet: ask here, where 관심 채널 starts, not only on one channel's
+            // page — a member who never opened that page saw nothing and
+            // was never asked.
+            if listLocked {
+                Section {
+                    ChurchPasswordCard {
+                        let client = AppServices.client(auth: auth, quota: quota)
+                        await sharedFeed.refresh(purpose: .fellowship, context: modelContext, client: client)
+                        listLocked = SharedChannelList.isLocked
+                    } isStillLocked: { SharedChannelList.isLocked }
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                }
+            }
+
             if !shelfChannels.isEmpty {
                 Section {
                     ScrollView(.horizontal, showsIndicators: false) {

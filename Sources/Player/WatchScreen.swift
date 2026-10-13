@@ -268,7 +268,7 @@ struct WatchScreen: View {
     private var header: some View {
         HStack(spacing: 16) {
             Button {
-                withAnimation(Self.stageAnimation) { host.dock() }
+                host.dock()
             } label: { Image(systemName: "chevron.down") }
                 .accessibilityLabel("작게 보기")
 
