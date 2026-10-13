@@ -263,6 +263,9 @@ struct PlayerStage: View {
     /// transaction that commits the mode — otherwise the two move apart and
     /// the player jumps at the moment you let go.
     @State private var drag: CGFloat = 0
+    /// Whether the drag in progress began sideways — decided on its first
+    /// movement, nil between drags.
+    @State private var dragIsSideways: Bool?
 
     var body: some View {
         if host.isVisible, let current = host.current {
@@ -480,23 +483,35 @@ struct PlayerStage: View {
         // the finger, and its own coordinates move and shrink with it.
         DragGesture(minimumDistance: 5, coordinateSpace: .global)
             .onChanged { value in
-                // Sideways swipes belong to whatever is underneath.
-                guard abs(value.translation.width) < 120 else { return }
+                // WHICH WAY, decided once, at the start. It used to be any
+                // time the finger had gone 120pt sideways — and on an iPad
+                // the dock is at the bottom LEFT, so the natural pull toward
+                // it is a diagonal that crossed 120pt sideways long before it
+                // got there: the player stopped following and sprang back.
+                // Sideways swipes still belong to whatever is underneath.
+                if dragIsSideways == nil {
+                    dragIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
+                }
+                guard dragIsSideways == false else { return }
                 drag = value.translation.height
             }
             .onEnded { value in
                 let moved = value.translation.height
                 let thrown = value.predictedEndTranslation.height
-                let sideways = abs(value.translation.width) >= 120
+                let sideways = dragIsSideways == true
+                dragIsSideways = nil
                 withAnimation(WatchScreen.stageAnimation) {
                     drag = 0
                     guard !sideways else { return }
                     // A third of the way, or let go travelling fast enough to
-                    // get there — the same two tests any sheet dismissal uses.
-                    let commit = travel * 0.33
-                    if !mini, moved > commit || thrown > travel * 0.6 {
+                    // get there — but never more than a thumb's reach: on an
+                    // iPad the way down is a thousand points, and a third of
+                    // it was a pull most people gave up on.
+                    let commit = min(travel * 0.33, 180)
+                    let fling = min(travel * 0.6, 360)
+                    if !mini, moved > commit || thrown > fling {
                         host.minimize()
-                    } else if mini, -moved > commit || -thrown > travel * 0.6 {
+                    } else if mini, -moved > commit || -thrown > fling {
                         host.expand()
                     }
                 }

@@ -90,6 +90,7 @@ struct WatchScreen: View {
     private var player: PlayerCoordinator { host.coordinator }
 
     @State private var addTarget: PlayableVideo?
+    @State private var shareButtonFrame: CGRect?
     @StateObject private var detection = DetectionSession()
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
@@ -651,8 +652,28 @@ struct WatchScreen: View {
             .buttonStyle(.bordered)
             .disabled(current == nil)
 
-            // No 「Share」 here: YouTube's own player has one on the video.
-            // PiP stays — the embed offers none.
+            // Share, though YouTube's player has its own: that one shows only
+            // while YouTube's controls are up, and reads as missing from the
+            // row where every other action is.
+            // Presented by UIKit from the top: a ShareLink inside the player
+            // stage, an overlay, did nothing when tapped.
+            if let current {
+                Button {
+                    SharePresenter.present(items: [current.title, URL(string: "https://youtu.be/\(current.id)")!],
+                                           anchor: shareButtonFrame)
+                } label: {
+                    Label("공유", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                // Where the iPad popover points.
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { shareButtonFrame = geo.frame(in: .global) }
+                        .onChange(of: geo.frame(in: .global)) { _, frame in shareButtonFrame = frame }
+                })
+            }
+
+            // PiP: the embed offers none.
             PictureInPictureButton(coordinator: player)
 
             SleepTimerButton()

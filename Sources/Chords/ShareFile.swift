@@ -36,6 +36,13 @@ struct ActivityView: UIViewControllerRepresentable {
 enum SharePresenter {
     @MainActor
     static func present(_ url: URL, completion: @escaping () -> Void = {}) {
+        present(items: [url], completion: completion)
+    }
+
+    /// `anchor`: where the popover points on iPad, in global coordinates —
+    /// the button's frame. Without one, the bottom-right corner.
+    @MainActor
+    static func present(items: [Any], anchor: CGRect? = nil, completion: @escaping () -> Void = {}) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
               let root = scene.keyWindow?.rootViewController ?? scene.windows.first?.rootViewController
@@ -43,13 +50,18 @@ enum SharePresenter {
         var top = root
         while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
 
-        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         controller.completionWithItemsHandler = { _, _, _, _ in completion() }
         if let popover = controller.popoverPresentationController {
             let bounds = top.view.bounds
             popover.sourceView = top.view
-            popover.sourceRect = CGRect(x: bounds.maxX - 48, y: bounds.maxY - 48, width: 1, height: 1)
-            popover.permittedArrowDirections = [.down, .right]
+            if let anchor, let window = top.view.window {
+                popover.sourceRect = top.view.convert(anchor, from: window)
+                popover.permittedArrowDirections = .any
+            } else {
+                popover.sourceRect = CGRect(x: bounds.maxX - 48, y: bounds.maxY - 48, width: 1, height: 1)
+                popover.permittedArrowDirections = [.down, .right]
+            }
         }
         top.present(controller, animated: true)
     }
