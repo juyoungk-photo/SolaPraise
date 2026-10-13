@@ -158,11 +158,14 @@ struct WatchScreen: View {
         .background(Color(.systemBackground))
         .onChange(of: player.didEnd) { _, ended in
             guard ended else { return }
+            // Asked first, always: an unanswered 「이 영상 끝나면」 would
+            // stop the next video instead.
+            let sleeping = host.takeSleepAtEnd()
             logWatch(completed: true)
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
             // 이어 듣기 is a run: the next episode starts on its own.
-            if !showsChordButton, seriesDirection != DailySeries.Direction.off.rawValue,
+            if !sleeping, !showsChordButton, seriesDirection != DailySeries.Direction.off.rawValue,
                host.hasNext { host.onAdvance?() }
         }
         // A video the player can never show should stop being offered.
@@ -651,6 +654,8 @@ struct WatchScreen: View {
             // No 「Share」 here: YouTube's own player has one on the video.
             // PiP stays — the embed offers none.
             PictureInPictureButton(coordinator: player)
+
+            SleepTimerButton()
 
             // Recording while the video plays.
             //

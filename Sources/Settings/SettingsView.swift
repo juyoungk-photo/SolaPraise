@@ -48,6 +48,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                morningSection
                 ForEach(Purpose.allCases) { purpose in
                     channelSection(for: purpose)
                 }
@@ -143,6 +144,23 @@ struct SettingsView: View {
     }
 
     // MARK: - Player
+
+    /// First: it is the one setting here people come back to change.
+    private var morningSection: some View {
+        Section {
+            NavigationLink {
+                MorningAlarmSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(MorningAlarm.isEnabled ? MorningAlarmSettingsView.summary() : "꺼짐")
+                } label: {
+                    Label("아침 알람", systemImage: "alarm")
+                }
+            }
+        } footer: {
+            Text("정한 시간에 알람이 울리고, 「예배 틀기」를 누르면 모닝워십 라이브나 찬양을 틉니다.")
+        }
+    }
 
     private var playerSection: some View {
         Section {

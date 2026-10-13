@@ -138,6 +138,20 @@ enum DebugHarness {
         return args[i + 1]
     }
 
+    /// Open 아침 알람 settings directly: -uiTestMorningSettings
+    static var morningSettings: Bool { args.contains("-uiTestMorningSettings") }
+
+    /// Answer the morning alarm at launch, as its 「예배 틀기」 would:
+    ///   -uiTestMorningStart
+    static var morningStart: Bool { args.contains("-uiTestMorningStart") }
+
+    /// With -uiTestDock: a 취침 timer of this many SECONDS, so the pause
+    /// can be watched without waiting ten minutes: -uiTestSleepSeconds 20
+    static var sleepSeconds: Int? {
+        guard let i = args.firstIndex(of: "-uiTestSleepSeconds"), i + 1 < args.count else { return nil }
+        return Int(args[i + 1])
+    }
+
     /// Show in-development features (작업실) without a developer account:
     ///   -uiTestDevGate
     static var unlockDevGate: Bool { args.contains("-uiTestDevGate") }

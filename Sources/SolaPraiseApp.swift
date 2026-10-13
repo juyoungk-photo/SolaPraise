@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 import SwiftData
 
 #if canImport(GoogleSignIn)
@@ -50,13 +51,19 @@ struct SolaPraiseApp: App {
     @StateObject private var playerHost = PlayerHost()
     @StateObject private var team = TeamStore()
     @StateObject private var planning = PlanningAuth()
+    /// App level: the morning alarm opens the app on whichever tab, and
+    /// the wait for the stream must outlive any one screen.
+    @StateObject private var morning = MorningPlayback()
 
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // Must happen during launch, before the scene is active.
         BackgroundRefresh.register(container: container)
+        // Before the scene: a tapped notification can be what launches us.
+        UNUserNotificationCenter.current().delegate = AppNotificationDelegate.shared
         #if DEBUG
+        if DebugHarness.morningStart { MorningAlarm.requestStart() }
         if DebugHarness.drainQuota {
             MainActor.assumeIsolated { QuotaLedger().debugDrain() }
         }
@@ -67,6 +74,11 @@ struct SolaPraiseApp: App {
         WindowGroup {
             rootView
                 .overlay { ToastOverlay() }
+                .overlay(alignment: .top) { MorningPlaybackBanner().padding(.top, 8) }
+                .animation(.default, value: morning.phase)
+                .onReceive(NotificationCenter.default.publisher(for: .morningAlarmStart)) { _ in
+                    startMorningIfAsked()
+                }
                 .environmentObject(auth)
                 .environmentObject(quota)
                 .environmentObject(daily)
@@ -74,6 +86,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(playerHost)
                 .environmentObject(team)
                 .environmentObject(planning)
+                .environmentObject(morning)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
@@ -83,6 +96,9 @@ struct SolaPraiseApp: App {
         }
         .modelContainer(container)
         .onChange(of: scenePhase) { _, phase in
+            // The alarm's button may have opened us before the scene was
+            // up to hear about it.
+            if phase == .active { startMorningIfAsked() }
             if phase == .background {
                 BackgroundRefresh.schedule()
                 // Re-arm on the way out so a changed time or a cleared
@@ -90,6 +106,11 @@ struct SolaPraiseApp: App {
                 Task { await ReadingNotifications.schedule() }
             }
         }
+    }
+
+    private func startMorningIfAsked() {
+        guard MorningAlarm.takePendingStart() else { return }
+        morning.start(host: playerHost, client: AppServices.client(auth: auth, quota: quota))
     }
 
     /// Sign-in gate. In DEBUG a launch argument can open the player directly,
@@ -104,6 +125,8 @@ struct SolaPraiseApp: App {
             DebugLeadSheetContainer()
         } else if DebugHarness.showChordSheet {
             NavigationStack { ChordSheetView(session: .debugSample) }
+        } else if DebugHarness.morningSettings {
+            NavigationStack { MorningAlarmSettingsView() }
         } else if let name = DebugHarness.channelPage {
             DebugChannelPage(name: name)
         } else if let path = DebugHarness.contiPagesPath {

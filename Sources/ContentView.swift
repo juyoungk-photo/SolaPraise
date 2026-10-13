@@ -217,6 +217,7 @@ struct ContentView: View {
                 playerHost.play(queue: [PlayableVideo(id: id, title: "Debug playback",
                                                       channelTitle: "Debug")])
                 if !DebugHarness.args.contains("-uiTestExpanded") { playerHost.minimize() }
+                if let seconds = DebugHarness.sleepSeconds { playerHost.setSleepTimer(after: TimeInterval(seconds)) }
             }
             #endif
         }

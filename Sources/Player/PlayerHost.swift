@@ -42,7 +42,10 @@ final class PlayerHost: ObservableObject {
         // through in the floating window. Through the screen's own handler
         // when it is installed, so the watch log records the song.
         coordinator.advanceInPictureInPicture = { [weak self] in
-            guard let self, self.hasNext else { return false }
+            // 취침: 「이 영상 끝나면」 means nothing after it, in PiP too.
+            // Not consumed here: the player then stops and reports the
+            // end, and WatchScreen takes it there, once.
+            guard let self, !self.sleepsAtEnd, self.hasNext else { return false }
             if let advance = self.onAdvance {
                 advance()
             } else {
@@ -161,7 +164,65 @@ final class PlayerHost: ObservableObject {
         mode = .full
     }
 
+    // MARK: - 취침 타이머
+
+    /// When playback stops by itself, for falling asleep to 찬양 or 말씀.
+    ///
+    /// Pausing is all it does: the video stays where it stopped, so the
+    /// morning can pick up from there. Same on iPhone and iPad; it keeps
+    /// counting in PiP, where the app is still running.
+    @Published private(set) var sleepDeadline: Date?
+    /// 「이 영상 끝나면」: nothing plays after the current video.
+    @Published private(set) var sleepsAtEnd = false
+    private var sleepTask: Task<Void, Never>?
+
+    var isSleepTimerOn: Bool { sleepDeadline != nil || sleepsAtEnd }
+
+    func setSleepTimer(minutes: Int) {
+        setSleepTimer(after: TimeInterval(minutes * 60))
+    }
+
+    func setSleepTimer(after seconds: TimeInterval) {
+        cancelSleepTimer()
+        sleepDeadline = Date().addingTimeInterval(seconds)
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.sleepNow()
+        }
+    }
+
+    func sleepAtEndOfVideo() {
+        cancelSleepTimer()
+        sleepsAtEnd = true
+    }
+
+    func cancelSleepTimer() {
+        sleepTask?.cancel()
+        sleepTask = nil
+        sleepDeadline = nil
+        sleepsAtEnd = false
+    }
+
+    /// Called as a video ends: true when the timer was waiting for that,
+    /// so nothing plays next. Once.
+    func takeSleepAtEnd() -> Bool {
+        guard sleepsAtEnd else { return false }
+        sleepsAtEnd = false
+        Toast.shared.show("취침 타이머: 재생을 마쳤습니다", symbol: "moon.zzz.fill", tint: .indigo)
+        return true
+    }
+
+    private func sleepNow() {
+        sleepTask = nil
+        sleepDeadline = nil
+        guard mode != .closed else { return }
+        coordinator.pause()
+        Toast.shared.show("취침 타이머: 재생을 멈췄습니다", symbol: "moon.zzz.fill", tint: .indigo)
+    }
+
     func close() {
+        cancelSleepTimer()
         coordinator.detach()
         queue = []
         index = 0
