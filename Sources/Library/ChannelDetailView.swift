@@ -30,6 +30,7 @@ struct ChannelDetailView: View {
     @State private var isLoadingPlaylist = false
     /// The shared list holds a sealed part this device cannot open.
     @State private var listLocked = SharedChannelList.isLocked
+    @State private var showsPublishing = false
     @State private var errorMessage: String?
 
     private var videos: [CachedVideo] {
@@ -88,22 +89,43 @@ struct ChannelDetailView: View {
                         .padding(.horizontal, 16)
                 }
 
-                // For whoever manages a 교제 channel: keep the members' list
-                // current from here. Signed out there is nothing to see.
-                // Shown to anyone signed in to anything: the manager may be
-                // none of the accounts already connected, and connects here.
-                if auth.isSignedIn || planning.isSignedIn || channelManager.isSignedIn || showsCardForReview,
-                   channel.purpose == .fellowship {
-                    SharedListPublishCard(channelId: channel.youtubeChannelId)
-                        .padding(.horizontal, 16)
-                }
-
                 FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
             }
             .padding(.top, 12)
         }
         .navigationTitle(channel.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
+        // The manager's card, one tap from the top. It used to sit at the
+        // bottom of the page, under every recent video — on a channel that
+        // shows thirty of them nobody scrolled that far, and it read as
+        // missing. Offered to anyone signed in to anything: the manager may
+        // be none of the accounts already connected, and connects in it.
+        .toolbar {
+            if auth.isSignedIn || planning.isSignedIn || channelManager.isSignedIn || showsCardForReview {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showsPublishing = true } label: {
+                        Label("멤버 공유", systemImage: SharedListPublisher.isOn(for: channel.youtubeChannelId)
+                              ? "person.2.wave.2.fill" : "person.2.wave.2")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showsPublishing) {
+            NavigationStack {
+                ScrollView {
+                    SharedListPublishCard(channelId: channel.youtubeChannelId)
+                        .padding(16)
+                }
+                .navigationTitle("멤버에게 공유")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("완료") { showsPublishing = false }
+                    }
+                }
+            }
+        }
         .refreshable { await refresh() }
         .task { if videos.isEmpty { await refresh() } }
     }
@@ -125,7 +147,7 @@ struct ChannelDetailView: View {
     private var emptyExplanation: String {
         "이 채널에는 공개된 영상이 없습니다. '일부 공개' 영상은 채널을 관리하는 계정으로 로그인했을 때만 보입니다. "
             + "교회 공유 폴더의 「관심 채널」 시트에 링크가 올라오면, 로그인 없이도 다음 새로고침 때 여기에 나타납니다. "
-            + "채널을 관리하는 분은 이 페이지 아래 「멤버에게 자동 공유」를 켜면 새 영상이 저절로 올라갑니다."
+            + "채널을 관리하는 분은 오른쪽 위 사람 아이콘(멤버 공유)에서 자동 공유를 켜면 새 영상이 저절로 올라갑니다."
     }
 
     // MARK: - Playlists
