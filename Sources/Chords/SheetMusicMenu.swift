@@ -17,8 +17,15 @@ struct SheetMusicLinks: View {
     /// The channel the song came from, which names its team.
     var channel: String? = nil
     var published: [SheetMusicLink] = []
+    /// How a link opens, when the screen wants a say — the player carries
+    /// the song into PiP first. Otherwise the system opens it.
+    var open: ((URL) -> Void)? = nil
 
-    @Environment(\.openURL) private var openURL
+    @Environment(\.openURL) private var systemOpenURL
+
+    private func openURL(_ url: URL) {
+        if let open { open(url) } else { systemOpenURL(url) }
+    }
 
     /// Top to bottom: 악보 검색 for this song, then the official chart when
     /// there is one, then the big English-language catalogues. The search
@@ -79,11 +86,12 @@ struct SheetMusicMenu<Label: View>: View {
     var channel: String? = nil
     /// Links the channel published itself, which outrank any search.
     var published: [SheetMusicLink] = []
+    var open: ((URL) -> Void)? = nil
     @ViewBuilder var label: Label
 
     var body: some View {
         Menu {
-            SheetMusicLinks(title: title, channel: channel, published: published)
+            SheetMusicLinks(title: title, channel: channel, published: published, open: open)
         } label: {
             label
         }

@@ -67,8 +67,13 @@ enum WorshipSetParser {
 
         for rawLine in description.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
+            // Giving is not a 악보: 「PayPal | info@markersworship.com」 came
+            // out as the team's chart, because the bare-domain match below
+            // took the domain out of the e-mail address.
+            let lower = line.lowercased()
+            guard !["paypal", "후원", "donat", "계좌", "venmo", "zelle"].contains(where: lower.contains) else { continue }
             guard let urlRange = line.range(of: #"https?://[^\s]+"#, options: .regularExpression)
-                    ?? line.range(of: #"[a-z0-9.-]+\.(com|kr|net|org)(/[^\s]*)?"#, options: .regularExpression)
+                    ?? line.range(of: #"(?<![@\w.-])[a-z0-9.-]+\.(com|kr|net|org)(/[^\s]*)?"#, options: .regularExpression)
             else { continue }
 
             var raw = String(line[urlRange])

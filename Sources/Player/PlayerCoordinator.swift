@@ -606,6 +606,18 @@ extension PlayerCoordinator {
         UserDefaults.standard.object(forKey: Self.autoPictureInPictureKey) as? Bool ?? true
     }
 
+    /// Into PiP now, because the app is about to open something else —
+    /// a 악보 page in Safari — and the song should go on over it. Closed
+    /// again on return, like a PiP the app started on its way out. Not
+    /// subject to the auto-PiP setting: this is asked for, a tap at a time.
+    @discardableResult
+    func carryIntoPictureInPicture() -> Bool {
+        guard state == .playing || state == .buffering, !isPictureInPicture, canPictureInPicture else { return false }
+        startedForLeaving = true
+        setPictureInPicture(true)
+        return true
+    }
+
     private func willLeave() {
         guard state == .playing, !isPictureInPicture,
               canPictureInPicture, autoPictureInPicture else { return }

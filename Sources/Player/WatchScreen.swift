@@ -188,8 +188,21 @@ struct WatchScreen: View {
                   let id = current?.id else { return }
             dropFromFeed(id)
         }
+        #if DEBUG
+        // -uiTestOpenSheetSearch: the 악보 검색 link, as the menu opens it,
+        // ten seconds into playback.
+        .task {
+            guard DebugHarness.args.contains("-uiTestOpenSheetSearch") else { return }
+            try? await Task.sleep(for: .seconds(10))
+            guard let current,
+                  let url = SheetMusicSources.plan(title: current.title, channel: current.channelTitle).searchURL else { return }
+            print("[FocusPlayer] opening 악보 검색, state \(player.state)")
+            openKeepingSong(url)
+        }
+        #endif
         .onChange(of: player.isReady) { _, ready in
             #if DEBUG
+
             guard ready, DebugHarness.seeksToEnd, player.duration > DebugHarness.tailSeconds else { return }
             player.seek(to: player.duration - DebugHarness.tailSeconds)
             player.play()
@@ -552,12 +565,27 @@ struct WatchScreen: View {
         let suggestions = SongSearchSuggestions.make(
             title: current.title, description: descriptionForSuggestions,
             channel: current.channelTitle)
-        if !suggestions.isEmpty {
+        if !suggestions.isEmpty || DevGate.isUnlocked(auth: auth, planning: planning) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    // 음원 찾기, as one chip at the head of the row rather
+                    // than a full-width row of its own. Development only —
+                    // AudioSourceMenu hides itself otherwise.
+                    AudioSourceMenu(title: current.title, seconds: current.durationSeconds,
+                                    artist: current.channelTitle) {
+                        Label("음원", systemImage: "waveform.badge.magnifyingglass")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    if !suggestions.isEmpty {
+                        Image(systemName: "magnifyingglass")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(suggestions) { suggestion in
                         Button {
                             searching = SearchRequest(query: suggestion.query)
@@ -777,34 +805,18 @@ struct WatchScreen: View {
             // official chart — which usually exists and is sold by the team
             // that wrote the song — was invisible almost every time.
             if showsChordButton, let current {
-                AudioSourceMenu(title: current.title,
-                                seconds: current.durationSeconds,
-                                artist: current.channelTitle) {
+                // The song carries on in PiP while the 악보 page is open.
+                SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks,
+                               open: { url in openKeepingSong(url) }) {
                     HStack(spacing: 6) {
-                        Image(systemName: "waveform.badge.magnifyingglass")
+                        Image(systemName: "doc.text.magnifyingglass")
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("음원 찾기").font(.subheadline)
-                            // Says why, because the reason is not obvious:
-                            // the app cannot analyse what it is playing.
-                            Text("파일을 받으면 작업실에서 코드 분석이 됩니다")
+                            Text(sheetLinks.isEmpty ? "공식 악보 찾기" : "공식 악보")
+                                .font(.subheadline)
+                            Text("찾는 동안 음악은 PiP로 계속됩니다")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption2)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground),
-                                in: RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-
-                SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                        Text(sheetLinks.isEmpty ? "공식 악보 찾기" : "공식 악보")
-                            .font(.subheadline)
                         if !sheetLinks.isEmpty {
                             Text("\(sheetLinks.count)")
                                 .font(.caption.monospacedDigit())
@@ -824,6 +836,20 @@ struct WatchScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 14)
+    }
+
+    /// Opens a page outside the app with the song still going: into PiP
+    /// first, then — once the floating window has had a moment to start —
+    /// the page. Coming back closes the window again.
+    private func openKeepingSong(_ url: URL) {
+        if host.coordinator.carryIntoPictureInPicture() {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                await UIApplication.shared.open(url)
+            }
+        } else {
+            UIApplication.shared.open(url)
+        }
     }
 
     /// 12,300 → "1.2만", 4,500,000 → "450만"

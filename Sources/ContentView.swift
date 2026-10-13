@@ -229,8 +229,13 @@ struct ContentView: View {
             if daily.isGateOwed { showDailyGate = true }
             #if DEBUG
             if let id = DebugHarness.dockVideoId {
-                playerHost.play(queue: [PlayableVideo(id: id, title: "Debug playback",
-                                                      channelTitle: "Debug")])
+                // -uiTestDockTitle "…": a real title, so 찬양's rows (악보,
+                // search suggestions) have something to work from.
+                let title = DebugHarness.args.firstIndex(of: "-uiTestDockTitle")
+                    .flatMap { DebugHarness.args.indices.contains($0 + 1) ? DebugHarness.args[$0 + 1] : nil }
+                playerHost.play(queue: [PlayableVideo(id: id, title: title ?? "Debug playback",
+                                                      channelTitle: title == nil ? "Debug" : "MARKERS WORSHIP")],
+                                purpose: title == nil ? nil : .worship)
                 if !DebugHarness.args.contains("-uiTestExpanded") { playerHost.minimize() }
                 if let seconds = DebugHarness.sleepSeconds { playerHost.setSleepTimer(after: TimeInterval(seconds)) }
             }
