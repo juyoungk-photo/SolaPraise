@@ -46,6 +46,16 @@ final class PlayerHost: ObservableObject {
     let coordinator = PlayerCoordinator()
 
     private var pipWatch: AnyCancellable?
+    private var pipSettledWatch: AnyCancellable?
+
+    /// The system's window has the video and its animation is over: the
+    /// player page goes, in one frame.
+    private func pictureInPictureHasSettled() {
+        guard mode == .full, coordinator.isPictureInPicture else { return }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { mode = .pip }
+    }
 
     init() {
         // When the floating window goes away — its 「돌아가기」, or its close
@@ -67,19 +77,20 @@ final class PlayerHost: ObservableObject {
                 guard let self else { return }
                 var still = Transaction()
                 still.disablesAnimations = true
+                withTransaction(still) { self.videoInPictureInPicture = inPiP }
                 if inPiP {
                     self.leavingForPictureInPicture = false
                     guard self.mode == .full else { return }
-                    // After the system's own animation, not at its start.
-                    // WebKit leaves a black backdrop where the video was
-                    // while the video flies to its corner; with the player
-                    // page removed at the start, that band hung alone over
-                    // the tab for ~0.4 s — the flicker. Kept until it is
-                    // done, the page goes in one cut.
+                    // The page leaves when iOS says its animation is done
+                    // (pictureInPictureSettled, below) — not at the start,
+                    // when WebKit's black backdrop was left hanging alone
+                    // over the tab, and not on a guessed timer, which iOS
+                    // outlasted (0.75 s measured on iPad). Only a fallback
+                    // here, just past that, for when the settled event never
+                    // comes — the iPhone simulator never sends it.
                     Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: .milliseconds(450))
-                        guard let self, self.mode == .full, self.coordinator.isPictureInPicture else { return }
-                        withTransaction(still) { self.mode = .pip }
+                        try? await Task.sleep(for: .milliseconds(800))
+                        self?.pictureInPictureHasSettled()
                     }
                 } else {
                     guard self.mode == .pip else { return }
@@ -91,6 +102,8 @@ final class PlayerHost: ObservableObject {
                     }
                 }
             }
+        pipSettledWatch = coordinator.pictureInPictureSettled
+            .sink { [weak self] in self?.pictureInPictureHasSettled() }
         // A song ending in PiP moves on to the next one, so a 콘티 plays
         // through in the floating window. Through the screen's own handler
         // when it is installed, so the watch log records the song.
@@ -203,6 +216,13 @@ final class PlayerHost: ObservableObject {
 
     /// Asked for, not yet confirmed — see dock().
     private var leavingForPictureInPicture = false
+
+    /// The system's window has the video. The stage hides the inline video
+    /// from this moment — not from the request, which left a black gap
+    /// while PiP was being set up, and not from the page's removal, which
+    /// let WebKit's 「playing in picture in picture」 placeholder flash
+    /// between the video and its window.
+    @Published private(set) var videoInPictureInPicture = false
 
     /// Leaving the full player — another tab, the chevron, a pull down.
     ///
@@ -323,6 +343,8 @@ struct PlayerStage: View {
     @State private var pullIsSideways: Bool?
     /// The pull in progress already handed the video to PiP.
     @State private var handedOver = false
+    /// How far the pull in progress has come down.
+    @State private var pull: CGFloat = 0
 
     var body: some View {
         if host.isVisible, let current = host.current {
@@ -358,7 +380,14 @@ struct PlayerStage: View {
                         CoordinatorOverlays(coordinator: host.coordinator, host: host, expanded: true)
                     }
                     .frame(width: videoWidth, height: videoHeight)
-                    .offset(x: (fullWidth - videoWidth) / 2)
+                    // Under the finger from the first point of a pull, and
+                    // a little smaller the further it goes — so the pull is
+                    // answered at once, before PiP has taken the video.
+                    .scaleEffect(1 - min(pull, 240) / 1200, anchor: .top)
+                    // Handed to PiP: from here the system's window is the
+                    // video. See videoInPictureInPicture.
+                    .opacity(host.videoInPictureInPicture || host.mode == .pip ? 0 : 1)
+                    .offset(x: (fullWidth - videoWidth) / 2, y: pull)
                     // High priority: the web view's own recognisers would
                     // otherwise claim a pull that starts on the video.
                     .highPriorityGesture(pullDown)
@@ -372,9 +401,12 @@ struct PlayerStage: View {
         }
     }
 
-    /// A pull down on the video: into PiP as soon as it has clearly begun.
-    /// Nothing on screen follows the finger — the system's own animation
-    /// carries the video to its corner. Sideways swipes are left alone.
+    /// A pull down on the video. The video follows the finger from the
+    /// first point; a playing song goes to PiP as soon as the pull is
+    /// clearly downward (16 pt) — the system's animation then carries it to
+    /// the corner from wherever the finger has taken it. Paused, the pull
+    /// closes the player, but only when let go past 80 pt: closing is not
+    /// undone by pulling back. Sideways swipes are left alone.
     ///
     /// `minimumDistance` is small but not zero: a gesture that began at
     /// zero would swallow the taps meant for YouTube's play and pause.
@@ -384,13 +416,25 @@ struct PlayerStage: View {
                 if pullIsSideways == nil {
                     pullIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
                 }
-                guard pullIsSideways == false, !handedOver, value.translation.height > 40 else { return }
-                handedOver = true
-                host.dock()
+                guard pullIsSideways == false else { return }
+                pull = max(0, value.translation.height)
+                let playing = host.coordinator.state == .playing || host.coordinator.state == .buffering
+                if playing, !handedOver, pull > 16 {
+                    handedOver = true
+                    host.dock()
+                }
             }
-            .onEnded { _ in
+            .onEnded { value in
+                let closes = !handedOver && pullIsSideways == false
+                    && (value.translation.height > 80 || value.predictedEndTranslation.height > 200)
                 pullIsSideways = nil
                 handedOver = false
+                if closes {
+                    pull = 0
+                    host.dock()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { pull = 0 }
+                }
             }
     }
 }

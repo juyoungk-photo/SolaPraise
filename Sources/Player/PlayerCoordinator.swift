@@ -110,6 +110,8 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 
     /// Whether the video is showing in the system's floating window.
     @Published private(set) var isPictureInPicture = false
+    /// The system has finished moving the video into its PiP window.
+    let pictureInPictureSettled = PassthroughSubject<Void, Never>()
     /// Whether a PiP request has somewhere to go: the frame holding the
     /// <video> has introduced itself, and the device supports PiP at all.
     @Published private(set) var canPictureInPicture = false
@@ -490,6 +492,12 @@ extension PlayerCoordinator {
         v.addEventListener('webkitpresentationmodechanged', function () {
           post({ event: 'pip', mode: v.webkitPresentationMode });
         });
+        // When the system has finished putting the video into its window
+        // — the end of its animation, not the start that the event above
+        // reports. What the player waits for before it leaves the screen.
+        v.addEventListener('enterpictureinpicture', function () {
+          post({ event: 'pipSettled', on: true });
+        });
         // Whether the method exists, not webkitSupportsPresentationMode:
         // that answers false until the video has loaded media, which is
         // after this runs, and would hide the button for good.
@@ -791,10 +799,16 @@ extension PlayerCoordinator: WKScriptMessageHandler {
             canPictureInPicture = (body["pip"] as? Bool ?? false)
                 && Self.systemSupportsPictureInPicture
 
+        case "pipSettled":
+            #if DEBUG
+            print("[FocusPlayer] pip settled \(CACurrentMediaTime())")
+            #endif
+            pictureInPictureSettled.send()
+
         case "pip":
             isPictureInPicture = (body["mode"] as? String) == "picture-in-picture"
             #if DEBUG
-            print("[FocusPlayer] pip \(isPictureInPicture)")
+            print("[FocusPlayer] pip \(isPictureInPicture) \(CACurrentMediaTime())")
             #endif
 
         case "error":
