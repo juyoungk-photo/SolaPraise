@@ -163,11 +163,17 @@ final class FeedStore: ObservableObject {
         #if DEBUG
         // -uiTestSharedList "<the list's text>": as if the folder held it.
         if let at = DebugHarness.args.firstIndex(of: "-uiTestSharedList"), at + 1 < DebugHarness.args.count {
-            read = SharedChannelList.listing(in: DebugHarness.args[at + 1])
+            read = SharedChannelList.listing(in: DebugHarness.args[at + 1], password: SharedChannelList.password)
         }
         #endif
-        if read == nil, let folderId = ContiFolder.folderId { read = await SharedChannelList.fetch(folderId: folderId) }
+        if read == nil, let folderId = ContiFolder.folderId {
+            read = await SharedChannelList.fetch(folderId: folderId, password: SharedChannelList.password)
+        }
         guard let listing = read else { return }
+        SharedChannelList.isLocked = listing.locked
+        // A part this device cannot open lists things it cannot know about:
+        // add what it can read, and take nothing away.
+        let mayRemove = !listing.locked
 
         // Playlists.
         let cached = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
@@ -177,7 +183,7 @@ final class FeedStore: ObservableObject {
                                           purpose: .fellowship, isSharedListed: true))
         }
         let listed = Set(listing.playlists)
-        for playlist in cached where playlist.isSharedListed && !listed.contains(playlist.playlistId) {
+        for playlist in cached where mayRemove && playlist.isSharedListed && !listed.contains(playlist.playlistId) {
             context.delete(playlist)
         }
 
@@ -212,7 +218,7 @@ final class FeedStore: ObservableObject {
         }
         // Only on a complete read: a playlist that failed to load must not
         // take its services off everyone's page.
-        if complete {
+        if complete, mayRemove {
             let keep = Set(wanted)
             for video in videos where video.isSharedListed && !keep.contains(video.videoId) {
                 context.delete(video)
@@ -226,14 +232,14 @@ final class FeedStore: ObservableObject {
         let stillListed = Set(cached.filter { $0.isSharedListed && listed.contains($0.playlistId) }.map(\.channelId))
             .union(keptVideoChannels)
         for channel in (try? context.fetch(FetchDescriptor<Channel>())) ?? []
-        where added.contains(channel.youtubeChannelId) && !stillListed.contains(channel.youtubeChannelId) {
+        where mayRemove && added.contains(channel.youtubeChannelId) && !stillListed.contains(channel.youtubeChannelId) {
             context.delete(channel)
             added.remove(channel.youtubeChannelId)
         }
         UserDefaults.standard.set(Array(added), forKey: key)
         try? context.save()
         #if DEBUG
-        print("[SolaPraise] shared list: \(listing.playlists.count) playlist(s), \(listing.videos.count) video(s), \(wanted.count) video(s) shown")
+        print("[SolaPraise] shared list: \(listing.playlists.count) playlist(s), \(listing.videos.count) video(s), \(wanted.count) video(s) shown\(listing.locked ? ", LOCKED" : "")")
         #endif
     }
 

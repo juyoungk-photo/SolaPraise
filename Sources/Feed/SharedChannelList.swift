@@ -64,6 +64,42 @@ enum SharedChannelList {
     struct Listing: Equatable {
         var playlists: [String]
         var videos: [String]
+        /// The list holds a sealed part this device could not open — no
+        /// church password yet, or the wrong one (SharedListCipher). What
+        /// it lists is unknown, so nothing may be removed on its account.
+        var locked = false
+    }
+
+    /// The list, its sealed part opened with the church's password.
+    static func listing(in text: String, password: String?) -> Listing {
+        let (sealed, rest) = SharedListCipher.split(text)
+        var opened = rest
+        var locked = false
+        for cell in sealed {
+            if let password, let plain = SharedListCipher.open(cell, password: password) {
+                opened += "\n" + plain
+            } else {
+                locked = true
+            }
+        }
+        var result = listing(in: opened)
+        result.locked = locked
+        return result
+    }
+
+    /// The church's password, as a member entered it. Keychain, this device.
+    static var password: String? {
+        get { Keychain.read("churchListPassword") }
+        set {
+            if let newValue, !newValue.isEmpty { Keychain.write("churchListPassword", value: newValue) }
+            else { Keychain.delete("churchListPassword") }
+        }
+    }
+
+    /// Whether the last read found a sealed part this device cannot open.
+    static var isLocked: Bool {
+        get { UserDefaults.standard.bool(forKey: "sharedList.locked") }
+        set { UserDefaults.standard.set(newValue, forKey: "sharedList.locked") }
     }
 
     /// Link by link: a link that names a playlist is the playlist, even
@@ -101,7 +137,12 @@ enum SharedChannelList {
     /// The ids the church's list names; nil when there is no list or it
     /// could not be read — never an empty list for a failed read, because
     /// an empty list removes what it used to name.
-    static func fetch(folderId: String) async -> Listing? {
+    static func fetch(folderId: String, password: String?) async -> Listing? {
+        await fetchText(folderId: folderId).map { listing(in: $0, password: password) }
+    }
+
+    /// The list's text as the folder holds it — sealed parts still sealed.
+    static func fetchText(folderId: String) async -> String? {
         guard let list = await locate(folderId: folderId) else { return nil }
         for url in exportURLs(id: list.id, link: list.link) {
             guard let (data, response) = try? await URLSession.shared.data(from: url),
@@ -109,7 +150,7 @@ enum SharedChannelList {
                   let text = String(data: data, encoding: .utf8),
                   // A sign-in page is a 200 too.
                   !text.lowercased().contains("<html") else { continue }
-            return listing(in: text)
+            return text
         }
         return nil
     }

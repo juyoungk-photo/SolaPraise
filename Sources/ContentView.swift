@@ -190,7 +190,8 @@ struct ContentView: View {
             }
             for channelId in SharedListPublisher.channelsSwitchedOn where SharedListPublisher.isDue(channelId) {
                 let outcome = await SharedListPublisher.publish(
-                    channelId: channelId, client: AppServices.client(auth: auth, quota: quota), sheets: sheets)
+                    channelId: channelId, client: AppServices.client(auth: auth, quota: quota), sheets: sheets,
+                    password: SharedChannelList.password)
                 #if DEBUG
                 print("[SharedList] publish \(channelId.prefix(6))… → \(outcome)")
                 #endif

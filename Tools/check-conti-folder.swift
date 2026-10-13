@@ -11,6 +11,7 @@
 //  Run:
 //      swiftc -O -o /tmp/contifolder \
 //          Sources/Team/ContiFolder.swift Sources/Feed/SharedChannelList.swift \
+//          Sources/Feed/SharedListCipher.swift Sources/Team/Keychain.swift \
 //          Tools/check-conti-folder.swift
 //      /tmp/contifolder
 //

@@ -26,6 +26,8 @@ struct ChannelDetailView: View {
 
     @Query private var allPlaylists: [CachedPlaylist]
     @State private var isLoadingPlaylist = false
+    /// The shared list holds a sealed part this device cannot open.
+    @State private var listLocked = SharedChannelList.isLocked
     @State private var errorMessage: String?
 
     private var videos: [CachedVideo] {
@@ -40,6 +42,13 @@ struct ChannelDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
+                // The church's list is sealed and this device cannot open it
+                // yet: say so where the missing services would be.
+                if channel.purpose == .fellowship, listLocked {
+                    ChurchPasswordCard { await refresh() } isStillLocked: { SharedChannelList.isLocked }
+                        .padding(.horizontal, 16)
+                }
+
                 // Playlists first: a channel like this one keeps its
                 // services as playlists, and its recent uploads come second.
                 if !playlists.isEmpty { playlistSection }
@@ -202,6 +211,7 @@ struct ChannelDetailView: View {
     private func refresh() async {
         let client = auth.canReadYouTube ? AppServices.client(auth: auth, quota: quota) : nil
         await feed.refresh(purpose: channel.purpose, context: modelContext, client: client)
+        listLocked = SharedChannelList.isLocked
     }
 }
 
@@ -447,6 +457,8 @@ struct SharedListPublishCard: View {
     @State private var isOn = false
     @State private var isWorking = false
     @State private var outcome: SharedListPublisher.Outcome?
+    @State private var hasPassword = SharedChannelList.password != nil
+    @State private var passwordInput = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -455,10 +467,33 @@ struct SharedListPublishCard: View {
                     .font(.subheadline.weight(.semibold))
             }
             Text("이 채널을 관리하는 계정이면, 일부 공개 재생목록과 새로 올라온 영상을 교회 공유 폴더의 「관심 채널」 시트에 올립니다. "
+                 + "목록은 교회 암호로 암호화되어, 폴더 링크만으로는 읽을 수 없습니다. 멤버는 같은 암호를 한 번 입력합니다. "
                  + "앱을 열 때마다(한 시간에 한 번까지) 새 영상을 더합니다. 비공개 영상은 올리지 않습니다.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if hasPassword {
+                HStack {
+                    Label("교회 암호가 이 기기에 저장되어 있습니다", systemImage: "lock.fill")
+                        .font(.caption)
+                    Spacer()
+                    Button("바꾸기") { hasPassword = false }
+                        .font(.caption)
+                }
+            } else {
+                HStack {
+                    SecureField("교회 암호 (멤버와 같은 암호)", text: $passwordInput)
+                        .textContentType(.password)
+                        .textFieldStyle(.roundedBorder)
+                    Button("저장") {
+                        SharedChannelList.password = passwordInput
+                        passwordInput = ""
+                        hasPassword = true
+                        if isOn { Task { await publish() } }
+                    }
+                    .disabled(passwordInput.count < 4)
+                }
+            }
             if isWorking {
                 ProgressView().controlSize(.small)
             } else if let outcome {
@@ -486,7 +521,8 @@ struct SharedListPublishCard: View {
         let sheets = SheetsClient { [auth, planning] in
             usePlanning ? try await planning.token() : try await auth.accessToken()
         }
-        outcome = await SharedListPublisher.publish(channelId: channelId, client: client, sheets: sheets)
+        outcome = await SharedListPublisher.publish(channelId: channelId, client: client, sheets: sheets,
+                                                    password: SharedChannelList.password)
     }
 
     private func isProblem(_ outcome: SharedListPublisher.Outcome) -> Bool {
@@ -494,5 +530,65 @@ struct SharedListPublishCard: View {
         case .added, .upToDate: return false
         default: return true
         }
+    }
+}
+
+// MARK: - The church's password
+
+/// Where a member enters the church's password, once: the shared list's
+/// sealed part opens with it (SharedListCipher). Kept in the Keychain.
+struct ChurchPasswordCard: View {
+    let reload: () async -> Void
+    let isStillLocked: () -> Bool
+
+    @State private var input = ""
+    @State private var isChecking = false
+    @State private var wrong = false
+
+    init(reload: @escaping () async -> Void, isStillLocked: @escaping () -> Bool) {
+        self.reload = reload
+        self.isStillLocked = isStillLocked
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("교회 멤버 암호", systemImage: "lock")
+                .font(.subheadline.weight(.semibold))
+            Text("교회가 일부 공개 예배 목록을 암호로 잠가 두었습니다. 교회에서 받은 암호를 한 번 입력하면 이 기기에서 계속 보입니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                SecureField("암호", text: $input)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await check() } }
+                if isChecking {
+                    ProgressView()
+                } else {
+                    Button("열기") { Task { await check() } }
+                        .disabled(input.isEmpty)
+                }
+            }
+            if wrong {
+                Text("암호가 맞지 않습니다.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func check() async {
+        isChecking = true
+        defer { isChecking = false }
+        SharedChannelList.password = input
+        await reload()
+        wrong = isStillLocked()
+        // Emptied either way: a wrong one left in the field had the next
+        // attempt typed onto its end.
+        if wrong { SharedChannelList.password = nil }
+        input = ""
     }
 }
