@@ -169,7 +169,7 @@ struct ContentView: View {
         // "show me that", not "stop this".
         .onChange(of: selection) { _, _ in
             guard AppLayout.usesCustomTabBar, playerHost.mode == .full else { return }
-            withAnimation(WatchScreen.stageAnimation) { playerHost.minimize() }
+            withAnimation(WatchScreen.stageAnimation) { playerHost.dock() }
         }
         // 음원 찾기 can be opened from four places, none of them 작업실. When
         // it hands over a file, this is what takes you to where it is

@@ -19,6 +19,7 @@
 //
 
 import SwiftUI
+import Combine
 
 @MainActor
 final class PlayerHost: ObservableObject {
@@ -27,6 +28,10 @@ final class PlayerHost: ObservableObject {
         case closed
         case full
         case mini
+        /// Playing in the system's floating PiP window, inside the app or
+        /// out of it. The stage draws nothing — the web view stays where it
+        /// is, because PiP plays from it — and reserves no space.
+        case pip
     }
 
     @Published private(set) var mode: Mode = .closed
@@ -37,7 +42,21 @@ final class PlayerHost: ObservableObject {
     /// never rebuilt by a change of presentation.
     let coordinator = PlayerCoordinator()
 
+    private var pipWatch: AnyCancellable?
+
     init() {
+        // When the floating window goes away — its 「돌아가기」, or its close
+        // button — the player comes back: full if the song is still going
+        // (that is what 「돌아가기」 means), docked if it stopped, so the
+        // song is still one tap away rather than gone.
+        pipWatch = coordinator.$isPictureInPicture
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] inPiP in
+                guard let self, !inPiP, self.mode == .pip else { return }
+                let playing = self.coordinator.state == .playing || self.coordinator.state == .buffering
+                withAnimation(WatchScreen.stageAnimation) { self.mode = playing ? .full : .mini }
+            }
         // A song ending in PiP moves on to the next one, so a 콘티 plays
         // through in the floating window. Through the screen's own handler
         // when it is installed, so the watch log records the song.
@@ -96,6 +115,9 @@ final class PlayerHost: ObservableObject {
 
         self.queue = cleaned
         index = cleaned.firstIndex { $0.id == chosen.id } ?? 0
+        // Something new was chosen to watch: out of the floating window and
+        // onto the screen.
+        if coordinator.isPictureInPicture { coordinator.setPictureInPicture(false) }
         mode = .full
     }
 
@@ -159,8 +181,35 @@ final class PlayerHost: ObservableObject {
         mode = .mini
     }
 
+    /// Leaving the full player — a tab chosen, the chevron, a drag down:
+    /// into the system's PiP window when it can take the song, the docked
+    /// player when it cannot (paused, an embed PiP refuses, PiP turned off
+    /// on the device) or when 설정 asks for the dock.
+    func dock() {
+        guard mode == .full else { return }
+        guard Self.leavesIntoPictureInPicture, coordinator.enterPictureInPicture() else {
+            mode = .mini
+            return
+        }
+        mode = .pip
+        // Asked for is not started: if the window has not appeared in a
+        // moment and a half, the song must not go on unseen — dock it.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.mode == .pip, !self.coordinator.isPictureInPicture else { return }
+            withAnimation(WatchScreen.stageAnimation) { self.mode = .mini }
+        }
+    }
+
+    /// 설정 › 플레이어: leaving the player goes to PiP (default) or the dock.
+    static let leavesIntoPictureInPictureKey = "player.leavesIntoPictureInPicture"
+    static var leavesIntoPictureInPicture: Bool {
+        UserDefaults.standard.object(forKey: leavesIntoPictureInPictureKey) as? Bool ?? true
+    }
+
     func expand() {
-        guard mode == .mini else { return }
+        if mode == .pip { coordinator.setPictureInPicture(false) }
+        guard mode == .mini || mode == .pip else { return }
         mode = .full
     }
 
@@ -266,11 +315,15 @@ struct PlayerStage: View {
     /// Whether the drag in progress began sideways — decided on its first
     /// movement, nil between drags.
     @State private var dragIsSideways: Bool?
+    /// The drag in progress already handed the video to PiP.
+    @State private var handedToPictureInPicture = false
 
     var body: some View {
         if host.isVisible, let current = host.current {
             GeometryReader { geo in
-                let mini = host.mode == .mini
+                // Docked and PiP share the docked geometry; PiP just draws
+                // none of it.
+                let mini = host.mode != .full
                 let fullWidth = geo.size.width
                 // The measured top of the tab bar, converted into this
                 // view's space. Falls back to the full height only until the
@@ -461,6 +514,11 @@ struct PlayerStage: View {
                     .highPriorityGesture(dragGesture(mini: mini, travel: travel))
                 }
                 .animation(WatchScreen.stageAnimation, value: host.mode)
+                // In PiP the video is in the system's window, and what is left
+                // here is its empty frame. Kept, not removed: PiP plays from
+                // this web view.
+                .opacity(host.mode == .pip ? 0 : 1)
+                .allowsHitTesting(host.mode != .pip)
             }
             // The top safe area is respected in both modes. Ignoring it in
             // full mode ran the video under the status bar, and the embed
@@ -492,10 +550,29 @@ struct PlayerStage: View {
                 if dragIsSideways == nil {
                     dragIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
                 }
-                guard dragIsSideways == false else { return }
+                guard dragIsSideways == false, !handedToPictureInPicture else { return }
+                // STRAIGHT INTO PiP. A pull down that has clearly begun hands
+                // the video to the system's window at once: its own animation
+                // to the corner is smoother than any shrink drawn here, and
+                // the window is then dragged as the system drags it. The
+                // finger cannot be handed over with it — the window moves on
+                // the next drag.
+                if !mini, value.translation.height > 40, PlayerHost.leavesIntoPictureInPicture,
+                   host.coordinator.canPictureInPicture,
+                   host.coordinator.state == .playing || host.coordinator.state == .buffering {
+                    handedToPictureInPicture = true
+                    drag = 0
+                    host.dock()
+                    return
+                }
                 drag = value.translation.height
             }
             .onEnded { value in
+                if handedToPictureInPicture {
+                    handedToPictureInPicture = false
+                    dragIsSideways = nil
+                    return
+                }
                 let moved = value.translation.height
                 let thrown = value.predictedEndTranslation.height
                 let sideways = dragIsSideways == true
@@ -510,7 +587,7 @@ struct PlayerStage: View {
                     let commit = min(travel * 0.33, 180)
                     let fling = min(travel * 0.6, 360)
                     if !mini, moved > commit || thrown > fling {
-                        host.minimize()
+                        host.dock()
                     } else if mini, -moved > commit || -thrown > fling {
                         host.expand()
                     }

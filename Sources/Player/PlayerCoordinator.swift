@@ -610,6 +610,16 @@ extension PlayerCoordinator {
     /// a 악보 page in Safari — and the song should go on over it. Closed
     /// again on return, like a PiP the app started on its way out. Not
     /// subject to the auto-PiP setting: this is asked for, a tap at a time.
+    /// Into PiP inside the app, to stay there — the player left for
+    /// another tab. Unlike carryIntoPictureInPicture, coming back to the
+    /// app does not close it; the window's own buttons do.
+    @discardableResult
+    func enterPictureInPicture() -> Bool {
+        guard state == .playing || state == .buffering, !isPictureInPicture, canPictureInPicture else { return false }
+        setPictureInPicture(true)
+        return true
+    }
+
     @discardableResult
     func carryIntoPictureInPicture() -> Bool {
         guard state == .playing || state == .buffering, !isPictureInPicture, canPictureInPicture else { return false }
