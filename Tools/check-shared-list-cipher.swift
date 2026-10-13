@@ -78,6 +78,17 @@ struct CheckSharedListCipher {
         check("a sealed cell is not read as a /live/ link",
               SharedChannelList.listing(in: tricky, password: nil).videos.isEmpty)
 
+        // A channel that keeps posting: 1,000 entries, the longest kind of
+        // link, must fit cells a sheet will take and all read back.
+        let many = (0..<1000).map { "https://www.youtube.com/playlist?list=PL" + String(format: "%032d", $0) }
+        let cells = SharedListCipher.sealInCells(many, password: password) ?? []
+        let longest = cells.map(\.count).max() ?? 0
+        check("a long list goes into several cells, each within a cell's limit",
+              cells.count == 4 && longest < SharedListCipher.cellLimit, "\(cells.count) cells, longest \(longest)")
+        let back = SharedChannelList.listing(in: cells.joined(separator: ","), password: password)
+        check("every entry of every cell reads back", back.playlists.count == 1000 && !back.locked,
+              "got \(back.playlists.count)")
+
         print(failures == 0 ? "\nall shared list cipher checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

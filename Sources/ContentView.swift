@@ -19,6 +19,7 @@ struct ContentView: View {
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
     @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var channelManager: ChannelManagerAuth
 
     /// Recomputed as the roster loads and as sign-in changes, so the tab
     /// appears without a relaunch.
@@ -182,15 +183,16 @@ struct ContentView: View {
         // sheet is the only place it lives.
         // The channel manager's app keeps the members' 관심 채널 list
         // current: new unlisted services go up without anyone pasting links.
-        .task(id: auth.isSignedIn) {
-            guard auth.isSignedIn else { return }
+        .task(id: auth.isSignedIn || channelManager.isSignedIn) {
+            guard auth.isSignedIn || channelManager.isSignedIn else { return }
             let usePlanning = planning.isSignedIn
             let sheets = SheetsClient { [auth, planning] in
                 usePlanning ? try await planning.token() : try await auth.accessToken()
             }
             for channelId in SharedListPublisher.channelsSwitchedOn where SharedListPublisher.isDue(channelId) {
                 let outcome = await SharedListPublisher.publish(
-                    channelId: channelId, client: AppServices.client(auth: auth, quota: quota), sheets: sheets,
+                    channelId: channelId,
+                    client: SharedListPublisher.client(auth: auth, quota: quota, manager: channelManager), sheets: sheets,
                     password: SharedChannelList.password)
                 #if DEBUG
                 print("[SharedList] publish \(channelId.prefix(6))… → \(outcome)")

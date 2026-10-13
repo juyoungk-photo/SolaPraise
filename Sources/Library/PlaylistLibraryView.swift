@@ -81,6 +81,11 @@ struct PlaylistLibraryView: View {
             }
             .refreshable { await load() }
             .task { if auth.isSignedIn, state.value == nil { await load() } }
+            // 「변경」: the list is the old account's until it is read again.
+            .onChange(of: auth.email) { _, _ in
+                state.value = nil
+                if auth.isSignedIn { Task { await load() } }
+            }
             // Signing in from the row above has to fill the section it was
             // standing in; nothing else here re-triggers the load.
             .onChange(of: auth.isSignedIn) { _, signedIn in
@@ -244,7 +249,15 @@ struct PlaylistLibraryView: View {
                 HStack {
                     Text("내 YouTube 재생목록")
                     Spacer()
-                    if auth.isSignedIn { AccountTag(use: .youtube).textCase(nil) }
+                    if auth.isSignedIn {
+                        AccountTag(use: .youtube).textCase(nil)
+                        // Another of your accounts' playlists, without a
+                        // trip to 설정.
+                        Button("변경") { Task { await auth.switchAccount() } }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                            .textCase(nil)
+                    }
                 }
             }
         }

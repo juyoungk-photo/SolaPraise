@@ -60,7 +60,7 @@ enum SharedListPublisher {
             case .listIsNotSheet:
                 return "공유 폴더의 「관심 채널」이 Google 문서입니다. 앱이 채우려면 Google 시트여야 합니다."
             case .notManager:
-                return "이 계정으로는 이 채널의 일부 공개 영상이 보이지 않습니다. 채널을 관리하는 YouTube 계정으로 로그인해야 합니다."
+                return "이 계정으로는 이 채널의 일부 공개 영상이 보이지 않습니다. 「채널 관리 계정 연결」에서 채널을 관리하는 계정(브랜드 채널이면 그 채널)을 고르세요."
             case let .failed(message): return "공유 목록에 쓰지 못했습니다: \(message)"
             }
         }
@@ -95,6 +95,13 @@ enum SharedListPublisher {
 
     // MARK: - Publishing
 
+    /// Reads the channel as its manager when that account is connected,
+    /// otherwise as the app's YouTube sign-in.
+    static func client(auth: GoogleAuthManager, quota: QuotaLedger, manager: ChannelManagerAuth) -> YouTubeAPIClient {
+        YouTubeAPIClient(auth: auth, quota: quota,
+                         token: manager.isSignedIn ? { try await manager.token() } : nil)
+    }
+
     static func publish(channelId: String, client: YouTubeAPIClient, sheets: SheetsClient,
                         password: String?) async -> Outcome {
         guard let password, !password.isEmpty else { return .needsPassword }
@@ -104,7 +111,9 @@ enum SharedListPublisher {
         guard SharedChannelList.isSheet(entry) else { return .listIsNotSheet }
 
         // What this account can see that members cannot.
-        var playlists = (try? await client.channelPlaylists(channelId: channelId)) ?? []
+        // All of them: a channel that posts every service as a playlist
+        // passes any fixed number sooner or later.
+        var playlists = (try? await client.channelPlaylists(channelId: channelId, limit: .max)) ?? []
         if let mine = try? await client.myChannels(), mine.contains(where: { $0.id == channelId }),
            let own = try? await client.myPlaylists() {
             for playlist in own where !playlists.contains(where: { $0.id == playlist.id }) { playlists.append(playlist) }
@@ -118,66 +127,54 @@ enum SharedListPublisher {
             guard let tab = try await sheets.tabTitles(sheetId: entry.id).first else { return .failed("시트에 탭이 없습니다.") }
             let rows = try await sheets.read(sheetId: entry.id, range: tab)
 
-            // The sealed cell, wherever it is, and what it holds.
-            var sealedAt: (row: Int, column: Int)?
+            // The sealed cells, wherever they are, and what they hold.
+            var sealedAt: [(row: Int, column: Int)] = []
             for (r, row) in rows.enumerated() {
-                if let c = row.firstIndex(where: { $0.hasPrefix(SharedListCipher.prefix) }) { sealedAt = (r, c); break }
+                for (c, cell) in row.enumerated() where cell.hasPrefix(SharedListCipher.prefix) { sealedAt.append((r, c)) }
             }
-            var plain = ""
-            if let at = sealedAt {
+            var plain: [String] = []
+            for at in sealedAt {
                 guard let opened = SharedListCipher.open(rows[at.row][at.column], password: password) else { return .wrongPassword }
-                plain = opened
+                plain.append(opened)
             }
-            let present = SharedChannelList.listing(in: plain)
+            let present = SharedChannelList.listing(in: plain.joined(separator: "\n"))
             let plainLinks = SharedChannelList.listing(in: SharedListCipher.split(rows.flatMap { $0 }.joined(separator: "\n")).rest)
             let plainCount = plainLinks.playlists.count + plainLinks.videos.count
 
             var additions: [String] = []
             for playlist in unlistedPlaylists.sorted(by: { ($0.snippet?.publishedAt ?? .distantPast) < ($1.snippet?.publishedAt ?? .distantPast) })
             where !present.playlists.contains(playlist.id) {
-                additions.append(line("재생목록", playlist.title, "https://www.youtube.com/playlist?list=\(playlist.id)",
-                                      day(playlist.snippet?.publishedAt)))
+                additions.append("https://www.youtube.com/playlist?list=\(playlist.id)")
             }
             for item in unlistedVideos.sorted(by: { (published($0) ?? .distantPast) < (published($1) ?? .distantPast) }) {
                 guard let id = item.videoId, !present.videos.contains(id) else { continue }
-                additions.append(line("영상", item.title, "https://www.youtube.com/watch?v=\(id)", day(published(item))))
+                additions.append("https://www.youtube.com/watch?v=\(id)")
             }
             guard !additions.isEmpty else { return .upToDate(plainLinks: plainCount) }
 
-            // A cell holds 50,000 characters; sealed text grows by a third.
-            // The newest lines are kept.
-            var lines = plain.split(separator: "\n", omittingEmptySubsequences: true).map(String.init) + additions
-            if lines.count > 400 { lines = Array(lines.suffix(400)) }
-            guard let sealed = SharedListCipher.seal(lines.joined(separator: "\n"), password: password) else {
+            // Links only, a few hundred to a cell. A cell holds 50,000
+            // characters and sealing adds a third: with titles, the first
+            // version would have overflowed one cell at about 130 entries.
+            // Nothing is dropped — the list grows into the next cell.
+            let lines = (present.playlists.map { "https://www.youtube.com/playlist?list=\($0)" }
+                         + present.videos.map { "https://www.youtube.com/watch?v=\($0)" }
+                         + additions)
+            guard let cells = SharedListCipher.sealInCells(lines, password: password) else {
                 return .failed("암호화하지 못했습니다.")
             }
-            if let at = sealedAt {
-                try await sheets.write(sheetId: entry.id,
-                                       range: "\(tab)!\(TeamSheet.columnLetter(at.column))\(at.row + 1)", row: [sealed])
-            } else {
-                let target = rows.count + 1
-                try await sheets.write(sheetId: entry.id, range: "\(tab)!A\(target):B\(target)",
-                                       row: [sealed, "SolaPraise 관심 채널 — 암호화된 목록입니다. 앱에서 교회 암호로 엽니다."])
-            }
+            // In the row the list already occupies, from its first column;
+            // a list that grew keeps going to the right.
+            let row = (sealedAt.first?.row ?? rows.count) + 1
+            let firstColumn = sealedAt.first?.column ?? 0
+            let values = cells + ["SolaPraise 관심 채널 — 암호화된 목록입니다. 앱에서 교회 암호로 엽니다."]
+            let range = "\(tab)!\(TeamSheet.columnLetter(firstColumn))\(row):\(TeamSheet.columnLetter(firstColumn + values.count - 1))\(row)"
+            try await sheets.write(sheetId: entry.id, range: range, row: values)
             return .added(additions.count, plainLinks: plainCount)
         } catch {
             return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
-    /// One entry of the sealed list: tab-separated, the link standing alone.
-    private static func line(_ kind: String, _ title: String, _ link: String, _ day: String) -> String {
-        let clean = title.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
-        return [kind, clean, link, day].joined(separator: "\t")
-    }
-
     private static func published(_ item: YTPlaylistItem) -> Date? { item.contentDetails?.videoPublishedAt }
 
-    private static func day(_ date: Date?) -> String {
-        guard let date else { return "" }
-        let format = DateFormatter()
-        format.locale = Locale(identifier: "en_US_POSIX")
-        format.dateFormat = "yyyy-MM-dd"
-        return format.string(from: date)
-    }
 }

@@ -19,6 +19,8 @@ struct ChannelDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var planning: PlanningAuth
+    @EnvironmentObject private var channelManager: ChannelManagerAuth
     @StateObject private var feed = FeedStore()
 
     @Query(sort: [SortDescriptor(\CachedVideo.publishedAt, order: .reverse)])
@@ -88,7 +90,10 @@ struct ChannelDetailView: View {
 
                 // For whoever manages a 교제 channel: keep the members' list
                 // current from here. Signed out there is nothing to see.
-                if auth.isSignedIn, channel.purpose == .fellowship {
+                // Shown to anyone signed in to anything: the manager may be
+                // none of the accounts already connected, and connects here.
+                if auth.isSignedIn || planning.isSignedIn || channelManager.isSignedIn || showsCardForReview,
+                   channel.purpose == .fellowship {
                     SharedListPublishCard(channelId: channel.youtubeChannelId)
                         .padding(.horizontal, 16)
                 }
@@ -101,6 +106,15 @@ struct ChannelDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await refresh() }
         .task { if videos.isEmpty { await refresh() } }
+    }
+
+    /// -uiTestPublishCard: the manager's card, for layout review signed out.
+    private var showsCardForReview: Bool {
+        #if DEBUG
+        return DebugHarness.args.contains("-uiTestPublishCard")
+        #else
+        return false
+        #endif
     }
 
     /// Why a channel shows nothing — usually that it has nothing public.
@@ -453,6 +467,7 @@ struct SharedListPublishCard: View {
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
     @EnvironmentObject private var planning: PlanningAuth
+    @EnvironmentObject private var manager: ChannelManagerAuth
 
     @State private var isOn = false
     @State private var isWorking = false
@@ -472,6 +487,27 @@ struct SharedListPublishCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // Whose eyes the channel is read through: only an account that
+            // manages it sees its unlisted services.
+            HStack {
+                if manager.isSignedIn {
+                    Label("채널 관리 계정 \(manager.email ?? "")", systemImage: "person.badge.key")
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("해제") { manager.signOut() }
+                        .font(.caption)
+                } else {
+                    Text(auth.email.map { "지금은 YouTube 계정 \($0)로 읽습니다." } ?? "채널을 읽을 계정이 없습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                    Button("채널 관리 계정 연결") { Task { await manager.signIn() } }
+                        .font(.caption)
+                }
+            }
             if hasPassword {
                 HStack {
                     Label("교회 암호가 이 기기에 저장되어 있습니다", systemImage: "lock.fill")
@@ -516,7 +552,7 @@ struct SharedListPublishCard: View {
     private func publish() async {
         isWorking = true
         defer { isWorking = false }
-        let client = AppServices.client(auth: auth, quota: quota)
+        let client = SharedListPublisher.client(auth: auth, quota: quota, manager: manager)
         let usePlanning = planning.isSignedIn
         let sheets = SheetsClient { [auth, planning] in
             usePlanning ? try await planning.token() : try await auth.accessToken()

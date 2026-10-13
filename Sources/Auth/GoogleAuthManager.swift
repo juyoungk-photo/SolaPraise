@@ -221,6 +221,17 @@ final class GoogleAuthManager: ObservableObject {
         sessionExpired = false
     }
 
+    /// Signs in as a different YouTube account, from inside the app.
+    ///
+    /// Not signOut-then-signIn: signOut also leaves 「둘러보기」, which sends
+    /// the whole app back to the first screen. Here the app stays where it
+    /// is, and if the chooser is dismissed it simply carries on signed out.
+    func switchAccount() async {
+        signOut()
+        isBrowsingWithoutAccount = true
+        await signIn()
+    }
+
     // MARK: - Access token for YouTubeAPIClient
 
     /// Returns a fresh access token, refreshing if needed.

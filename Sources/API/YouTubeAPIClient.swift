@@ -24,10 +24,16 @@ final class YouTubeAPIClient {
     /// Guards against a runaway cursor loop on a very large library.
     private static let maxPages = 20
 
-    init(auth: GoogleAuthManager, quota: QuotaLedger, session: URLSession = .shared) {
+    /// Another account's token, used instead of the sign-in — the channel
+    /// manager's, for reading what only it can see.
+    private let tokenOverride: (() async throws -> String)?
+
+    init(auth: GoogleAuthManager, quota: QuotaLedger, session: URLSession = .shared,
+         token: (() async throws -> String)? = nil) {
         self.auth = auth
         self.quota = quota
         self.session = session
+        self.tokenOverride = token
     }
 
     // MARK: - Errors
@@ -125,7 +131,10 @@ final class YouTubeAPIClient {
         var req = URLRequest(url: url)
         var authorized = false
 
-        if auth.isSignedIn, let token = try? await auth.accessToken() {
+        if let tokenOverride, let token = try? await tokenOverride() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            authorized = true
+        } else if auth.isSignedIn, let token = try? await auth.accessToken() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             authorized = true
         } else if cost != .write, !namesAnAccount, let key = AppSecrets.youtubeAPIKey {

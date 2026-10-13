@@ -51,6 +51,22 @@ enum SharedListCipher {
         return String(data: plain, encoding: .utf8)
     }
 
+    /// A list too long for one cell, sealed a few hundred lines to a cell.
+    /// A Sheets cell holds 50,000 characters and sealing adds a third, so
+    /// a list that keeps growing goes on into the next cell rather than
+    /// being cut. Every cell opens on its own.
+    static func sealInCells(_ lines: [String], password: String, perCell: Int = 300) -> [String]? {
+        var cells: [String] = []
+        for start in stride(from: 0, to: lines.count, by: max(perCell, 1)) {
+            let chunk = lines[start ..< min(start + perCell, lines.count)].joined(separator: "\n")
+            guard let sealed = seal(chunk, password: password) else { return nil }
+            cells.append(sealed)
+        }
+        return cells
+    }
+
+    static let cellLimit = 50_000
+
     /// Sealed cells in a sheet's text, and the text without them — the
     /// rest is read for plain links as before. Base64 can spell 「/live/」,
     /// so a sealed cell must never be read as links.

@@ -51,6 +51,8 @@ struct SolaPraiseApp: App {
     @StateObject private var playerHost = PlayerHost()
     @StateObject private var team = TeamStore()
     @StateObject private var planning = PlanningAuth()
+    /// The account that manages the church's channel, when connected.
+    @StateObject private var channelManager = ChannelManagerAuth()
     /// App level: the morning alarm opens the app on whichever tab, and
     /// the wait for the stream must outlive any one screen.
     @StateObject private var morning = MorningPlayback()
@@ -86,6 +88,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(playerHost)
                 .environmentObject(team)
                 .environmentObject(planning)
+                .environmentObject(channelManager)
                 .environmentObject(morning)
                 .preferredColorScheme(appearance.colorScheme)
                 .onOpenURL { url in

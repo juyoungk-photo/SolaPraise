@@ -25,7 +25,7 @@ import CryptoKit
 import Foundation
 
 @MainActor
-final class PlanningAuth: NSObject, ObservableObject {
+class PlanningAuth: NSObject, ObservableObject {
 
     @Published private(set) var email: String?
     @Published private(set) var isSignedIn = false
@@ -50,8 +50,11 @@ final class PlanningAuth: NSObject, ObservableObject {
     private var expiry: Date?
     private var session: ASWebAuthenticationSession?
 
-    private static let emailKey = "planning.email"
-    private static let keychainAccount = "planning.refreshToken"
+    /// What this grant asks for, and where it keeps its account — so the
+    /// same flow serves a second, separate grant (ChannelManagerAuth).
+    private let grantScopes: [String]
+    private let emailKey: String
+    private let keychainAccount: String
 
     private var clientId: String {
         Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String ?? ""
@@ -64,10 +67,17 @@ final class PlanningAuth: NSObject, ObservableObject {
         return "\(reversed):/oauth"
     }
 
-    override init() {
+    override convenience init() {
+        self.init(scopes: PlanningAuth.scopes, storage: "planning")
+    }
+
+    init(scopes: [String], storage: String) {
+        grantScopes = scopes
+        emailKey = "\(storage).email"
+        keychainAccount = "\(storage).refreshToken"
         super.init()
-        email = UserDefaults.standard.string(forKey: Self.emailKey)
-        isSignedIn = email != nil && Keychain.read(Self.keychainAccount) != nil
+        email = UserDefaults.standard.string(forKey: emailKey)
+        isSignedIn = email != nil && Keychain.read(keychainAccount) != nil
     }
 
     // MARK: - Sign in
@@ -85,7 +95,7 @@ final class PlanningAuth: NSObject, ObservableObject {
             .init(name: "client_id", value: clientId),
             .init(name: "redirect_uri", value: redirectURI),
             .init(name: "response_type", value: "code"),
-            .init(name: "scope", value: Self.scopes.joined(separator: " ")),
+            .init(name: "scope", value: grantScopes.joined(separator: " ")),
             .init(name: "code_challenge", value: challenge),
             .init(name: "code_challenge_method", value: "S256"),
             // Forces the chooser, which is the entire point: the account
@@ -123,8 +133,8 @@ final class PlanningAuth: NSObject, ObservableObject {
     }
 
     func signOut() {
-        Keychain.delete(Self.keychainAccount)
-        UserDefaults.standard.removeObject(forKey: Self.emailKey)
+        Keychain.delete(keychainAccount)
+        UserDefaults.standard.removeObject(forKey: emailKey)
         accessToken = nil
         expiry = nil
         email = nil
@@ -138,7 +148,7 @@ final class PlanningAuth: NSObject, ObservableObject {
         if let accessToken, let expiry, expiry > Date().addingTimeInterval(60) {
             return accessToken
         }
-        guard let refresh = Keychain.read(Self.keychainAccount) else {
+        guard let refresh = Keychain.read(keychainAccount) else {
             throw SheetsClient.SheetsError.notSignedIn
         }
         try await refreshToken(refresh)
@@ -160,13 +170,13 @@ final class PlanningAuth: NSObject, ObservableObject {
         accessToken = response.access_token
         expiry = Date().addingTimeInterval(TimeInterval(response.expires_in ?? 3000))
         if let refresh = response.refresh_token {
-            Keychain.write(Self.keychainAccount, value: refresh)
+            Keychain.write(keychainAccount, value: refresh)
         }
         if let address = response.id_token.flatMap(Self.email(fromIDToken:)) {
             email = address
-            UserDefaults.standard.set(address, forKey: Self.emailKey)
+            UserDefaults.standard.set(address, forKey: emailKey)
         }
-        isSignedIn = Keychain.read(Self.keychainAccount) != nil
+        isSignedIn = Keychain.read(keychainAccount) != nil
         lastError = nil
     }
 
@@ -275,5 +285,27 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+/// The account that MANAGES the church's 교제 channel, for reading what it
+/// alone can see — its unlisted playlists and uploads — so the members'
+/// list can be kept (SharedListPublisher).
+///
+/// A grant of its own, read-only: the manager is usually the church
+/// account, while the app's YouTube sign-in is personal (playlists,
+/// Premium), and the church grant carries no YouTube scope — Google will
+/// not put youtube beside drive.file in one request. Connecting this
+/// changes neither. When the manager is a brand channel, Google asks which
+/// channel during sign-in: choose the church's.
+@MainActor
+final class ChannelManagerAuth: PlanningAuth {
+    static let youtubeScopes = [
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "openid", "email"
+    ]
+
+    convenience init() {
+        self.init(scopes: ChannelManagerAuth.youtubeScopes, storage: "channelManager")
     }
 }
