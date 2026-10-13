@@ -295,7 +295,7 @@ struct StudioView: View {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
         } header: {
-            Text("새로 만들기")
+            Text("오디오")
         } footer: {
             Text("라인 입력(오디오 인터페이스)이 가장 정확합니다. 유튜브 오디오는 분석할 수 없습니다.")
         }
