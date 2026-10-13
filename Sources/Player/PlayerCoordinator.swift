@@ -309,7 +309,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         guard let webView else { return }
         webView.loadSimulatedRequest(
             URLRequest(url: URL(string: "https://www.youtube.com/embed")!),
-            responseHTML: FocusPlayerView.html(videoId: videoId, autoplay: pendingAutoplay)
+            responseHTML: PlayerPage.html(config: .init(videoId: videoId, autoplay: pendingAutoplay))
         )
     }
 

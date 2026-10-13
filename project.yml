@@ -32,6 +32,11 @@ targets:
       - path: Sources
       - path: Resources
         buildPhase: resources
+      # The player page, shared with the family hub — one copy, so a fix
+      # lands in both. Bundled as the folder `web`; see PlayerPage.swift.
+      - path: ../FocusPlayerKit/web
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: GoogleSignIn
         product: GoogleSignIn

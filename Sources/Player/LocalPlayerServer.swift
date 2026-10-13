@@ -189,16 +189,12 @@ final class LocalPlayerServer {
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
-            guard let data, let request = String(data: data, encoding: .utf8) else {
+            guard let data, String(data: data, encoding: .utf8) != nil else {
                 connection.cancel(); return
             }
-            // Only the path matters; the page reads the video id from its query.
-            let path = request
-                .split(separator: "\r\n").first
-                .flatMap { $0.split(separator: " ").dropFirst().first }
-                .map(String.init) ?? "/"
-
-            let body = Self.page(for: path)
+            // Every path gets the one player page; it reads the video id from
+            // its own query, so the request itself needs no parsing.
+            let body = PlayerPage.html()
             let response = """
             HTTP/1.1 200 OK\r
             Content-Type: text/html; charset=utf-8\r
@@ -212,74 +208,5 @@ final class LocalPlayerServer {
                 connection.cancel()
             })
         }
-    }
-
-    /// The player document. The video id arrives as `?v=…` so one static page
-    /// serves every video and swapping songs never reloads the document.
-    private static func page(for path: String) -> String {
-        """
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-          <style>
-            html, body { margin:0; padding:0; background:#000; width:100%; height:100%; overflow:hidden; }
-            #player { width:100%; height:100%; }
-          </style>
-        </head>
-        <body>
-          <div id="player"></div>
-          <script src="https://www.youtube.com/iframe_api"></script>
-          <script>
-            var player = null, ticker = null;
-
-            function qs(name) {
-              var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
-              return m ? decodeURIComponent(m[1]) : '';
-            }
-
-            function post(payload) {
-              try {
-                window.webkit.messageHandlers.\(PlayerCoordinator.messageName).postMessage(payload);
-              } catch (e) {}
-            }
-
-            function safeDuration() {
-              try { return player && player.getDuration ? player.getDuration() : 0; }
-              catch (e) { return 0; }
-            }
-
-            function startTicker() {
-              if (ticker) { clearInterval(ticker); }
-              ticker = setInterval(function () {
-                try {
-                  if (player && player.getCurrentTime) {
-                    post({ event: 'time', t: player.getCurrentTime(), duration: safeDuration() });
-                  }
-                } catch (e) {}
-              }, 1000);
-            }
-
-            function onYouTubeIframeAPIReady() {
-              post({ event: 'diag', origin: String(location.origin), href: String(location.href) });
-              player = new YT.Player('player', {
-                videoId: qs('v'),
-                playerVars: {
-                  playsinline: 1, controls: 1, modestbranding: 1, rel: 0,
-                  iv_load_policy: 3, fs: 1, enablejsapi: 1,
-                  autoplay: qs('autoplay') === '1' ? 1 : 0,
-                  origin: window.location.origin
-                },
-                events: {
-                  onReady: function () { post({ event: 'ready', duration: safeDuration() }); startTicker(); },
-                  onStateChange: function (e) { post({ event: 'state', state: e.data, duration: safeDuration() }); },
-                  onError: function (e) { post({ event: 'error', code: e.data }); }
-                }
-              });
-            }
-          </script>
-        </body>
-        </html>
-        """
     }
 }
