@@ -321,7 +321,7 @@ struct PlayerStage: View {
                 let t = min(1, max(0, base + drag / travel))
 
                 let width = videoWidth + (miniW - videoWidth) * t
-                let height = videoHeight + (miniH - videoHeight) * t
+                let scale = width / max(videoWidth, 1)
                 let originX = fullX + (miniX - fullX) * t
                 let originY = miniY * t
                 let corner = (AppLayout.usesCustomTabBar ? 16 : 6) * t
@@ -333,7 +333,8 @@ struct PlayerStage: View {
                         .padding(.top, videoHeight)
                         .background(Color(.systemBackground))
                         .opacity(1 - t)
-                        .allowsHitTesting(t < 0.5)
+                        // By the mode, never by t: see the player below.
+                        .allowsHitTesting(!mini)
 
                     // The band the video sits in, full width even when the
                     // video is narrower than the screen. Without it the
@@ -387,7 +388,7 @@ struct PlayerStage: View {
                         // Fades in as the player is pulled down, so the bar
                         // it is heading for is visible the whole way.
                         .opacity(t)
-                        .allowsHitTesting(t > 0.5)
+                        .allowsHitTesting(mini)
                         // No tap gesture on the bar itself: a container tap
                         // competes with the buttons inside it, which is the
                         // other half of why close was unreliable. Expanding
@@ -408,9 +409,21 @@ struct PlayerStage: View {
                                             host: host,
                                             expanded: t < 0.5)
                     }
-                    .frame(width: width, height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-                    .allowsHitTesting(t < 0.5)
+                    // ALWAYS THE FULL SIZE, SHOWN SMALLER.
+                    //
+                    // The frame used to follow t, so every frame of a drag
+                    // resized the web view — 24 resizes in a 25-event drag,
+                    // each making YouTube's page refit its player — and on a
+                    // real iPad the video fell behind the finger. The web view
+                    // now keeps the full player's size in every state, and
+                    // docking, undocking and the drag between are a scale
+                    // and an offset: transforms, not layout.
+                    .frame(width: videoWidth, height: videoHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: corner / max(scale, 0.01), style: .continuous))
+                    // By the MODE, not by t. Switching at t = 0.5 handed the
+                    // touch from the video to the dock in the middle of the
+                    // drag that was crossing it — the drag could stop there.
+                    .allowsHitTesting(!mini)
                     // Docked, the video is a thumbnail rather than a player,
                     // and pressing a thumbnail should bring the player back.
                     //
@@ -421,7 +434,7 @@ struct PlayerStage: View {
                     // did nothing. This layer sits ABOVE that modifier, so
                     // the web view stays deaf and the tap still lands.
                     .overlay {
-                        if t > 0.5 {
+                        if mini {
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture {
@@ -433,6 +446,7 @@ struct PlayerStage: View {
                                 .accessibilityAddTraits(.isButton)
                         }
                     }
+                    .scaleEffect(scale, anchor: .topLeading)
                     .offset(x: originX, y: originY)
                     // High priority, not a plain gesture.
                     //
@@ -462,7 +476,9 @@ struct PlayerStage: View {
     /// YouTube's own controls inside it, and a gesture that began at zero
     /// would swallow the taps meant for play and pause.
     private func dragGesture(mini: Bool, travel: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 5)
+        // In the screen's coordinates: the player shrinks and moves under
+        // the finger, and its own coordinates move and shrink with it.
+        DragGesture(minimumDistance: 5, coordinateSpace: .global)
             .onChanged { value in
                 // Sideways swipes belong to whatever is underneath.
                 guard abs(value.translation.width) < 120 else { return }
