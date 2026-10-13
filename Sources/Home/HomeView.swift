@@ -32,6 +32,9 @@ struct HomeView: View {
 
     @State private var showSettings = false
     @State private var showAddCard = false
+    @State private var showAlarm = false
+    /// Read again when the alarm sheet closes, for the icon.
+    @State private var alarmOn = MorningAlarm.isEnabled
     /// Pre-filled term when a 주제 card opens the search sheet.
     @State private var searchQuery = ""
     @State private var showReading = false
@@ -208,13 +211,29 @@ struct HomeView: View {
                     .font(.subheadline)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    // The morning alarm, one tap from where the morning
+                    // starts — filled while it is set.
+                    Button { showAlarm = true } label: {
+                        Image(systemName: alarmOn ? "alarm.fill" : "alarm")
+                    }
+                    .accessibilityLabel(alarmOn ? "아침 알람 켜짐" : "아침 알람")
                     Button { showAddCard = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("카드 추가")
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("설정")
                 }
             }
-            .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showSettings, onDismiss: { alarmOn = MorningAlarm.isEnabled }) { SettingsView() }
+            .sheet(isPresented: $showAlarm, onDismiss: { alarmOn = MorningAlarm.isEnabled }) {
+                NavigationStack {
+                    MorningAlarmSettingsView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("완료") { showAlarm = false }
+                            }
+                        }
+                }
+            }
             .sheet(isPresented: $showAddCard) { AddHomeCardSheet() }
             .sheet(isPresented: $showSearch) { HomeSearchSheet(initialQuery: searchQuery) }
             .sheet(isPresented: $showPsalmSheet) { PsalmAudioSheet() }
