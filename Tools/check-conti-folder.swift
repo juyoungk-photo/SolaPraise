@@ -85,6 +85,19 @@ struct CheckContiFolder {
         check("playlist links are found among notes, each once, without invite tokens",
               SharedChannelList.playlistIds(in: listText) == ["PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "PLbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
               "got \(SharedChannelList.playlistIds(in: listText))")
+        let mixed = """
+        2부예배 https://www.youtube.com/watch?v=AAAAAAAAAA1
+        라이브 https://www.youtube.com/live/BBBBBBBBBB2?si=x, 짧게 https://youtu.be/CCCCCCCCCC3
+        재생목록 https://www.youtube.com/watch?v=DDDDDDDDDD4&list=PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        다시 https://www.youtube.com/watch?v=AAAAAAAAAA1&t=30
+        """
+        let listing = SharedChannelList.listing(in: mixed)
+        check("single videos are listed — watch, live, youtu.be — each once",
+              listing.videos == ["AAAAAAAAAA1", "BBBBBBBBBB2", "CCCCCCCCCC3"], "got \(listing.videos)")
+        check("a link naming a playlist is the playlist, not the video it was copied at",
+              listing.playlists == ["PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] && !listing.videos.contains("DDDDDDDDDD4"))
+        let csv = "종류,제목,링크,날짜\n영상,\"[주일] 10.11\",https://www.youtube.com/watch?v=EEEEEEEEEE5,2026-10-11\n"
+        check("the sheet the manager's app writes reads back", SharedChannelList.listing(in: csv).videos == ["EEEEEEEEEE5"])
         check("a folder link gives its id",
               ContiFolder.folderId(fromLink: "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMn?usp=share_link") == "1AbCdEfGhIjKlMn")
 

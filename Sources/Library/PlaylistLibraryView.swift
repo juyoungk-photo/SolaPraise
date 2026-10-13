@@ -119,7 +119,7 @@ struct PlaylistLibraryView: View {
                         .controlSize(.mini)
                     }
                 } footer: {
-                    Text("공개 영상과 재생목록은 로그인 없이 보입니다(일부 공개는 교회 공유 폴더의 「관심 채널」 문서에 재생목록 링크를 넣으면 모두에게 보입니다). 교회 교제 채널이나 즐겨 보는 채널을 둡니다 — 말씀·찬양 피드와는 따로입니다.")
+                    Text("공개 영상과 재생목록은 로그인 없이 보입니다(일부 공개는 교회 공유 폴더의 「관심 채널」 시트에 링크가 있으면 모두에게 보입니다). 교회 교제 채널이나 즐겨 보는 채널을 둡니다 — 말씀·찬양 피드와는 따로입니다.")
                 }
             }
 
@@ -130,6 +130,19 @@ struct PlaylistLibraryView: View {
                     }
                 } footer: {
                     Text("교회 교제 채널이나 내 채널을 보관함에 둘 수 있습니다.")
+                }
+            }
+
+            // A build that carries the team's sheet hides 예배 until someone
+            // signs in — the roster is matched by account — and an absent
+            // tab says nothing about why. Say it here.
+            if TeamSheetSource.current != nil, !auth.isSignedIn {
+                Section {
+                    Button { showSettings = true } label: {
+                        Label("로그인하고 예배 탭 열기", systemImage: "calendar.badge.clock")
+                    }
+                } footer: {
+                    Text("「예배」 탭은 찬양팀을 위한 곳입니다 — 주일 콘티와 순서, 곡별 악보, 사인업. 설정 › 계정에서 팀 명단에 있는 Google 계정으로 로그인하면 나타납니다. 명단에 없는 계정이면 그 탭에서 안내합니다. 악보 보기·조옮김·PDF 공유는 로그인 없이 「작업실」에서 할 수 있습니다.")
                 }
             }
 
@@ -152,7 +165,7 @@ struct PlaylistLibraryView: View {
                 NavigationLink {
                     StudioView()
                 } label: {
-                    Label("작업실 · 녹음과 악보", systemImage: "recordingtape")
+                    Label("작업실 · 악보", systemImage: "recordingtape")
                 }
 
                 ForEach(savedSongs.prefix(5)) { song in

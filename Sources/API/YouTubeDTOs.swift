@@ -102,6 +102,11 @@ struct YTPlaylistItem: Decodable, Identifiable, Hashable {
     let id: String
     let snippet: Snippet?
     let contentDetails: ContentDetails?
+    /// Asked for only where it matters: an owner's uploads, to tell the
+    /// unlisted ones from the rest.
+    var status: Status? = nil
+
+    struct Status: Decodable, Hashable { let privacyStatus: String? }
 
     struct Snippet: Decodable, Hashable {
         let title: String?

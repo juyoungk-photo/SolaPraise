@@ -74,9 +74,10 @@ final class DailyReading: ObservableObject {
 
     // MARK: - Gate
 
-    /// True until the full-screen reading has been shown once today.
+    /// True until the full-screen reading has been shown once today — and
+    /// only for someone who asked for it (설정 › 앱을 열면 오늘의 시편).
     var isGateOwed: Bool {
-        ReadingSettings.lastGateDay != ReadingSettings.todayKey()
+        ReadingSettings.opensOnLaunch && ReadingSettings.lastGateDay != ReadingSettings.todayKey()
     }
 
     func markGateShown() {

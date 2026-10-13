@@ -162,8 +162,11 @@ struct ScoreStandView: View {
         } message: {
             Text(model.note ?? "")
         }
-        .sheet(item: $model.export) { file in
-            ShareSheet(items: [file.url])
+        // Presented by UIKit from the top, not as a `.sheet`: from a stand
+        // opened in 작업실 the sheet never appeared. See SharePresenter.
+        .onChange(of: model.export?.id) { _, id in
+            guard id != nil, let file = model.export else { return }
+            SharePresenter.present(file.url) { model.export = nil }
         }
         .confirmationDialog("코드", isPresented: .constant(chordAction != nil),
                             titleVisibility: .hidden, presenting: chordAction) { action in
@@ -325,7 +328,8 @@ struct ScoreStandView: View {
         }
         if let teamKey = item.teamKey, state.defaultShift != nil {
             line += " (순서의 키 \(teamKey))"
-        } else if item.teamKey == nil {
+        } else if item.teamKey == nil, !item.attachment.fileId.hasPrefix("local-") {
+            // Only for a team chart: one from 작업실 has no 순서 to have a key.
             line += " · 순서에 키가 없어 원키로 시작"
         }
         return line
@@ -1252,16 +1256,6 @@ final class ScoreStandModel: ObservableObject {
 
 /// UIActivityViewController, for handing the PDF to Files, AirDrop, Mail or
 /// a print dialog — wherever a team actually keeps its charts.
-private struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
-}
-
 /// A chart's chords as last read or corrected, kept on this device per
 /// attachment — so a chart opens without being read again, and a chart
 /// corrected once stays corrected.

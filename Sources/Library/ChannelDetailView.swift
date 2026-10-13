@@ -77,6 +77,13 @@ struct ChannelDetailView: View {
                         .padding(.horizontal, 16)
                 }
 
+                // For whoever manages a 교제 channel: keep the members' list
+                // current from here. Signed out there is nothing to see.
+                if auth.isSignedIn, channel.purpose == .fellowship {
+                    SharedListPublishCard(channelId: channel.youtubeChannelId)
+                        .padding(.horizontal, 16)
+                }
+
                 FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
             }
             .padding(.top, 12)
@@ -94,8 +101,8 @@ struct ChannelDetailView: View {
     /// what anyone can watch without signing in.
     private var emptyExplanation: String {
         "이 채널에는 공개된 영상이 없습니다. '일부 공개' 영상은 채널을 관리하는 계정으로 로그인했을 때만 보입니다. "
-            + "멤버 모두가 로그인 없이 보려면, 그 영상들을 담은 재생목록(일부 공개)의 링크를 교회 공유 폴더의 「관심 채널」 문서에 붙여넣으세요. "
-            + "다음 새로고침 때 모든 멤버의 앱에 나타납니다. 이 기기에만 두려면 「보관함 > 관심 채널 > 추가」에서 재생목록으로 추가하세요."
+            + "교회 공유 폴더의 「관심 채널」 시트에 링크가 올라오면, 로그인 없이도 다음 새로고침 때 여기에 나타납니다. "
+            + "채널을 관리하는 분은 이 페이지 아래 「멤버에게 자동 공유」를 켜면 새 영상이 저절로 올라갑니다."
     }
 
     // MARK: - Playlists
@@ -423,5 +430,69 @@ struct PlaylistCard: View {
             }
         }
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Sharing with members
+
+/// The channel manager's switch: add this channel's unlisted services to the
+/// church's shared list, now and on every launch after.
+struct SharedListPublishCard: View {
+    let channelId: String
+
+    @EnvironmentObject private var auth: GoogleAuthManager
+    @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var planning: PlanningAuth
+
+    @State private var isOn = false
+    @State private var isWorking = false
+    @State private var outcome: SharedListPublisher.Outcome?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $isOn) {
+                Label("멤버에게 자동 공유", systemImage: "person.2.wave.2")
+                    .font(.subheadline.weight(.semibold))
+            }
+            Text("이 채널을 관리하는 계정이면, 일부 공개 재생목록과 새로 올라온 영상을 교회 공유 폴더의 「관심 채널」 시트에 올립니다. "
+                 + "앱을 열 때마다(한 시간에 한 번까지) 새 영상을 더합니다. 비공개 영상은 올리지 않습니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if isWorking {
+                ProgressView().controlSize(.small)
+            } else if let outcome {
+                Text(outcome.message)
+                    .font(.caption)
+                    .foregroundStyle(isProblem(outcome) ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .onAppear { isOn = SharedListPublisher.isOn(for: channelId) }
+        .onChange(of: isOn) { _, on in
+            SharedListPublisher.set(on, for: channelId)
+            guard on else { outcome = nil; return }
+            Task { await publish() }
+        }
+    }
+
+    private func publish() async {
+        isWorking = true
+        defer { isWorking = false }
+        let client = AppServices.client(auth: auth, quota: quota)
+        let usePlanning = planning.isSignedIn
+        let sheets = SheetsClient { [auth, planning] in
+            usePlanning ? try await planning.token() : try await auth.accessToken()
+        }
+        outcome = await SharedListPublisher.publish(channelId: channelId, client: client, sheets: sheets)
+    }
+
+    private func isProblem(_ outcome: SharedListPublisher.Outcome) -> Bool {
+        switch outcome {
+        case .added, .upToDate: return false
+        default: return true
+        }
     }
 }

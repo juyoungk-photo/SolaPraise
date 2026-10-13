@@ -154,6 +154,11 @@ final class CachedVideo {
     /// keys here, which WorshipSetParser turns into a jumpable song list.
     var descriptionText: String?
 
+    /// Put here by the church's shared list rather than by a channel feed —
+    /// an unlisted service no feed can list — so it leaves again when the
+    /// list drops it.
+    var isSharedListed: Bool = false
+
     init(
         videoId: String,
         title: String,

@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var addingFor: Purpose?
     @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(PlayerCoordinator.autoPictureInPictureKey) private var autoPictureInPicture = true
+    @AppStorage("reading.opensOnLaunch") private var opensReadingOnLaunch = false
     @State private var notificationsOn = ReadingSettings.notificationsEnabled
     @State private var esvKey = ReadingSettings.esvAPIKey ?? ""
     @State private var apiBibleKey = ReadingSettings.apiBibleKey ?? ""
@@ -177,6 +178,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var readingSection: some View {
         Section {
+            Toggle("앱을 열면 오늘의 시편 먼저", isOn: $opensReadingOnLaunch)
             Toggle("아침 알림", isOn: Binding(
                 get: { notificationsOn },
                 set: { newValue in

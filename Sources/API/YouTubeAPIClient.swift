@@ -361,7 +361,9 @@ final class YouTubeAPIClient {
 
         while collected.count < limit {
             var query: [URLQueryItem] = [
-                .init(name: "part", value: "snippet,contentDetails"),
+                // `status` costs nothing extra and says which uploads are
+                // unlisted — for the shared 관심 채널 list.
+                .init(name: "part", value: "snippet,contentDetails,status"),
                 .init(name: "playlistId", value: uploadsId),
                 .init(name: "maxResults", value: "50")
             ]

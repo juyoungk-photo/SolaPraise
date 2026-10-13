@@ -18,6 +18,7 @@ struct ContentView: View {
     @EnvironmentObject private var playerHost: PlayerHost
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
+    @EnvironmentObject private var quota: QuotaLedger
 
     /// Recomputed as the roster loads and as sign-in changes, so the tab
     /// appears without a relaunch.
@@ -47,26 +48,21 @@ struct ContentView: View {
     @State private var showDailyGate = false
 
     /// 작업실 is a tab of its own wherever it fits, and then 보관함 does not
-    /// list it again.
+    /// list it again. For everyone, signed in or not: its 악보 — import,
+    /// read, transpose, share as PDF — needs no account and no team, and
+    /// without 예배 it was the only way to a chart at all. (Its audio tools
+    /// stay DevGate-only, inside it.)
     ///
     /// iPad: always — there is room, and it is where a musician reads a
     /// chart. iPhone: when the bar stays at five; with 예배 too it would be
     /// six, and iOS folds a sixth tab into 「더 보기」, hiding 보관함 behind
     /// it. Then, and only then, 작업실 stays inside 보관함.
     private var showsStudioTab: Bool {
-        guard showsChordAnalysis else { return false }
-        return UIDevice.current.userInterfaceIdiom == .pad || !showsTeamTab
+        UIDevice.current.userInterfaceIdiom == .pad || !showsTeamTab
     }
 
     private var showsTeamTab: Bool {
         teamAccess != .unconfigured && teamAccess != .signInRequired
-    }
-
-    /// Chord analysis is still being worked on — see DevGate. It is hidden
-    /// rather than disabled, because a half-finished chart is worse than no
-    /// chart: somebody would play it on Sunday.
-    private var showsChordAnalysis: Bool {
-        DevGate.isUnlocked(auth: auth, planning: planning)
     }
 
     /// The tabs that exist right now, in order. The `TabView` and the
@@ -98,7 +94,7 @@ struct ContentView: View {
         case .home:    HomeView(selection: $selection)
         case .word:    WordFeedView()
         case .worship: WorshipFeedView()
-        case .library: PlaylistLibraryView(showsStudio: showsChordAnalysis && !showsStudioTab)
+        case .library: PlaylistLibraryView(showsStudio: !showsStudioTab)
         // 예배 is shown whenever a sheet is configured and somebody is signed
         // in — including when that person is NOT on the roster. Hiding it for
         // a non-member was a dead end: the only way onto the roster is
@@ -184,6 +180,22 @@ struct ContentView: View {
         }
         // The roster has to be read before the tab can be decided, and the
         // sheet is the only place it lives.
+        // The channel manager's app keeps the members' 관심 채널 list
+        // current: new unlisted services go up without anyone pasting links.
+        .task(id: auth.isSignedIn) {
+            guard auth.isSignedIn else { return }
+            let usePlanning = planning.isSignedIn
+            let sheets = SheetsClient { [auth, planning] in
+                usePlanning ? try await planning.token() : try await auth.accessToken()
+            }
+            for channelId in SharedListPublisher.channelsSwitchedOn where SharedListPublisher.isDue(channelId) {
+                let outcome = await SharedListPublisher.publish(
+                    channelId: channelId, client: AppServices.client(auth: auth, quota: quota), sheets: sheets)
+                #if DEBUG
+                print("[SharedList] publish \(channelId.prefix(6))… → \(outcome)")
+                #endif
+            }
+        }
         .task {
             team.configure(auth: auth, planning: planning)
             // Without the scope the roster cannot be read, and hammering the

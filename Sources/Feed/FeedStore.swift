@@ -133,8 +133,8 @@ final class FeedStore: ObservableObject {
         try? context.save()
         await fillMissingDurations(context: context, client: client)
         await refreshChannelPlaylists(channels: channels, context: context, client: client)
-        if purpose == nil || purpose == .fellowship, client != nil {
-            await syncSharedList(context: context)
+        if purpose == nil || purpose == .fellowship, let client {
+            await syncSharedList(context: context, client: client)
         }
         await fillMissingPlaylistDetails(context: context, client: client)
         if let client { await addSharedListChannels(context: context, client: client) }
@@ -158,30 +158,73 @@ final class FeedStore: ObservableObject {
     /// what it names is added to 관심 채널, and what it no longer names
     /// leaves — only what the list itself added. A list that could not be
     /// read changes nothing. Details and the channel come in the next step.
-    private func syncSharedList(context: ModelContext) async {
-        var read: [String]?
+    private func syncSharedList(context: ModelContext, client: YouTubeAPIClient) async {
+        var read: SharedChannelList.Listing?
         #if DEBUG
         // -uiTestSharedList "<the list's text>": as if the folder held it.
         if let at = DebugHarness.args.firstIndex(of: "-uiTestSharedList"), at + 1 < DebugHarness.args.count {
-            read = SharedChannelList.playlistIds(in: DebugHarness.args[at + 1])
+            read = SharedChannelList.listing(in: DebugHarness.args[at + 1])
         }
         #endif
         if read == nil, let folderId = ContiFolder.folderId { read = await SharedChannelList.fetch(folderId: folderId) }
-        guard let ids = read else { return }
+        guard let listing = read else { return }
+
+        // Playlists.
         let cached = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
         let known = Set(cached.map(\.playlistId))
-        for id in ids where !known.contains(id) {
+        for id in listing.playlists where !known.contains(id) {
             context.insert(CachedPlaylist(playlistId: id, channelId: "", title: "재생목록",
                                           purpose: .fellowship, isSharedListed: true))
         }
-        let listed = Set(ids)
+        let listed = Set(listing.playlists)
         for playlist in cached where playlist.isSharedListed && !listed.contains(playlist.playlistId) {
             context.delete(playlist)
         }
-        // A channel the list brought in leaves with its last listed playlist.
+
+        // Videos: those the list names, and the newest of each listed
+        // playlist — so a service added to the playlist shows under 최근
+        // 영상 too, on a channel whose own feed lists nothing.
+        var wanted = listing.videos
+        var complete = true
+        for id in listing.playlists {
+            guard let items = try? await client.recentPlaylistItems(playlistId: id, pages: 1) else {
+                complete = false; continue
+            }
+            for item in items.prefix(20) where !item.isUnavailable {
+                if let video = item.videoId, !wanted.contains(video) { wanted.append(video) }
+            }
+        }
+        let videos = (try? context.fetch(FetchDescriptor<CachedVideo>())) ?? []
+        let have = Set(videos.map(\.videoId))
+        let missing = wanted.filter { !have.contains($0) }
+        if !missing.isEmpty, let details = try? await client.videos(ids: missing) {
+            for video in details {
+                let cachedVideo = CachedVideo(
+                    videoId: video.id, title: video.snippet?.title ?? "영상",
+                    channelId: video.snippet?.channelId, channelTitle: video.snippet?.channelTitle,
+                    thumbnailURLString: video.snippet?.thumbnails?.best?.absoluteString,
+                    publishedAt: video.snippet?.publishedAt, durationSeconds: video.durationSeconds,
+                    source: .manual)
+                cachedVideo.isSharedListed = true
+                cachedVideo.isEmbeddable = video.isEmbeddable
+                context.insert(cachedVideo)
+            }
+        }
+        // Only on a complete read: a playlist that failed to load must not
+        // take its services off everyone's page.
+        if complete {
+            let keep = Set(wanted)
+            for video in videos where video.isSharedListed && !keep.contains(video.videoId) {
+                context.delete(video)
+            }
+        }
+
+        // A channel the list brought in leaves with its last listed item.
         let key = Self.sharedListChannelsKey
         var added = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        let keptVideoChannels = videos.filter { $0.isSharedListed && wanted.contains($0.videoId) }.compactMap(\.channelId)
         let stillListed = Set(cached.filter { $0.isSharedListed && listed.contains($0.playlistId) }.map(\.channelId))
+            .union(keptVideoChannels)
         for channel in (try? context.fetch(FetchDescriptor<Channel>())) ?? []
         where added.contains(channel.youtubeChannelId) && !stillListed.contains(channel.youtubeChannelId) {
             context.delete(channel)
@@ -190,7 +233,7 @@ final class FeedStore: ObservableObject {
         UserDefaults.standard.set(Array(added), forKey: key)
         try? context.save()
         #if DEBUG
-        print("[SolaPraise] shared list: \(ids.count) playlist(s)")
+        print("[SolaPraise] shared list: \(listing.playlists.count) playlist(s), \(listing.videos.count) video(s), \(wanted.count) video(s) shown")
         #endif
     }
 
@@ -239,7 +282,10 @@ final class FeedStore: ObservableObject {
         let playlists = (try? context.fetch(FetchDescriptor<CachedPlaylist>())) ?? []
         let channels = (try? context.fetch(FetchDescriptor<Channel>())) ?? []
         let have = Set(channels.map(\.youtubeChannelId))
+        let sharedVideos = (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.isSharedListed }))) ?? []
         let wanted = Set(playlists.filter(\.isSharedListed).map(\.channelId))
+            .union(sharedVideos.compactMap(\.channelId))
             .filter { !$0.isEmpty && !have.contains($0) && !added.contains($0) }
         guard !wanted.isEmpty else { return }
         var order = (channels.map(\.sortOrder).max() ?? 0) + 1

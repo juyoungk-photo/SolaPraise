@@ -100,6 +100,7 @@ enum ReadingSettings {
         static let currentChapter = "reading.currentChapter"
         static let lastAdvancedDay = "reading.lastAdvancedDay"
         static let lastGateDay = "reading.lastGateDay"
+        static let opensOnLaunch = "reading.opensOnLaunch"
         static let readChapters = "reading.readChapters"
         static let translation = "reading.translation"
         static let notificationsOn = "reading.notificationsOn"
@@ -173,6 +174,14 @@ enum ReadingSettings {
     static var lastGateDay: String? {
         get { defaults.string(forKey: Keys.lastGateDay) }
         set { defaults.set(newValue, forKey: Keys.lastGateDay) }
+    }
+
+    /// Whether today's psalm comes up full screen the first time the app
+    /// is opened each day. Off unless chosen: on a new device it stood
+    /// between someone and the app they had just installed.
+    static var opensOnLaunch: Bool {
+        get { defaults.bool(forKey: Keys.opensOnLaunch) }
+        set { defaults.set(newValue, forKey: Keys.opensOnLaunch) }
     }
 
     static var readChapters: Set<Int> {
