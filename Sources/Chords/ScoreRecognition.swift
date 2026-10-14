@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 6
+    static let version = 7
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -169,6 +169,9 @@ enum ScoreRecognition {
                 // grazes is followed down to its staff.
                 let staffRows = staves.map { $0.staff.insetBy(dx: 0, dy: -$0.staff.height / 8) }
                 found.removeAll { item in
+                    // What a syllable is misread as is short and plain —
+                    // 「A」, 「A6」 — never a slash chord or a 「sus4」.
+                    guard item.original.count <= 3, !item.original.contains("/") else { return false }
                     let probe = CGRect(x: item.box.minX, y: item.box.minY,
                                        width: item.box.width, height: item.box.height * 2)
                     let lines = inkLines(probe, in: image).filter { run in
@@ -780,10 +783,14 @@ enum ScoreRecognition {
                 lyrics.append(CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height))
             }
             let words = wordRanges(in: text)
-            // Words that are mostly Hangul. A chord row read through Korean
-            // eyes can pick up one stray syllable — 「Em D9태」 — and is not
-            // a lyric.
-            for range in words {
+            // Words of a line that is mostly Hangul, with two syllables or
+            // more. A chord row read through Korean eyes picks up a stray
+            // syllable — 「Em D9태」 — and judged word by word, 「태」 alone
+            // was a lyric sitting on D9/F#, which was then dropped.
+            let lineLetters = text.filter(\.isLetter)
+            let lineHangul = lineLetters.unicodeScalars.filter { (0xAC00...0xD7A3).contains($0.value) }.count
+            let lyricLine = lineHangul >= 2 && Double(lineHangul) >= Double(lineLetters.count) * 0.6
+            for range in words where lyricLine {
                 let letters = text[range].filter(\.isLetter)
                 let hangul = letters.unicodeScalars.filter { (0xAC00...0xD7A3).contains($0.value) }.count
                 guard hangul > 0, Double(hangul) >= Double(letters.count) * 0.6 else { continue }
