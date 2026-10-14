@@ -452,7 +452,13 @@ enum ScoreChart {
                     && !staves.contains { word.box.midY > $0.minY - $0.height * 0.125 && word.box.midY < $0.maxY + $0.height * 0.075 }
             }
         }
-        let words = voted(reads)
+        // The line-by-line read is trusted on its own for a Korean syllable
+        // nothing else contradicts. On a 1600 px hymn, the page read and
+        // the strip read both missed every syllable printed under a chord
+        // letter — the first of each bar — so only this read had them, and
+        // the vote dropped 「의」지하는, 「내」 주를, 「더」욱 in all four
+        // verses.
+        let words = voted(reads, trusted: 2)
         // On a Korean chart a Latin word under the staff is a chord read
         // badly — 「DSUS4」, 「D9E」 — or an instruction, not a lyric.
         let hangul = words.filter { isKorean($0.text) }.count
@@ -468,7 +474,8 @@ enum ScoreChart {
 
     /// One word per place where at least two reads put one, spelled as
     /// most of them spell it — the first read that has it breaking a tie.
-    static func voted(_ reads: [[Word]]) -> [Word] {
+    /// A Korean syllable only `trusted` saw is kept too.
+    static func voted(_ reads: [[Word]], trusted: Int? = nil) -> [Word] {
         struct Slot { var box: CGRect; var texts: [Int: String] }
         var slots: [Slot] = []
         for (pass, read) in reads.enumerated() {
@@ -486,7 +493,19 @@ enum ScoreChart {
                 }
             }
         }
+        let agreed = slots.filter { $0.texts.count >= 2 }
         return slots.compactMap { slot in
+            if slot.texts.count == 1, let trusted, let text = slot.texts[trusted], isKorean(text) {
+                // Not where a syllable the reads agreed on already stands:
+                // the same syllable boxed a little to one side is a
+                // duplicate, 「주만만」.
+                let taken = agreed.contains { other in
+                    let overlap = min(other.box.maxX, slot.box.maxX) - max(other.box.minX, slot.box.minX)
+                    return overlap > min(other.box.width, slot.box.width) * 0.25
+                        && abs(other.box.midY - slot.box.midY) < max(other.box.height, slot.box.height) * 0.6
+                }
+                return taken ? nil : Word(text: text, box: slot.box)
+            }
             guard slot.texts.count >= 2 else { return nil }
             var counts: [String: Int] = [:]
             for text in slot.texts.values { counts[text, default: 0] += 1 }
