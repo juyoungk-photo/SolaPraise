@@ -67,6 +67,14 @@ enum SheetTidy {
     static let declined      = Colour(red: 0.98, green: 0.85, blue: 0.85)
     static let away          = Colour(red: 0.91, green: 0.91, blue: 0.91)
 
+    /// Whether pressing 정리 would change anything that shows: a header not
+    /// frozen, or a colour rule missing. Restyling the header and sizing
+    /// columns are sent on every press and do not count — a sheet tidied
+    /// once is never reported as needing it again for those.
+    static func isNeeded(_ tabs: [Tab]) -> Bool {
+        requests(for: tabs).contains { $0["updateSheetProperties"] != nil || $0["addConditionalFormatRule"] != nil }
+    }
+
     /// The batchUpdate requests for these tabs, as JSON objects.
     static func requests(for tabs: [Tab]) -> [[String: Any]] {
         var out: [[String: Any]] = []

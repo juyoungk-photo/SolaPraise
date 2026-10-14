@@ -121,7 +121,7 @@ enum TeamSampleData {
         var plan = [
             PlanItem(order: 1, kind: .announcement, title: "환영과 광고", minutes: 3,
                      person: nil, key: nil, url: nil, notes: nil, row: 2),
-            PlanItem(order: 2, kind: .song, title: "주의 약속하신 말씀 위에 서",
+            PlanItem(order: 2, kind: .song, title: "[새찬송가 546장] 주의 약속하신 말씀 위에 서 | 피아노 찬송",
                      minutes: 6, person: "주영", key: "G",
                      url: watch("EwY1Z6_6H3I"), notes: nil, row: 3),
             PlanItem(order: 3, kind: .song, title: "나의 믿음 주께 있네",
@@ -131,7 +131,7 @@ enum TeamSampleData {
                      person: "민수", key: nil, url: nil, notes: nil, row: 5),
             PlanItem(order: 5, kind: .sermon, title: "설교", minutes: 35,
                      person: "박요셉 목사", key: nil, url: nil, notes: nil, row: 6),
-            PlanItem(order: 6, kind: .song, title: "주님 뜻대로 살기로 했네",
+            PlanItem(order: 6, kind: .song, title: "주님 뜻대로 살기로 했네 No Turning Back | 더라이트 워십 2019 Live",
                      minutes: 4, person: "은혜", key: "A",
                      url: watch("0FM4gDmnPrk"), notes: nil, row: 7)
         ]

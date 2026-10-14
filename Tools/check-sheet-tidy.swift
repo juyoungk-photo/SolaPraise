@@ -106,6 +106,9 @@ struct CheckSheetTidy {
         check("a second press adds no rule", formulas(second).isEmpty,
               "got \(formulas(second))")
         check("a second press does not re-freeze", second.allSatisfy { $0["updateSheetProperties"] == nil })
+        // The badge beside 찬양팀 Sheet: shown before, gone after.
+        check("an untidied sheet needs tidying", SheetTidy.isNeeded([signups, schedule]))
+        check("a tidied sheet does not", !SheetTidy.isNeeded(after))
 
         // It must survive JSON encoding, which is how it is sent.
         check("the requests encode as JSON",

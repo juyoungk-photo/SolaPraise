@@ -122,7 +122,6 @@ struct ServicePrepView: View {
     /// Months whose weeks are hidden. Filled on first load with every month
     /// but the one in hand — see monthHeader.
     @State private var foldedMonths: Set<Date> = []
-    @State private var addingItemTo: TeamService?
     /// A chart the team already made, opened from a 콘티 row.
     @State private var openChart: SavedSong?
     /// The song a picked audio file will be analysed as.
@@ -277,7 +276,6 @@ struct ServicePrepView: View {
                                exportOnOpen: makingConti)
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
-            .sheet(item: $addingItemTo) { AddPlanItemSheet(service: $0) }
             .sheet(item: $reordering) { service in
                 ReorderPlanSheet(service: service, sheetId: sheetId)
                     .environmentObject(team)
@@ -621,8 +619,34 @@ struct ServicePrepView: View {
         if TeamSheetSource.current != nil || ChurchSheetSource.current != nil {
             Section {
                 if let url = teamSheetURL {
-                    Button { openURL(url) } label: {
-                        Label("찬양팀 Sheet", systemImage: "tablecells")
+                    HStack {
+                        Button { openURL(url) } label: {
+                            Label("찬양팀 Sheet", systemImage: "tablecells")
+                        }
+                        Spacer()
+                        // Only when it would change something: a header
+                        // left unfrozen, a colour rule missing. Asked, not
+                        // done — it changes how a shared document looks for
+                        // everyone, so the person pressing it should know.
+                        if team.sheetNeedsTidy || tidying, !team.isReadOnly {
+                            Button { confirmTidy = true } label: {
+                                // Not a Label: in a list row it takes the
+                                // row's icon column and spreads apart.
+                                HStack(spacing: 4) {
+                                    Image(systemName: "paintbrush")
+                                    Text(tidying ? "정리하는 중" : "보기 좋게 정리")
+                                }
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(Capsule().fill(Color.accentColor))
+                            }
+                            .disabled(tidying)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .task(id: sheetId) {
+                        if let sheetId { await team.checkTidy(sheetId: sheetId) }
                     }
                 }
                 if let url = ChurchSheetSource.url {
@@ -651,15 +675,6 @@ struct ServicePrepView: View {
                                 .background(Capsule().fill(.orange))
                         }
                     }
-                }
-                // Asked, not done: it changes how a shared document looks
-                // for everyone, so the person pressing it should know.
-                if sheetId != nil, !team.isReadOnly {
-                    Button { confirmTidy = true } label: {
-                        Label(tidying ? "정리하는 중…" : "시트 보기 좋게 정리",
-                              systemImage: "paintbrush")
-                    }
-                    .disabled(tidying)
                 }
             } footer: {
                 Text("시트에서 바꾼 내용은 이 화면을 아래로 당겨 새로 고치면 반영됩니다.")
@@ -841,41 +856,50 @@ struct ServicePrepView: View {
 
             }
 
-            // Right under the 순서, on one line: add a line, reorder them.
-            // Borderless, so each is its own button inside the list row.
-            HStack(spacing: 20) {
-                Button {
-                    addingItemTo = service
-                } label: {
-                    Label("추가", systemImage: "plus.circle")
-                }
-                .disabled(team.isReadOnly)
-
-                if items.count > 1 {
-                    Button {
-                        reordering = service
-                    } label: {
-                        Label("순서 바꾸기", systemImage: "arrow.up.arrow.down")
-                    }
-                    .disabled(team.isReadOnly)
-                }
-                Spacer(minLength: 0)
-            }
-            .buttonStyle(.borderless)
-
             let songs = items.filter { $0.kind == .song && $0.videoId != nil }
-            if !songs.isEmpty {
-                Button {
-                    host.play(
-                        queue: songs.compactMap { item in
-                            item.videoId.map { PlayableVideo(id: $0, title: item.title) }
-                        },
-                        startIndex: 0,
-                        purpose: .worship
-                    )
-                } label: {
-                    Label("찬양만 이어 듣기", systemImage: "play.fill")
+            // Under the songs' own ▶, in the same column: the whole set in
+            // order. It used to be a full-width row further down, between
+            // buttons that edit the 순서 — the one thing here that only
+            // listens.
+            if songs.count > 1 {
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    Button {
+                        host.play(
+                            queue: songs.compactMap { item in
+                                item.videoId.map { PlayableVideo(id: $0, title: item.title) }
+                            },
+                            startIndex: 0,
+                            purpose: .worship
+                        )
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("찬양 이어 듣기").font(.caption2.weight(.medium))
+                            Image(systemName: "play.circle").font(.title3)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("찬양만 이어 듣기")
                 }
+            }
+
+            // Right under the 순서: one button for adding, moving and
+            // removing lines — a line added at the end is usually moved
+            // next. Then the 콘티 and the stand, 콘티 first: it is what a
+            // leader puts in before anyone plays from it.
+            if !team.isReadOnly {
+                Button {
+                    reordering = service
+                } label: {
+                    Label("순서 추가 및 조정", systemImage: "list.bullet.indent")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            servicePDFRow(service)
+
+            if !songs.isEmpty {
 
                 // After the service, the songs outlive the 콘티 — next
                 // week's overwrites this one. Offered from the day of the
@@ -913,9 +937,6 @@ struct ServicePrepView: View {
                 }
                 }
             }
-
-
-            servicePDFRow(service)
 
             // A sheet rather than a menu. The menu could only list the
             // playlists pinned in the 찬양 tab — two, on most devices — and
@@ -988,7 +1009,30 @@ struct ServicePrepView: View {
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title).font(.subheadline)
+                // A song as the song: its title first, the hymn number
+                // beside it, and which recording — the team, the year —
+                // one quiet line under it (PlanSongTitle).
+                if item.kind == .song {
+                    let parts = PlanSongTitle.split(item.title, channel: channelTitle(forVideo: item.videoId))
+                    // One text, so the number wraps after the title on a
+                    // phone instead of squeezing it to 「…」.
+                    let number = parts.hymn.map {
+                        Text("  찬송가 \($0)장")
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } ?? Text("")
+                    Text("\(Text(parts.title).font(.subheadline.weight(.medium)))\(number)")
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !parts.meta.isEmpty {
+                        Text(parts.meta.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(item.title).font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 6) {
                     if item.kind != .song {
                         Text(item.kind.label)
@@ -1142,12 +1186,11 @@ struct ServicePrepView: View {
         // version, the folder, and the ways to add or make one.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
             VStack(alignment: .leading, spacing: 6) {
-                // iPad: all three on one line. Phone: 연주모드 above, the two
-                // 콘티 files under it. Decided by size class — measuring the
-                // fit let the labels squeeze down to bare icons.
+                // 콘티 first, then the stand that plays from it — the order a
+                // leader goes in, and the first is the nearer thumb reach.
                 HStack(spacing: 22) {
-                    standButton(service, stand: stand)
                     contiMenu(service, contis: contis, built: built, pieces: pieces)
+                    standButton(service, stand: stand)
                     Spacer(minLength: 0)
                 }
                 .labelStyle(.titleAndIcon)

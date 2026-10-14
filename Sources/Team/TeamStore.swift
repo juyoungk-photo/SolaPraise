@@ -993,6 +993,26 @@ final class TeamStore: ObservableObject {
 
     /// Formats the team sheet for reading — see SheetTidy. Touches no data.
     /// Returns a sentence for the person who pressed it.
+    /// The sheet is missing a frozen header or a colour rule that 정리
+    /// would add: shown as a badge beside 찬양팀 Sheet, not as a row of
+    /// its own that is there whether or not it would do anything.
+    @Published private(set) var sheetNeedsTidy = false
+
+    /// Asks once per sheet a session — reading the tabs' formatting costs a
+    /// read per tab, and a sheet is not untidied by the app.
+    func checkTidy(sheetId: String) async {
+        #if DEBUG
+        // The sample sheet is never read; it shows the badge so its place
+        // in the layout can be reviewed.
+        if isSample { sheetNeedsTidy = true; return }
+        #endif
+        guard let client, !isReadOnly, tidyCheckedSheet != sheetId else { return }
+        tidyCheckedSheet = sheetId
+        guard let tabs = try? await client.tidyTabs(sheetId: sheetId) else { return }
+        sheetNeedsTidy = !tabs.isEmpty && SheetTidy.isNeeded(tabs)
+    }
+    private var tidyCheckedSheet: String?
+
     func tidySheet(sheetId: String) async -> String {
         #if DEBUG
         if isSample { return "샘플 모드에서는 시트를 바꾸지 않습니다." }
@@ -1003,6 +1023,7 @@ final class TeamStore: ObservableObject {
             guard !tabs.isEmpty else { return "정리할 탭을 찾지 못했습니다." }
             let requests = SheetTidy.requests(for: tabs)
             try await client.formatUpdate(sheetId: sheetId, requests: requests)
+            sheetNeedsTidy = false
             let added = requests.filter { $0["addConditionalFormatRule"] != nil }.count
             let names = tabs.map(\.title).joined(separator: ", ")
             return added == 0

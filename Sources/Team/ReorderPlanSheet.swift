@@ -2,7 +2,11 @@
 //  ReorderPlanSheet.swift
 //  SolaPraise
 //
-//  Dragging a service's 순서 into a new order.
+//  A service's 순서: add a line, drag them into order, swipe one out.
+//
+//  One place for all three — 「순서 추가 및 조정」. Adding and reordering
+//  were two buttons under the 순서 that opened two sheets, and a line added
+//  at the end almost always had to be moved next.
 //
 //  WHY A SHEET: the 순서 rows live in a stack inside one row of the
 //  schedule list, and .onMove belongs to a List's own rows — it cannot
@@ -38,6 +42,7 @@ struct ReorderPlanSheet: View {
     @State private var removed: [PlanItem] = []
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var adding = false
 
     var body: some View {
         NavigationStack {
@@ -50,7 +55,8 @@ struct ReorderPlanSheet: View {
                                                  ? Color.accentColor : .secondary)
                                 .frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(line.item.title).lineLimit(2)
+                                Text(line.item.kind == .song ? PlanSongTitle.split(line.item.title).title : line.item.title)
+                                    .lineLimit(2)
                                 if let key = line.item.key {
                                     Text(key).font(.caption).foregroundStyle(.secondary)
                                 }
@@ -65,8 +71,14 @@ struct ReorderPlanSheet: View {
                     }
                 } footer: {
                     Text(removed.isEmpty
-                         ? "끌어서 순서를 바꾸고, 왼쪽으로 밀어 지우세요. 저장하기 전까지는 시트가 바뀌지 않습니다."
+                         ? "끌어서 순서를 바꾸고, 왼쪽으로 밀어 지우세요. 저장하기 전까지는 시트가 바뀌지 않습니다. 아래 「순서 추가」로 더한 줄은 바로 시트 맨 뒤에 들어갑니다."
                          : "\(removed.count)개를 지웁니다. 저장하기 전까지는 시트가 바뀌지 않습니다.")
+                }
+
+                Section {
+                    Button { adding = true } label: {
+                        Label("순서 추가", systemImage: "plus.circle.fill")
+                    }
                 }
 
                 if let errorMessage {
@@ -80,11 +92,11 @@ struct ReorderPlanSheet: View {
             // Always in edit mode: the only thing this screen is for is
             // dragging, so the handles should be there without a tap first.
             .environment(\.editMode, .constant(.active))
-            .navigationTitle("순서 바꾸기")
+            .navigationTitle("순서 추가 및 조정")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("취소") { dismiss() }
+                    Button(changed ? "취소" : "닫기") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("저장") { save() }
@@ -94,8 +106,25 @@ struct ReorderPlanSheet: View {
             .disabled(isSaving)
             .overlay { if isSaving { ProgressView().controlSize(.large) } }
         }
-        .onAppear {
-            lines = team.plan(for: service).enumerated().map { Line(id: $0.offset, item: $0.element) }
+        .onAppear(perform: load)
+        // A line added is written at once, at the end of the 순서.
+        .sheet(isPresented: $adding, onDismiss: merge) {
+            AddPlanItemSheet(service: service).environmentObject(team)
+        }
+    }
+
+    private func load() {
+        lines = team.plan(for: service).enumerated().map { Line(id: $0.offset, item: $0.element) }
+    }
+
+    /// The new line at the end, without losing a drag not yet saved.
+    private func merge() {
+        guard changed else { load(); return }
+        let known = Set(lines.map(\.item.id) + removed.map(\.id))
+        var next = (lines.map(\.id).max() ?? -1) + removed.count + 1
+        for item in team.plan(for: service) where !known.contains(item.id) {
+            lines.append(Line(id: next, item: item))
+            next += 1
         }
     }
 
