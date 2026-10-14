@@ -14,6 +14,10 @@
 //  chord sits above its syllable and runs to the right instead of pushing
 //  the words apart; a bar is a thin line between syllables, not a box.
 //
+//  WORDS, THEN BARS: the lyrics are spaced as Korean is written
+//  (LyricSpacing) and a line wraps only between words; a bar line is a thin
+//  mark in the chord row, so it no longer cuts a word in two.
+//
 //  Same on both devices; a phone wraps the line sooner.
 //
 
@@ -59,90 +63,136 @@ struct ScoreChartView: View {
 
     // MARK: - One staff, as a line
 
-    private enum Token {
-        /// `room`: space added after the cell so the chord before the next
-        /// one has finished — placed at a chord change, never mid-word.
-        case cell(ScoreChart.Cell, room: CGFloat)
-        case bar(repeatStart: Bool, repeatEnd: Bool)
-        case verseNumbers(Int)
+    /// One sung position as drawn: the cell, its syllables as they should
+    /// read (spaced and corrected — LyricSpacing), and what sits around it.
+    private struct Slot {
+        let cell: ScoreChart.Cell
+        let syllables: [String]
+        /// A bar starts here: a mark in the chord row, before it.
+        var barBefore = false
+        var repeatStart = false
+        var repeatEndBefore = false
+        /// Space after it so the chord over it has finished before the next
+        /// chord — an extender line when that falls inside a word.
+        var room: CGFloat = 0
     }
 
-    /// The staff's bars flattened into one run of syllables with bar marks
-    /// between, wrapped to the width.
+    private enum Token {
+        case verseNumbers(Int)
+        /// A word: drawn as one piece, so a line wraps only between words.
+        case word([Slot])
+        case repeatEnd
+    }
+
+    /// The staff as words, in the order sung.
+    ///
+    /// WHY WORDS, NOT BARS: a bar ends wherever the music says, mid-word as
+    /// often as not. Laid out bar by bar, 「찬양하며 경배해」 read 「하며경 |
+    /// 배해귀」 — a sentence nobody wrote. The words come from the language
+    /// (LyricSpacing), the bars stay as thin marks in the chord row, and
+    /// the line breaks only where a word ends.
     private func line(_ system: ScoreChart.System) -> some View {
         let verses = max(system.verses, 1)
         let empty = ScoreChart.Cell(chord: nil, syllables: Array(repeating: "", count: verses))
-        // A bar with nothing read in it still holds its place.
-        let bars = system.bars.map { bar -> [ScoreChart.Cell] in bar.cells.isEmpty ? [empty] : bar.cells }
-        let cells = bars.flatMap { $0 }
 
-        // A chord runs to the right over the syllables after it, as on a
-        // printed chart. Only where it would reach the next chord does the
-        // line open up — by exactly the overlap, just before that next
-        // chord's syllable. Measured, not guessed: a two-syllable rule
-        // opened gaps inside words, and none let 「C#m」 run into 「F#」.
-        let barWidth: CGFloat = 15
-        var widths = cells.map { cellWidth($0) }
-        var room = [CGFloat](repeating: 0, count: cells.count)
-        var barBefore = [Bool](repeating: false, count: cells.count)
-        var position = 0
-        for (index, bar) in bars.enumerated() {
-            if index > 0, position < cells.count { barBefore[position] = true }
-            position += bar.count
+        // Every cell in order, with the bar it opens.
+        var slots: [Slot] = []
+        for (index, bar) in system.bars.enumerated() {
+            let cells = bar.cells.isEmpty ? [empty] : bar.cells
+            for (offset, cell) in cells.enumerated() {
+                var slot = Slot(cell: cell, syllables: cell.syllables)
+                if offset == 0 {
+                    slot.barBefore = index > 0 || bar.repeatStart
+                    slot.repeatStart = bar.repeatStart
+                    slot.repeatEndBefore = index > 0 && system.bars[index - 1].repeatEnd
+                }
+                slots.append(slot)
+            }
         }
-        for i in cells.indices {
-            guard let id = cells[i].chord, let name = chord(id) else { continue }
+
+        // Spacing and corrections, verse by verse; a word starts wherever
+        // any verse starts one.
+        var startsWord = [Bool](repeating: false, count: slots.count)
+        for verse in 0..<verses {
+            let indices = slots.indices.filter { verse < slots[$0].syllables.count && !slots[$0].syllables[verse].isEmpty }
+            let spaced = LyricSpacing.space(indices.map { slots[$0].syllables[verse] })
+            for (k, index) in indices.enumerated() {
+                var syllables = slots[index].syllables
+                syllables[verse] = spaced.syllables[k]
+                slots[index] = Slot(cell: slots[index].cell, syllables: syllables, barBefore: slots[index].barBefore,
+                                    repeatStart: slots[index].repeatStart, repeatEndBefore: slots[index].repeatEndBefore)
+                if spaced.startsWord[k] { startsWord[index] = true }
+            }
+        }
+        // A chord over no syllable is a word of its own.
+        for index in slots.indices where slots[index].syllables.allSatisfy(\.isEmpty) {
+            startsWord[index] = true
+            if index + 1 < slots.count { startsWord[index + 1] = true }
+        }
+
+        // A chord runs to the right over the syllables after it. Only where
+        // it would reach the next chord does the line open up — by exactly
+        // the overlap, just before that next chord's syllable.
+        var widths = slots.map { cellWidth($0.cell, $0.syllables) }
+        for i in slots.indices {
+            guard let id = slots[i].cell.chord, let name = chord(id) else { continue }
             let need = textWidth(name, chordSize, bold: true) + 8
-            guard let next = cells.indices.first(where: { $0 > i && cells[$0].chord != nil }) else { continue }
+            guard let next = slots.indices.first(where: { $0 > i && slots[$0].cell.chord != nil }) else { continue }
             var available: CGFloat = 0
-            for k in i..<next { available += widths[k] + (k > i && barBefore[k] ? barWidth : 0) }
-            if barBefore[next] { available += barWidth }
+            for k in i..<next {
+                available += widths[k]
+                if k + 1 < slots.count, startsWord[k + 1] { available += wordGap }
+            }
             if need > available {
-                room[next - 1] += need - available
+                slots[next - 1].room += need - available
                 widths[next - 1] += need - available
             }
         }
 
         var tokens: [Token] = []
         if system.verses > 1 { tokens.append(.verseNumbers(system.verses)) }
-        var flat = 0
-        for (index, bar) in system.bars.enumerated() {
-            if index > 0 || bar.repeatStart {
-                tokens.append(.bar(repeatStart: bar.repeatStart,
-                                   repeatEnd: index > 0 && system.bars[index - 1].repeatEnd))
+        var word: [Slot] = []
+        for (index, slot) in slots.enumerated() {
+            if startsWord[index], !word.isEmpty {
+                tokens.append(.word(word))
+                word = []
             }
-            for cell in bars[index] {
-                tokens.append(.cell(cell, room: room[flat]))
-                flat += 1
-            }
+            word.append(slot)
         }
-        if system.bars.last?.repeatEnd == true { tokens.append(.bar(repeatStart: false, repeatEnd: true)) }
+        if !word.isEmpty { tokens.append(.word(word)) }
+        if system.bars.last?.repeatEnd == true { tokens.append(.repeatEnd) }
 
-        return LineFlow(lineSpacing: 12) {
+        return LineFlow(lineSpacing: 12, itemSpacing: wordGap) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
                 switch token {
-                case let .cell(cell, room):
-                    cellView(cell, verses: verses)
-                        .padding(.trailing, room)
-                case let .bar(start, end):
-                    barMark(verses: verses, repeatStart: start, repeatEnd: end)
                 case let .verseNumbers(count):
                     verseNumbers(count)
+                case let .word(slots):
+                    HStack(alignment: .top, spacing: 0) {
+                        ForEach(Array(slots.enumerated()), id: \.offset) { offset, slot in
+                            slotView(slot, verses: verses, insideWord: offset + 1 < slots.count)
+                        }
+                    }
+                case .repeatEnd:
+                    barMark(verses: verses, repeatStart: false, repeatEnd: true)
                 }
             }
         }
     }
 
+    /// Room between words: a space as the singer reads it.
+    private var wordGap: CGFloat { lyricSize * 0.45 }
+
     private var chordSize: CGFloat { 20 * scale * deviceScale }
 
     /// The width a cell's syllables take — its widest verse — or, for a
     /// chord with no words under it, the chord itself.
-    private func cellWidth(_ cell: ScoreChart.Cell) -> CGFloat {
-        let syllables = cell.syllables.map { textWidth($0, lyricSize, bold: false) }.max() ?? 0
-        if syllables == 0, let id = cell.chord, let name = chord(id) {
+    private func cellWidth(_ cell: ScoreChart.Cell, _ syllables: [String]) -> CGFloat {
+        let widest = syllables.map { textWidth($0, lyricSize, bold: false) }.max() ?? 0
+        if widest == 0, let id = cell.chord, let name = chord(id) {
             return textWidth(name, chordSize, bold: true) + 8
         }
-        return max(syllables, textWidth(" ", lyricSize, bold: false))
+        return max(widest, textWidth(" ", lyricSize, bold: false))
     }
 
     private func textWidth(_ text: String, _ size: CGFloat, bold: Bool) -> CGFloat {
@@ -152,9 +202,9 @@ struct ScoreChartView: View {
         return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    private func cellView(_ cell: ScoreChart.Cell, verses: Int) -> some View {
-        let name = cell.chord.flatMap(chord)
-        let wordless = cell.syllables.allSatisfy(\.isEmpty)
+    private func slotView(_ slot: Slot, verses: Int, insideWord: Bool) -> some View {
+        let name = slot.cell.chord.flatMap(chord)
+        let wordless = slot.syllables.allSatisfy(\.isEmpty)
         return VStack(alignment: .leading, spacing: 2) {
             Group {
                 if let name, wordless {
@@ -171,14 +221,45 @@ struct ScoreChartView: View {
             .foregroundStyle(Color.accentColor)
 
             ForEach(0..<verses, id: \.self) { verse in
-                let syllable = verse < cell.syllables.count ? cell.syllables[verse] : ""
-                Text(syllable.isEmpty ? " " : syllable)
-                    .font(.system(size: verse == 0 ? lyricSize : lyricSize * 0.92))
-                    .foregroundStyle(.white.opacity(verse == 0 ? 0.95 : 0.72))
-                    .fixedSize()
-                    .frame(height: lyricSize * 1.25, alignment: .leading)
+                let syllable = verse < slot.syllables.count ? slot.syllables[verse] : ""
+                HStack(spacing: 0) {
+                    Text(syllable.isEmpty ? " " : syllable)
+                        .font(.system(size: verse == 0 ? lyricSize : lyricSize * 0.92))
+                        .fixedSize()
+                    // Room for a long chord inside a word: an extender, so
+                    // the gap does not read as a space between two words.
+                    if slot.room > 0 {
+                        if insideWord, !syllable.isEmpty {
+                            Rectangle()
+                                .frame(width: max(slot.room - 4, 2), height: 1)
+                                .padding(.horizontal, 2)
+                                .opacity(0.35)
+                        } else {
+                            Color.clear.frame(width: slot.room)
+                        }
+                    }
+                }
+                .foregroundStyle(.white.opacity(verse == 0 ? 0.95 : 0.72))
+                .frame(height: lyricSize * 1.25, alignment: .leading)
             }
         }
+        // The bar that starts here: a thin mark in the chord row, just
+        // before the syllable — the lyrics under it run on.
+        .overlay(alignment: .topLeading) {
+            if slot.barBefore {
+                barTick(repeatStart: slot.repeatStart, repeatEnd: slot.repeatEndBefore)
+                    .offset(x: -4)
+            }
+        }
+    }
+
+    /// A bar line in the chord row only.
+    private func barTick(repeatStart: Bool, repeatEnd: Bool) -> some View {
+        Rectangle()
+            .fill(.white.opacity(repeatStart || repeatEnd ? 0.75 : 0.3))
+            .frame(width: repeatStart || repeatEnd ? 3 : 1, height: chordRowHeight * 0.8)
+            .padding(.top, chordRowHeight * 0.1)
+            .accessibilityHidden(true)
     }
 
     private func barMark(verses: Int, repeatStart: Bool, repeatEnd: Bool) -> some View {
@@ -218,6 +299,8 @@ struct ScoreChartView: View {
     /// next item does not fit; items share a top edge.
     private struct LineFlow: Layout {
         var lineSpacing: CGFloat
+        /// Space between items on a line — between words.
+        var itemSpacing: CGFloat = 0
 
         func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
             arrange(subviews, width: proposal.width ?? .infinity).size
@@ -242,9 +325,9 @@ struct ScoreChartView: View {
                     lineHeight = 0
                 }
                 origins.append(CGPoint(x: x, y: y))
-                x += size.width
+                x += size.width + itemSpacing
                 lineHeight = max(lineHeight, size.height)
-                widest = max(widest, x)
+                widest = max(widest, x - itemSpacing)
             }
             return (origins, CGSize(width: min(widest, width), height: y + lineHeight))
         }
