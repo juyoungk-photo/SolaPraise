@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 5
+    static let version = 6
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -51,11 +51,13 @@ enum ScoreRecognition {
     static func chords(in image: CGImage) -> [Found] {
         var found: [Found] = []
         var lyricLines: [CGRect] = []
+        var koreanWords: [CGRect] = []
 
         for languages in [["en-US", "ko-KR"], ["ko-KR", "en-US"]] {
             let pass = recognise(image, languages: languages)
             merge(pass.chords, into: &found)
             lyricLines += pass.lyricLines
+            koreanWords += pass.koreanWords
         }
 
         for band in bands(chords: found, lyricLines: lyricLines) {
@@ -147,6 +149,77 @@ enum ScoreRecognition {
         // read one as 「A」. Checked last, after every pass has added.
         if !staves.isEmpty {
             found.removeAll { $0.box.minX < 0.07 }
+            // Nothing whose ink is all Korean lyrics. Printed in a serif
+            // face, 「사랑」 was read as 「A6」 and 「살아」 as 「A」 by a pass
+            // that saw only Latin there, while another pass read the same
+            // words as the Hangul they are. Judged by the candidate's INK,
+            // line by line, against the height of one line of lyrics at
+            // the top of each Korean word: Vision often reads a lyric line
+            // and the chord row under it as one line, two lines tall; and a
+            // chord's box is often tall enough to take in the lyric above
+            // it. A box with any line of ink outside the lyrics is kept.
+            let lineHeight = median(koreanWords.map(\.height)) ?? 0
+            if lineHeight > 0 {
+                let glyphs = koreanWords.map { word in
+                    CGRect(x: word.minX, y: word.minY, width: word.width, height: min(word.height, lineHeight * 1.15))
+                }
+                // Ink that runs into a staff — its lines, a beam on stems
+                // rising from it — is notation, not text either way. Looked
+                // for a box's height below it, so a beam the box only
+                // grazes is followed down to its staff.
+                let staffRows = staves.map { $0.staff.insetBy(dx: 0, dy: -$0.staff.height / 8) }
+                found.removeAll { item in
+                    let probe = CGRect(x: item.box.minX, y: item.box.minY,
+                                       width: item.box.width, height: item.box.height * 2)
+                    let lines = inkLines(probe, in: image).filter { run in
+                        run.minY < item.box.maxY
+                            && !staffRows.contains { $0.minY < run.maxY && run.minY < $0.maxY }
+                    }.map(\.midY)
+                    return !lines.isEmpty && lines.allSatisfy { ink in
+                        glyphs.contains { glyph in
+                            let overlap = min(glyph.maxX, item.box.maxX) - max(glyph.minX, item.box.minX)
+                            return overlap > item.box.width * 0.5 && glyph.minY < ink && ink < glyph.maxY
+                        }
+                    }
+                }
+                // And a chord's box no taller than its own letters. A strip
+                // read whole gives boxes tall enough to take in the lyric
+                // line above; the white patch a transposed chord is drawn on
+                // then hid the words above it. Cut to the chord's ink: what is
+                // left once lyrics and staff are set aside.
+                found = found.map { item in
+                    let own = inkLines(item.box, in: image).filter { run in
+                        !staffRows.contains { $0.minY < run.maxY && run.minY < $0.maxY }
+                            && !glyphs.contains { glyph in
+                                let overlap = min(glyph.maxX, item.box.maxX) - max(glyph.minX, item.box.minX)
+                                return overlap > item.box.width * 0.5 && glyph.minY < run.midY && run.midY < glyph.maxY
+                            }
+                    }
+                    guard let top = own.map(\.minY).min(), let bottom = own.map(\.maxY).max(),
+                          bottom - top > item.box.height * 0.25 else { return item }
+                    let margin = (bottom - top) * 0.12
+                    let tight = CGRect(x: item.box.minX, y: top - margin, width: item.box.width,
+                                       height: bottom - top + margin * 2).intersection(item.box)
+                    guard !tight.isNull, tight.height < item.box.height * 0.9 else { return item }
+                    return Found(original: item.original, box: tight, confidence: item.confidence)
+                }
+                // A box still taller than the chords beside it — its letters
+                // touch the lyric above, so no blank row parts them — takes
+                // the height of its row.
+                let tightened = found
+                found = tightened.map { item in
+                    let peers = tightened.filter { peer in
+                        peer.id != item.id && peer.box.height < item.box.height * 0.7
+                            && item.box.minY < peer.box.midY && peer.box.midY < item.box.maxY
+                    }
+                    guard peers.count >= 2,
+                          let top = median(peers.map(\.box.minY)), let bottom = median(peers.map(\.box.maxY)),
+                          bottom > top else { return item }
+                    return Found(original: item.original,
+                                 box: CGRect(x: item.box.minX, y: top, width: item.box.width, height: bottom - top),
+                                 confidence: item.confidence)
+                }
+            }
             // Nor anything at the very start of a staff, over the clef: that
             // is where the measure number goes, and an italic 「27」 read as
             // 「A」. A system's first chord sits over its first note, clear
@@ -425,6 +498,32 @@ enum ScoreRecognition {
 
     /// The span of a box's columns holding ink in its upper 60% — where a
     /// chord's letters are, and what pokes up from below is not.
+    /// Each line of ink inside a box, top to bottom — rows with ink, split
+    /// where blank rows part them — as its top and bottom heights.
+    static func inkLines(_ box: CGRect, in image: CGImage) -> [(minY: CGFloat, maxY: CGFloat, midY: CGFloat)] {
+        guard let gray = grayscale(image) else { return [] }
+        let w = image.width, h = image.height
+        let x0 = max(0, Int(box.minX * CGFloat(w))), x1 = min(w - 1, Int(box.maxX * CGFloat(w)))
+        let y0 = max(0, Int(box.minY * CGFloat(h))), y1 = min(h - 1, Int(box.maxY * CGFloat(h)))
+        guard x1 > x0, y1 > y0 else { return [] }
+        var lines: [(minY: CGFloat, maxY: CGFloat, midY: CGFloat)] = []
+        var start: Int?
+        for y in y0...(y1 + 1) {
+            let inked = y <= y1 && (x0...x1).contains { gray[y * w + $0] < 128 }
+            if inked, start == nil { start = y }
+            if !inked, let s = start {
+                lines.append((CGFloat(s) / CGFloat(h), CGFloat(y) / CGFloat(h), CGFloat(s + y) / 2 / CGFloat(h)))
+                start = nil
+            }
+        }
+        return lines
+    }
+
+    private static func median(_ values: [CGFloat]) -> CGFloat? {
+        guard !values.isEmpty else { return nil }
+        return values.sorted()[values.count / 2]
+    }
+
     static func letterColumns(_ box: CGRect, in image: CGImage) -> CGRect {
         guard let gray = grayscale(image) else { return box }
         let w = image.width, h = image.height
@@ -658,7 +757,7 @@ enum ScoreRecognition {
     /// One recognition pass: the chords it read, and the lines of Hangul,
     /// which mark where lyrics are and so where chords should be above.
     private static func recognise(_ image: CGImage, languages: [String],
-                                  strict: Bool = false) -> (chords: [Found], lyricLines: [CGRect]) {
+                                  strict: Bool = false) -> (chords: [Found], lyricLines: [CGRect], koreanWords: [CGRect]) {
         let request = VNRecognizeTextRequest()
         // Accurate, not fast: chord symbols are small and this runs once
         // per page rather than per frame.
@@ -668,10 +767,11 @@ enum ScoreRecognition {
         request.minimumTextHeight = 0
 
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        do { try handler.perform([request]) } catch { return ([], []) }
+        do { try handler.perform([request]) } catch { return ([], [], []) }
 
         var chords: [Found] = []
         var lyrics: [CGRect] = []
+        var korean: [CGRect] = []
         for observation in request.results ?? [] {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let text = candidate.string
@@ -680,6 +780,17 @@ enum ScoreRecognition {
                 lyrics.append(CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height))
             }
             let words = wordRanges(in: text)
+            // Words that are mostly Hangul. A chord row read through Korean
+            // eyes can pick up one stray syllable — 「Em D9태」 — and is not
+            // a lyric.
+            for range in words {
+                let letters = text[range].filter(\.isLetter)
+                let hangul = letters.unicodeScalars.filter { (0xAC00...0xD7A3).contains($0.value) }.count
+                guard hangul > 0, Double(hangul) >= Double(letters.count) * 0.6 else { continue }
+                if let b = (try? candidate.boundingBox(for: range))?.boundingBox {
+                    korean.append(CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height))
+                }
+            }
             // Reading one word cut out on its own, the whole read must be
             // that one chord. 「: C」 from a cut-out slur is not a C.
             if strict, words.count != 1 { continue }
@@ -725,7 +836,7 @@ enum ScoreRecognition {
                     confidence: candidate.confidence))
             }
         }
-        return (chords, lyrics)
+        return (chords, lyrics, korean)
     }
 
     /// What OCR does to chord symbols on a lead sheet, undone:

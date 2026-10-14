@@ -36,13 +36,17 @@ import Vision
 enum ScoreChart {
 
     /// One chord as the chart needs it: which, and where on the page.
+    /// Raised whenever the reading changes what it returns, so a 코드표
+    /// kept on the device from an older reading is read again.
+    static let version = 1
+
     struct ChordMark {
         let id: UUID
         /// Normalised, origin top-left.
         let box: CGRect
     }
 
-    struct Segment: Equatable {
+    struct Segment: Equatable, Codable {
         /// The chord this segment starts with; nil for words before the
         /// first chord of a bar.
         var chord: UUID?
@@ -54,7 +58,7 @@ enum ScoreChart {
     /// One sung position — a syllable column — with the chord that starts
     /// there, if any. The same column across verses holds each verse's
     /// syllable for that note, as in a hymnal.
-    struct Cell: Equatable {
+    struct Cell: Equatable, Codable {
         var chord: UUID?
         /// One per verse line, "" where a verse has none here.
         var syllables: [String]
@@ -64,7 +68,7 @@ enum ScoreChart {
         func isHeld(_ verse: Int) -> Bool { held.indices.contains(verse) && held[verse] }
     }
 
-    struct Bar: Equatable {
+    struct Bar: Equatable, Codable {
         var segments: [Segment]
         var repeatStart = false
         var repeatEnd = false
@@ -74,7 +78,7 @@ enum ScoreChart {
         var hasChord: Bool { segments.contains { $0.chord != nil } }
     }
 
-    struct System: Equatable {
+    struct System: Equatable, Codable {
         var bars: [Bar]
         /// How many verse lines were read under this staff.
         var verses: Int

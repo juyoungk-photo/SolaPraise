@@ -266,20 +266,22 @@ struct ScoreStandView: View {
                         .foregroundStyle(.white.opacity(0.55))
                 }
                 Spacer(minLength: 0)
-                Picker("보기", selection: $showsChart) {
-                    Text("악보").tag(false)
-                    Text("코드표").tag(true)
+                // Not while editing: 편집 works on 악보 only.
+                if !editing {
+                    Picker("보기", selection: $showsChart) {
+                        Text("악보").tag(false)
+                        Text("코드표").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    // The stand is dark on every device; a segmented control
+                    // takes its look from the environment, and on iPad it
+                    // came out light with 「악보」 unreadable.
+                    .environment(\.colorScheme, .dark)
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .disabled(editing)
-                // The stand is dark on every device; a segmented control
-                // takes its look from the environment, and on iPad it came
-                // out light with 「악보」 unreadable.
-                .environment(\.colorScheme, .dark)
             }
             if editing {
-                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요.")
+                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요. 페이지는 두 손가락으로 넘깁니다.")
                     .font(.footnote)
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
@@ -356,9 +358,13 @@ struct ScoreStandView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
+                // While editing, one finger moves a chord and two scroll
+                // the page. Scrolling used to be off altogether, and a
+                // chart taller than the screen could not be edited below
+                // the fold; with one-finger scrolling, a drag that missed a
+                // chord by a little moved the page instead.
+                .background(ScrollTouches(minimum: editing ? 2 : 1))
             }
-            // No page scroll while editing: a drag moves a chord.
-            .scrollDisabled(editing)
         } else if let failure = state?.failure {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -404,9 +410,12 @@ struct ScoreStandView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .task(id: index) {
-                // The next song read ahead, so the swipe lands on it ready.
-                if items.indices.contains(index + 1) { await model.load(items[index + 1]) }
+            .task(id: "\(index)|\(showsChart)") {
+                // The next song read ahead, so the swipe lands on it ready —
+                // its 코드표 too, when that is what is showing.
+                guard items.indices.contains(index + 1) else { return }
+                await model.load(items[index + 1])
+                if showsChart { await model.loadChart(items[index + 1]) }
             }
         }
     }
@@ -608,6 +617,9 @@ struct ScoreStandView: View {
             .accessibilityLabel("코드를 처음부터 다시 인식")
         }
 
+        // Not while editing: one row of what editing needs. Sharing an
+        // edit in progress is what 완료 then 공유 is for.
+        if !editing {
         // One song, or the whole 콘티 as one file — to share, or keep in
         // Files: the share sheet offers both.
         let shareLabel = pill(model.isExporting ? AnyView(ProgressView().tint(.white))
@@ -643,13 +655,15 @@ struct ScoreStandView: View {
             .disabled(!ready || model.isUploading || (state?.shift ?? 0) == 0)
             .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
         }
+        }
 
     }
 
     /// Previous and next song, side by side at the right edge.
     @ViewBuilder
     private func songNav() -> some View {
-        if items.count > 1 {
+        // While editing there is one song on the stand and no pager.
+        if items.count > 1, !editing {
             HStack(spacing: 6) {
                 Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
                     .disabled(index == 0)
@@ -679,6 +693,30 @@ struct ScoreStandView: View {
         let target = index + delta
         guard items.indices.contains(target) else { return }
         withAnimation(.easeOut(duration: 0.18)) { index = target }
+    }
+}
+
+// MARK: - Two-finger scrolling
+
+/// How many fingers the enclosing scroll view's pan needs. SwiftUI's
+/// ScrollView has no such setting; its UIScrollView does.
+private struct ScrollTouches: UIViewRepresentable {
+    let minimum: Int
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        // Found after layout: in makeUIView the view is not in the
+        // hierarchy yet.
+        DispatchQueue.main.async {
+            var ancestor = view.superview
+            while let current = ancestor, !(current is UIScrollView) { ancestor = current.superview }
+            (ancestor as? UIScrollView)?.panGestureRecognizer.minimumNumberOfTouches = minimum
+        }
     }
 }
 
@@ -1023,10 +1061,20 @@ final class ScoreStandModel: ObservableObject {
         let pages = state.pages.map { page in
             (page.image.cgImage, page.chords.map { ScoreChart.ChordMark(id: $0.id, box: $0.placed) })
         }
+        // Read once, kept on the device: the lyrics and bars take seconds
+        // to read, and a song turned to on Sunday should not take them
+        // again. Kept against the chords it was read with — a chord moved
+        // or added by hand reads the 코드표 again.
+        let signature = ScoreChartStore.signature(pages.map(\.1))
+        if let kept = ScoreChartStore.load(item.id, signature: signature) {
+            charts[item.id] = kept
+            return
+        }
         let systems = await Task.detached(priority: .userInitiated) {
             pages.flatMap { image, marks in image.map { ScoreChart.read($0, chords: marks) } ?? [] }
         }.value
         charts[item.id] = systems
+        ScoreChartStore.save(systems, for: item.id, signature: signature)
     }
 
     /// Forgets every hand edit and reads the chart again.
@@ -1259,6 +1307,44 @@ final class ScoreStandModel: ObservableObject {
 /// A chart's chords as last read or corrected, kept on this device per
 /// attachment — so a chart opens without being read again, and a chart
 /// corrected once stays corrected.
+/// Each 코드표 as read, on this device only — never shared or uploaded:
+/// it holds the song's words.
+enum ScoreChartStore {
+    private struct Saved: Codable {
+        let signature: String
+        let systems: [ScoreChart.System]
+    }
+
+    /// The readers' versions and every chord's id and place: what the
+    /// reading depends on besides the page itself, which a file id fixes.
+    static func signature(_ pages: [[ScoreChart.ChordMark]]) -> String {
+        "\(ScoreChart.version).\(ScoreRecognition.version)|" + pages.map { marks in
+            marks.map { "\($0.id.uuidString)@\(Int($0.box.minX * 10000)),\(Int($0.box.minY * 10000))" }
+                .joined(separator: ",")
+        }.joined(separator: "|")
+    }
+
+    private static var folder: URL? {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let url = base?.appendingPathComponent("ScoreCharts", isDirectory: true)
+        if let url { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    static func load(_ id: String, signature: String) -> [ScoreChart.System]? {
+        guard let url = ScoreEditStore.file(id, in: folder), let data = try? Data(contentsOf: url),
+              let saved = try? JSONDecoder().decode(Saved.self, from: data),
+              saved.signature == signature else { return nil }
+        return saved.systems
+    }
+
+    static func save(_ systems: [ScoreChart.System], for id: String, signature: String) {
+        guard let url = ScoreEditStore.file(id, in: folder),
+              let data = try? JSONEncoder().encode(Saved(signature: signature, systems: systems)) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+}
+
 enum ScoreEditStore {
     struct Saved: Codable {
         var pages: [[ScoreChord]]
