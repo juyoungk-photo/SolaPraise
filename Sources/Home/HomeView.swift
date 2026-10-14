@@ -718,7 +718,9 @@ struct HomeView: View {
         // Being behind in Psalms is not a request to watch an older sermon.
         // The psalm steps the psalm, and 매일성경 has arrows of its own.
         let wanted = day ?? Calendar.current.startOfDay(for: Date())
-        if let exact = episodes.first(where: { EpisodeDate.inTitle($0.title) == wanted }) {
+        let sameDay = episodes.filter { EpisodeDate.inTitle($0.title) == wanted }
+        // Of two that claim the day, the channel's regular series.
+        if let exact = DailySeries.regularFirst(sameDay, among: episodes, title: \.title).first {
             return exact
         }
 
@@ -736,8 +738,9 @@ struct HomeView: View {
             EpisodeDate.inTitle(video.title).map { (video, $0) }
         }
         if !dated.isEmpty {
-            if let best = dated.filter({ $0.1 <= wanted }).max(by: { $0.1 < $1.1 }) {
-                return best.0
+            if let latest = dated.filter({ $0.1 <= wanted }).map(\.1).max() {
+                let onThatDay = dated.filter { $0.1 == latest }.map(\.0)
+                return DailySeries.regularFirst(onThatDay, among: episodes, title: \.title).first
             }
             // Everything in hand is in the future — the channel publishes
             // ahead and the older ones have fallen out of the cache. The

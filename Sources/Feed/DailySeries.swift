@@ -32,6 +32,30 @@ enum DailySeries {
         return names.first { title.localizedCaseInsensitiveContains($0) }
     }
 
+    /// `candidates` with the channel's regular series first, in the order
+    /// given otherwise.
+    ///
+    /// WHY: more than one video can claim a day. Beside 「2026년 10월 14일 |
+    /// 매일성경」, 매일성경 posted a talk show whose title also carried that
+    /// day and its passage — and, uploaded later, it was the one the home
+    /// card took for the day's QT. The regular series is the one most of
+    /// the channel's dated titles belong to (`key(of:)`); an episode of it
+    /// beats anything else that names the same day.
+    static func regularFirst<V>(_ candidates: [V], among all: [V], title: (V) -> String) -> [V] {
+        var counts: [String: Int] = [:]
+        for video in all {
+            if let key = key(of: title(video)) { counts[key, default: 0] += 1 }
+        }
+        guard let regular = counts.max(by: { $0.value < $1.value })?.key, counts[regular, default: 0] > 1 else {
+            return candidates
+        }
+        var first: [V] = [], rest: [V] = []
+        for video in candidates {
+            if key(of: title(video)) == regular { first.append(video) } else { rest.append(video) }
+        }
+        return first + rest
+    }
+
     /// The episodes of `current`'s series among `videos`, in the order of
     /// listening: oldest first for `.next`, newest first for `.previous` —
     /// and where `current` sits in that order. Nil when the title is not a

@@ -67,6 +67,19 @@ struct CheckDailySeries {
         check("off is off", run("m8", .off) == nil)
         check("a video with no series is played alone", run("s4", .previous) == nil)
 
+        // Two videos claim one day: the regular episode, and a talk show
+        // posted later whose title also names the day and the passage.
+        let day = [
+            "토크쇼 EP38 26년10월14일(수) 사사기 21:13-25",
+            "「2026년 10월 14일 | 매일성경」 오늘의 제목 [사사기 21:13-25]",
+            "「2026년 10월 13일 | 매일성경」 어제의 제목 [사사기 21:1-12]",
+            "「2026년 10월 12일 | 매일성경」 그제의 제목 [사사기 20:29-48]",
+        ]
+        let picked = DailySeries.regularFirst(Array(day.prefix(2)), among: day, title: { $0 }).first
+        check("of two videos for one day, the regular series' episode", picked == day[1], "got \(picked ?? "nil")")
+        check("one candidate is kept as it is",
+              DailySeries.regularFirst([day[0]], among: day, title: { $0 }) == [day[0]])
+
         print(failures == 0 ? "\nall daily series checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }
