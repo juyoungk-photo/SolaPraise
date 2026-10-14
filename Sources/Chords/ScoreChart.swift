@@ -58,6 +58,10 @@ enum ScoreChart {
         var chord: UUID?
         /// One per verse line, "" where a verse has none here.
         var syllables: [String]
+        /// Per verse: the syllable is held — printed with a dash after it.
+        var held: [Bool] = []
+
+        func isHeld(_ verse: Int) -> Bool { held.indices.contains(verse) && held[verse] }
     }
 
     struct Bar: Equatable {
@@ -182,28 +186,43 @@ enum ScoreChart {
     /// its own.
     static func cells(chords: [ChordMark], words: [[Word]]) -> [Cell] {
         let verses = words.count
-        struct Column { var minX: CGFloat; var maxX: CGFloat; var syllables: [String]; var chord: UUID? }
+        struct Column {
+            var minX: CGFloat; var maxX: CGFloat; var syllables: [String]; var chord: UUID?
+            var held: [Bool] = []
+        }
         var columns: [Column] = []
         for (verse, line) in words.enumerated() {
+            var lastColumn: Int?
             for (index, word) in line.enumerated() {
                 var text = word.text
                 if index == 0, let number = text.range(of: #"^\d+\."#, options: .regularExpression) {
                     text.removeSubrange(number)
                 }
-                text = text.filter { !"—–-_~".contains($0) }
-                guard !text.isEmpty else { continue }
+                let dashed = text.contains { dashes.contains($0) }
+                text = text.filter { !dashes.contains($0) }
+                guard !text.isEmpty else {
+                    // A dash standing alone holds the syllable before it.
+                    if dashed, let last = lastColumn { columns[last].held[verse] = true }
+                    continue
+                }
                 let mid = word.box.midX
+                let held = word.held || (dashed && word.text.last.map { dashes.contains($0) } == true)
                 if let match = columns.firstIndex(where: { column in
                     column.syllables[verse].isEmpty
                         && abs((column.minX + column.maxX) / 2 - mid) < max(column.maxX - column.minX, word.box.width) * 0.6
                 }) {
                     columns[match].syllables[verse] = text
+                    columns[match].held[verse] = held
                     columns[match].minX = min(columns[match].minX, word.box.minX)
                     columns[match].maxX = max(columns[match].maxX, word.box.maxX)
+                    lastColumn = match
                 } else {
                     var syllables = [String](repeating: "", count: verses)
                     syllables[verse] = text
-                    columns.append(Column(minX: word.box.minX, maxX: word.box.maxX, syllables: syllables))
+                    var heldFlags = [Bool](repeating: false, count: verses)
+                    heldFlags[verse] = held
+                    columns.append(Column(minX: word.box.minX, maxX: word.box.maxX, syllables: syllables, held: heldFlags))
+                    lastColumn = columns.count - 1
                 }
             }
         }
@@ -219,10 +238,11 @@ enum ScoreChart {
             } else {
                 let at = columns.firstIndex { $0.minX > x } ?? columns.count
                 columns.insert(Column(minX: x, maxX: chord.box.maxX,
-                                      syllables: [String](repeating: "", count: verses), chord: chord.id), at: at)
+                                      syllables: [String](repeating: "", count: verses), chord: chord.id,
+                                      held: [Bool](repeating: false, count: verses)), at: at)
             }
         }
-        return columns.map { Cell(chord: $0.chord, syllables: $0.syllables) }
+        return columns.map { Cell(chord: $0.chord, syllables: $0.syllables, held: $0.held) }
     }
 
     // MARK: - Barlines
@@ -379,6 +399,9 @@ enum ScoreChart {
         let text: String
         /// Normalised, origin top-left.
         let box: CGRect
+        /// Printed with a dash after it — 「며—」: the syllable is held over
+        /// the notes that follow.
+        var held = false
     }
 
     /// The words under each staff, one per syllable (Korean) or word
@@ -476,7 +499,7 @@ enum ScoreChart {
     /// most of them spell it — the first read that has it breaking a tie.
     /// A Korean syllable only `trusted` saw is kept too.
     static func voted(_ reads: [[Word]], trusted: Int? = nil) -> [Word] {
-        struct Slot { var box: CGRect; var texts: [Int: String] }
+        struct Slot { var box: CGRect; var texts: [Int: String]; var held = false }
         var slots: [Slot] = []
         for (pass, read) in reads.enumerated() {
             for word in read {
@@ -488,8 +511,9 @@ enum ScoreChart {
                 }
                 if let match {
                     slots[match].texts[pass] = word.text
+                    slots[match].held = slots[match].held || word.held
                 } else {
-                    slots.append(Slot(box: word.box, texts: [pass: word.text]))
+                    slots.append(Slot(box: word.box, texts: [pass: word.text], held: word.held))
                 }
             }
         }
@@ -504,14 +528,14 @@ enum ScoreChart {
                     return overlap > min(other.box.width, slot.box.width) * 0.25
                         && abs(other.box.midY - slot.box.midY) < max(other.box.height, slot.box.height) * 0.6
                 }
-                return taken ? nil : Word(text: text, box: slot.box)
+                return taken ? nil : Word(text: text, box: slot.box, held: slot.held)
             }
             guard slot.texts.count >= 2 else { return nil }
             var counts: [String: Int] = [:]
             for text in slot.texts.values { counts[text, default: 0] += 1 }
             let best = counts.values.max() ?? 0
             let text = slot.texts.keys.sorted().compactMap { slot.texts[$0] }.first { counts[$0] == best } ?? ""
-            return Word(text: text, box: slot.box)
+            return Word(text: text, box: slot.box, held: slot.held)
         }
     }
 
@@ -569,6 +593,7 @@ enum ScoreChart {
         var words: [Word] = []
         for observation in request.results ?? [] {
             guard let candidate = observation.topCandidates(1).first else { continue }
+            let lineStart = words.count
             let text = candidate.string
             guard isLyricLine(text) else { continue }
 
@@ -588,9 +613,23 @@ enum ScoreChart {
                         let next = text.index(after: c)
                         if text[c].unicodeScalars.contains(where: { (0xAC00...0xD7A3).contains($0.value) }),
                            let box = try? candidate.boundingBox(for: c..<next)?.boundingBox {
-                            words.append(Word(text: String(text[c..<next]), box: flipped(box)))
+                            // A dash straight after it, in the same token: held.
+                            let held = next < range.upperBound && Self.dashes.contains(text[next])
+                            words.append(Word(text: String(text[c..<next]), box: flipped(box), held: held))
+                        } else if Self.dashes.contains(text[c]), let last = words.indices.last,
+                                  last >= lineStart, Self.isKorean(words[last].text) {
+                            // A dash before a syllable — 「하 —며」 — holds the
+                            // one before it, on the same line.
+                            words[last].held = true
                         }
                         c = next
+                    }
+                } else if token.allSatisfy({ Self.dashes.contains($0) }) {
+                    // 「하 - 시네」: a dash on its own holds the syllable
+                    // before it. As a word of its own it found no slot in
+                    // the vote and the hold was lost.
+                    if let last = words.indices.last, last >= lineStart, Self.isKorean(words[last].text) {
+                        words[last].held = true
                     }
                 } else if let box = try? candidate.boundingBox(for: range)?.boundingBox {
                     words.append(Word(text: String(token), box: flipped(box)))
@@ -600,6 +639,9 @@ enum ScoreChart {
         }
         return words
     }
+
+    /// The marks a held syllable is printed with.
+    static let dashes: Set<Character> = ["—", "–", "-", "_", "~", "ー", "ㅡ"]
 
     /// A line of lyrics rather than an instruction, a credit or noise.
     static func isLyricLine(_ text: String) -> Bool {

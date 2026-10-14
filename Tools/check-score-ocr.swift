@@ -385,6 +385,10 @@ struct CheckScoreOCR {
             check("chart: syllable columns read the verse whole", sung == "주님앞에나아가오늘도함께하시네", "got 「\(sung)」")
             check("chart: every chord of the line sits on a column",
                   cellsLine.compactMap(\.chord).count == first.bars.flatMap(\.segments).compactMap(\.chord).count)
+            // 「하 - 시네」: the dash holds 하 over the next note. The 코드표
+            // draws it as 「하—」; nothing else on the line is held.
+            let held = cellsLine.filter { $0.isHeld(0) }.map { $0.syllables.first ?? "" }
+            check("chart: the syllable before a dash is held, and only it", held == ["하"], "got \(held)")
             check("chart: the fourth verse is its own line",
                   first.verses == 4 && verseText(first, 3) == "주님앞에나아가오늘도함께하시네", "got 「\(verseText(first, 3))」")
         }
