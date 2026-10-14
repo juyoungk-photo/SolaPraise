@@ -351,6 +351,7 @@ struct ScoreStandView: View {
                             shift: state.showsOriginal ? 0 : state.shift,
                             useFlats: state.useFlats,
                             scale: model.chordScale,
+                            original: state.showsOriginal && !editing,
                             editing: editing,
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
                             onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) })
@@ -457,7 +458,7 @@ struct ScoreStandView: View {
                 let shift = state.showsOriginal ? 0 : state.shift
                 ScoreChartView(systems: systems, chord: { id in
                     originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
-                }, scale: model.chordScale)
+                }, scale: model.chartScale)
             }
         } else if let failure = model.states[item.id]?.failure {
             Text(failure)
@@ -492,8 +493,9 @@ struct ScoreStandView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 keyGroup(item)
+                if editing { editGroup(item) }
                 Spacer(minLength: 12)
-                originalButton(item)
+                if !editing { originalButton(item) }
                 Spacer(minLength: 12)
                 toolGroup(item)
                 songNav()
@@ -503,8 +505,9 @@ struct ScoreStandView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     keyGroup(item)
+                    if editing { editGroup(item) }
                     Spacer(minLength: 8)
-                    originalButton(item)
+                    if !editing { originalButton(item) }
                 }
                 .padding(.horizontal, 16)
                 HStack(spacing: 10) {
@@ -574,18 +577,51 @@ struct ScoreStandView: View {
         .disabled(!ready)
     }
 
+    /// What editing adds, on the left beside the key — so 완료 stays where
+    /// 편집 was and the finger that pressed one finds the other.
+    @ViewBuilder
+    private func editGroup(_ item: ScoreStandItem) -> some View {
+        let state = model.states[item.id]
+        // Added near the top of the page, then dragged into place.
+        Button {
+            if (state?.pages.count ?? 0) > 1 { choosingPage = true }
+            else { entry = ChordEntry(page: 0, chord: nil, point: Self.addPoint, text: "") }
+        } label: {
+            pill(Text("+ 코드").font(.system(size: 14, weight: .semibold)), wide: true)
+        }
+        .accessibilityLabel("빠진 코드 넣기")
+        // Always offered while editing, not only after a hand edit: the
+        // reader improves, and a chart read by an older one can be read
+        // again on request. A chart corrected by hand asks first, since
+        // the corrections go.
+        Button {
+            if state?.isEdited == true { confirmingReread = true }
+            else { Task { await model.resetEdits(item) } }
+        } label: {
+            pill(Text("다시 읽기").font(.system(size: 13, weight: .semibold)), wide: true)
+        }
+        .accessibilityLabel("코드를 처음부터 다시 인식")
+    }
+
     @ViewBuilder
     private func toolGroup(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        // Chord size, for charts printed small. Applies to the export too,
-        // and is remembered on this device.
-        Button { model.resize(by: -0.1) } label: { pill(Text("A").font(.system(size: 13, weight: .bold))) }
-            .disabled(!ready || model.chordScale <= 0.71)
-            .accessibilityLabel("코드 글자 작게")
-        Button { model.resize(by: 0.1) } label: { pill(Text("A").font(.system(size: 21, weight: .bold))) }
-            .disabled(!ready || model.chordScale >= 2.49)
-            .accessibilityLabel("코드 글자 크게")
+        // Size, for what is on screen: the chords on the page — for charts
+        // printed small; applies to the export too — or the 코드표, each
+        // its own setting, remembered on this device.
+        let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale <= 0.71
+        let larger = showsChart ? model.chartScale >= 1.99 : model.chordScale >= 2.49
+        Button {
+            if showsChart { model.resizeChart(by: -0.1) } else { model.resize(by: -0.1) }
+        } label: { pill(Text("A").font(.system(size: 13, weight: .bold))) }
+            .disabled(!ready || smaller)
+            .accessibilityLabel(showsChart ? "코드표 글자 작게" : "코드 글자 작게")
+        Button {
+            if showsChart { model.resizeChart(by: 0.1) } else { model.resize(by: 0.1) }
+        } label: { pill(Text("A").font(.system(size: 21, weight: .bold))) }
+            .disabled(!ready || larger)
+            .accessibilityLabel(showsChart ? "코드표 글자 크게" : "코드 글자 크게")
 
         Button { editing.toggle() } label: {
             pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
@@ -593,33 +629,10 @@ struct ScoreStandView: View {
         .disabled(!(state?.isReady ?? false) || showsChart)
         .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
 
-        if editing {
-            // Added near the top of the page, then dragged into place.
-            Button {
-                if (state?.pages.count ?? 0) > 1 { choosingPage = true }
-                else { entry = ChordEntry(page: 0, chord: nil, point: Self.addPoint, text: "") }
-            } label: {
-                pill(Text("+ 코드").font(.system(size: 14, weight: .semibold)), wide: true)
-            }
-            .accessibilityLabel("빠진 코드 넣기")
-        }
-        // Always offered while editing, not only after a hand edit: the
-        // reader improves, and a chart read by an older one can be read
-        // again on request. A chart corrected by hand asks first, since
-        // the corrections go.
-        if editing {
-            Button {
-                if state?.isEdited == true { confirmingReread = true }
-                else { Task { await model.resetEdits(item) } }
-            } label: {
-                pill(Text("다시 읽기").font(.system(size: 13, weight: .semibold)), wide: true)
-            }
-            .accessibilityLabel("코드를 처음부터 다시 인식")
-        }
-
-        // Not while editing: one row of what editing needs. Sharing an
-        // edit in progress is what 완료 then 공유 is for.
-        if !editing {
+        // Not while editing — sharing an edit in progress is what 완료 then
+        // 공유 is for — but their place is kept, so 완료 sits exactly where
+        // 편집 did.
+        Group {
         // One song, or the whole 콘티 as one file — to share, or keep in
         // Files: the share sheet offers both.
         let shareLabel = pill(model.isExporting ? AnyView(ProgressView().tint(.white))
@@ -656,14 +669,18 @@ struct ScoreStandView: View {
             .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
         }
         }
+        .opacity(editing ? 0 : 1)
+        .allowsHitTesting(!editing)
+        .accessibilityHidden(editing)
 
     }
 
     /// Previous and next song, side by side at the right edge.
     @ViewBuilder
     private func songNav() -> some View {
-        // While editing there is one song on the stand and no pager.
-        if items.count > 1, !editing {
+        // While editing there is one song on the stand and no pager; the
+        // arrows keep their place, unseen, for the same reason as 공유.
+        if items.count > 1 {
             HStack(spacing: 6) {
                 Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
                     .disabled(index == 0)
@@ -673,6 +690,9 @@ struct ScoreStandView: View {
                     .accessibilityLabel("다음 곡")
             }
             .padding(.leading, 4)
+            .opacity(editing ? 0 : 1)
+            .allowsHitTesting(!editing)
+            .accessibilityHidden(editing)
         }
     }
 
@@ -730,6 +750,10 @@ private struct ScorePageView: View {
     let shift: Int
     let useFlats: Bool?
     let scale: CGFloat
+    /// The page as printed: no chord drawn over it — not a transposed one,
+    /// and not one corrected, moved or added by hand. 원본 used to mean
+    /// "not transposed", and a chord added by hand still showed there.
+    let original: Bool
     let editing: Bool
     let onMove: (UUID, CGSize) -> Void
     let onTapChord: (UUID) -> Void
@@ -742,6 +766,7 @@ private struct ScorePageView: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .overlay {
+                if !original {
                 GeometryReader { geo in
                     let size = geo.size
                     let labels = ScoreLayout.labels(
@@ -758,6 +783,7 @@ private struct ScorePageView: View {
                             chordView(label, size: size)
                         }
                     }
+                }
                 }
             }
             .background(Color.white)
@@ -857,6 +883,17 @@ final class ScoreStandModel: ObservableObject {
     func resize(by step: CGFloat) {
         chordScale = min(2.5, max(0.7, (chordScale + step) * 10).rounded() / 10)
         UserDefaults.standard.set(Double(chordScale), forKey: "score.chordScale")
+    }
+
+    /// The 코드표's own size, apart from the chords on the page: they
+    /// were one setting, and a chart printed with small chords — sized up
+    /// on the page — turned the 코드표 into lyrics too large to sing from.
+    @Published private(set) var chartScale: CGFloat =
+        (UserDefaults.standard.object(forKey: "score.chartScale") as? Double).map { CGFloat($0) } ?? 1
+
+    func resizeChart(by step: CGFloat) {
+        chartScale = min(2, max(0.6, (chartScale + step) * 10).rounded() / 10)
+        UserDefaults.standard.set(Double(chartScale), forKey: "score.chartScale")
     }
 
     /// Read once per attachment per launch: recognition is seconds a page,

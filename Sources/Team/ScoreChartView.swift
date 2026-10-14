@@ -42,7 +42,9 @@ struct ScoreChartView: View {
     /// Larger on an iPad, which stands further away and has the width.
     private var deviceScale: CGFloat { sizeClass == .regular ? 1.4 : 1 }
     private var chordFont: Font { .system(size: 20 * scale * deviceScale, weight: .bold, design: .rounded) }
-    private var lyricSize: CGFloat { 19 * min(scale, 1.4) * deviceScale }
+    /// A little under the chords: Hangul at the same point size reads
+    /// larger than a Latin capital, and the lyrics crowded out the chords.
+    private var lyricSize: CGFloat { 17 * scale * deviceScale }
     private var chordRowHeight: CGFloat { 26 * scale * deviceScale }
 
     var body: some View {
