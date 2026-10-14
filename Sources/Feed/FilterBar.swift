@@ -2,118 +2,100 @@
 //  FilterBar.swift
 //  SolaPraise
 //
-//  One line of filters instead of three rows of chips.
+//  찬양's filters, as one row of chips.
 //
-//  찬양 spent the top of the screen on a channel row, a genre row and a topic
-//  row, stacked — roughly the first 40% of a phone before a single video,
-//  every time, whether or not anything was being filtered. Filters are
-//  occasional and videos are the point.
+//  WHY ONE ROW: there were two. A pinned row of channels, and under it a
+//  「전체」 menu (channel and length again) with the saved topics beside it —
+//  topics that looked like chips and did nothing when tapped. Two rows that
+//  narrow the same feed, one of them half dead, read as two features. Now
+//  every way to narrow the feed is a chip on one pinned line: length,
+//  전체, the saved topics, the channels. One topic or one channel at a
+//  time — choosing either clears the other — so what is on is always the
+//  one filled chip.
 //
-//  Now: one line that says what is on, and opens the choices when tapped.
-//  Nothing selected reads "전체" and takes a single row; something selected
-//  says so, and can be cleared from the same place.
-//
-//  The genre filter is gone. It matched keywords in titles — "피아노",
-//  "찬송가" — which worship uploads do not reliably put there, so most of its
-//  settings returned almost nothing and it was never worth the row. Length
-//  replaces it, which is read from the video rather than guessed from its
-//  name: this feed mixes four-minute songs with three-hour compilations, and
-//  which of the two you are after is the question actually worth asking.
+//  The genre filter stays gone. It matched keywords in titles — "피아노",
+//  "찬송가" — which worship uploads do not reliably put there. A saved topic
+//  is the user's own words, and its results were fetched for it.
 //
 
 import SwiftUI
 
-struct FilterBar<Trailing: View>: View {
+struct WorshipFilterRow: View {
     let channels: [Channel]
+    let topics: [TopicSearch]
     @Binding var channelFilter: String?
+    /// A topic's query; nil for none.
+    @Binding var topicFilter: String?
     @Binding var length: WorshipLength
-    /// Topics and anything else the tab wants beside the filters.
-    @ViewBuilder var trailing: Trailing
-
-    private var channelName: String? {
-        channels.first { $0.youtubeChannelId == channelFilter }?.shortTitle
-    }
-
-    private var isFiltered: Bool { channelFilter != nil || length != .all }
+    let addTopic: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Menu {
-                Section("채널") {
-                    Button {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                lengthMenu
+                FilterChip(title: "전체", isSelected: channelFilter == nil && topicFilter == nil) {
+                    channelFilter = nil
+                    topicFilter = nil
+                }
+                ForEach(topics) { topic in
+                    FilterChip(title: "# " + topic.label, isSelected: topicFilter == topic.query) {
+                        topicFilter = topicFilter == topic.query ? nil : topic.query
                         channelFilter = nil
-                    } label: {
-                        if channelFilter == nil { Label("전체", systemImage: "checkmark") }
-                        else { Text("전체") }
-                    }
-                    ForEach(channels) { channel in
-                        Button {
-                            channelFilter = channel.youtubeChannelId
-                        } label: {
-                            if channelFilter == channel.youtubeChannelId {
-                                Label(channel.shortTitle, systemImage: "checkmark")
-                            } else {
-                                Text(channel.shortTitle)
-                            }
-                        }
                     }
                 }
-                Section("길이") {
-                    ForEach(WorshipLength.allCases) { option in
-                        Button {
-                            length = option
-                        } label: {
-                            if length == option {
-                                Label(option.title, systemImage: "checkmark")
-                            } else {
-                                Text(option.title)
-                            }
-                        }
+                ForEach(channels) { channel in
+                    FilterChip(title: channel.shortTitle, thumbnail: channel.thumbnailURL,
+                               isSelected: channelFilter == channel.youtubeChannelId) {
+                        channelFilter = channelFilter == channel.youtubeChannelId ? nil : channel.youtubeChannelId
+                        topicFilter = nil
                     }
                 }
-                if isFiltered {
-                    Section {
-                        Button(role: .destructive) {
-                            channelFilter = nil
-                            length = .all
-                        } label: { Label("필터 해제", systemImage: "xmark.circle") }
-                    }
+                Button(action: addTopic) {
+                    Label("주제", systemImage: "plus")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.2),
+                                                        style: StrokeStyle(lineWidth: 0.5, dash: [3])))
+                        .contentShape(Capsule())
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: isFiltered
-                          ? "line.3.horizontal.decrease.circle.fill"
-                          : "line.3.horizontal.decrease.circle")
-                    // What is on, in the order it was chosen in.
-                    Text(label)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .semibold))
-                }
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule().fill(isFiltered
-                                   ? Color.accentColor.opacity(0.18)
-                                   : Color(.secondarySystemBackground))
-                )
-                .foregroundStyle(isFiltered ? Color.accentColor : Color.primary)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-
-            trailing
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 16)
+        .frame(height: 48)
+        .background(Color(.systemBackground))
     }
 
-    private var label: String {
-        switch (channelName, length) {
-        case (nil, .all):        return "전체"
-        case (let name?, .all):  return name
-        case (nil, let l):       return l.title
-        case (let name?, let l): return "\(name) · \(l.title)"
+    /// Length is not one of a kind with the others — it narrows whatever
+    /// is chosen — so it is a menu at the front, filled when it is on.
+    private var lengthMenu: some View {
+        Menu {
+            ForEach(WorshipLength.allCases) { option in
+                Button {
+                    length = option
+                } label: {
+                    if length == option { Label(option.title, systemImage: "checkmark") }
+                    else { Text(option.title) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                Text(length == .all ? "길이" : length.title)
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
+            }
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(length == .all ? Color.primary : Color.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(length == .all ? Color(.secondarySystemBackground) : Color.accentColor))
+            .overlay(Capsule().strokeBorder(length == .all ? Color.primary.opacity(0.12) : .clear, lineWidth: 0.5))
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
     }
 }
 

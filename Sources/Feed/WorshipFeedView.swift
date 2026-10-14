@@ -45,6 +45,8 @@ struct WorshipFeedView: View {
     @StateObject private var history = SearchHistory.shared("worship")
     /// Nil means every whitelisted channel.
     @State private var channelFilter: String?
+    /// A saved topic's query, narrowing the feed to titles that have it.
+    @State private var topicFilter: String?
     @State private var showAddPlaylist = false
 
     @Query(sort: [SortDescriptor(\CachedPlaylist.title)])
@@ -157,16 +159,6 @@ struct WorshipFeedView: View {
                 // and stays put.
                 LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
                     Section {
-                    // One line, where three rows of chips used to be — see
-                    // FilterBar. Topics ride along on the same line, because
-                    // they are the same kind of thing: a way to narrow what
-                    // is below.
-                    FilterBar(channels: channels,
-                              channelFilter: $channelFilter,
-                              length: $length) {
-                        topicChips
-                    }
-
                     if !pinnedPlaylists.isEmpty || !pinnedVideos.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Label("고정됨", systemImage: "pin.fill")
@@ -267,9 +259,9 @@ struct WorshipFeedView: View {
                         }
                         .padding(.horizontal, 16)
                     } else if !(channels.isEmpty && topics.isEmpty) {
-                        Text(channelFilter == nil
+                        Text(channelFilter == nil && topicFilter == nil
                              ? "아직 불러온 영상이 없습니다. 아래로 당겨 새로고침하세요."
-                             : "이 채널에 해당하는 영상이 없습니다.")
+                             : "이 필터에 해당하는 영상이 없습니다.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
@@ -284,41 +276,18 @@ struct WorshipFeedView: View {
                         FeedEndMarker(refreshedAt: feed.lastRefreshedAt)
                     }
                     } header: {
-                        // Back as its own row. Channels are the filter people
-                        // actually reach for — which of the nine am I
-                        // listening to — and burying that in a menu made the
-                        // common case a two-tap one. The menu keeps them too,
-                        // for when the row is scrolled past.
-                        if !channels.isEmpty {
-                            ChannelFilterBar(channels: channels, selected: $channelFilter)
+                        // Every filter on one pinned row — see FilterBar.
+                        // Channels are the one people reach for most, so
+                        // the row stays in view while the feed scrolls.
+                        if !(channels.isEmpty && topics.isEmpty) {
+                            WorshipFilterRow(channels: channels, topics: topics,
+                                             channelFilter: $channelFilter, topicFilter: $topicFilter,
+                                             length: $length) { showAddTopic = true }
                         }
                     }
                 }
                 .padding(.top, 8)
             }
-    }
-
-    /// Genre filters over the cache — free and instant, unlike a search.
-    private var topicChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(topics) { topic in
-                    Text(topic.label)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(.quaternary, in: Capsule())
-                }
-                Button { showAddTopic = true } label: {
-                    Label("주제", systemImage: "plus")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(.quaternary, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
     }
 
     private var emptyGuidance: some View {
@@ -512,13 +481,18 @@ struct WorshipFeedView: View {
     }
 
     /// The browse feed: every worship video the cache holds, newest first,
-    /// narrowed by the genre and channel chips.
+    /// narrowed by the topic, channel and length chips.
     private var browseVideos: [CachedVideo] {
         let channelIds = Set(channels.map(\.youtubeChannelId))
         return allVideos
             .filter { video in
                 if let channelFilter {
                     return video.channelId == channelFilter
+                }
+                if let topicFilter, !topicFilter.isEmpty {
+                    return video.title.lowercased().contains(topicFilter.lowercased())
+                        && (video.channelId.map(channelIds.contains) ?? false
+                            || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue)
                 }
                 // Topic-search results belong here too: they were fetched for
                 // 찬양 and have no channel in the whitelist.

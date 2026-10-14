@@ -100,46 +100,7 @@ enum WorshipGenre: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Channel filter
-
-/// The same row of channels, but selecting one narrows the feed instead of
-/// scrolling to it.
-///
-/// Jumping only made sense while 찬양 was cut into per-channel sections. With
-/// one feed there is nowhere to jump — but the channel is still worth having
-/// when you want it, so it became a filter you opt into rather than a
-/// structure imposed on every visit.
-struct ChannelFilterBar: View {
-    let channels: [Channel]
-    @Binding var selected: String?
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                FilterChip(title: "전체", isSelected: selected == nil) {
-                    selected = nil
-                }
-                ForEach(channels) { channel in
-                    FilterChip(
-                        title: channel.shortTitle,
-                        thumbnail: channel.thumbnailURL,
-                        isSelected: selected == channel.youtubeChannelId
-                    ) {
-                        selected = selected == channel.youtubeChannelId
-                            ? nil
-                            : channel.youtubeChannelId
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
-        .frame(height: 48)
-        .background(Color(.systemBackground))
-    }
-}
-
-/// A filter chip: filled when selected. Shared by the channel row and the
+/// A filter chip: filled when selected. Shared by 찬양's filter row and the
 /// year row on a channel page, so a filter looks like a filter everywhere.
 struct FilterChip: View {
     let title: String
