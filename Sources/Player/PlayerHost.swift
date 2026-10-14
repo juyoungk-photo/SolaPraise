@@ -366,6 +366,9 @@ struct PlayerStage: View {
                     WatchScreen()
                         .padding(.top, videoHeight)
                         .background(Color(.systemBackground))
+                        // The page dims away under a pull, as the video lifts
+                        // off it.
+                        .opacity(1 - min(pull, 360) / 520)
 
                     // The band the video sits in, full width even when the
                     // video is narrower: beside a capped video the page
@@ -383,7 +386,9 @@ struct PlayerStage: View {
                     // Under the finger from the first point of a pull, and
                     // a little smaller the further it goes — so the pull is
                     // answered at once, before PiP has taken the video.
-                    .scaleEffect(1 - min(pull, 240) / 1200, anchor: .top)
+                    // Smaller the further it comes — toward the size of the
+                    // window it is about to become.
+                    .scaleEffect(1 - min(pull, 360) / 720, anchor: .top)
                     // Handed to PiP: from here the system's window is the
                     // video. See videoInPictureInPicture.
                     .opacity(host.videoInPictureInPicture || host.mode == .pip ? 0 : 1)
@@ -393,6 +398,7 @@ struct PlayerStage: View {
                     .highPriorityGesture(pullDown)
                 }
             }
+            .onChange(of: host.mode) { _, _ in pull = 0 }
             // Hidden in PiP, not removed: PiP plays from this web view.
             // Switched in one frame — see PlayerHost's pipWatch.
             .opacity(host.mode == .pip ? 0 : 1)
@@ -401,12 +407,12 @@ struct PlayerStage: View {
         }
     }
 
-    /// A pull down on the video. The video follows the finger from the
-    /// first point; a playing song goes to PiP as soon as the pull is
-    /// clearly downward (16 pt) — the system's animation then carries it to
-    /// the corner from wherever the finger has taken it. Paused, the pull
-    /// closes the player, but only when let go past 80 pt: closing is not
-    /// undone by pulling back. Sideways swipes are left alone.
+    /// A pull down on the video, as YouTube's own: the video stays under
+    /// the finger, shrinking, for as long as the pull is slow; a flick, or a
+    /// pull past a third of the way, hands it to PiP there and then — the
+    /// system carries it to the corner from where the finger left it. Let
+    /// go short of that and it springs back. Paused, the same pull closes
+    /// the player. Sideways swipes are left alone.
     ///
     /// `minimumDistance` is small but not zero: a gesture that began at
     /// zero would swallow the taps meant for YouTube's play and pause.
@@ -416,26 +422,46 @@ struct PlayerStage: View {
                 if pullIsSideways == nil {
                     pullIsSideways = abs(value.translation.width) > abs(value.translation.height) * 1.5
                 }
-                guard pullIsSideways == false else { return }
+                guard pullIsSideways == false, !handedOver else { return }
                 pull = max(0, value.translation.height)
-                let playing = host.coordinator.state == .playing || host.coordinator.state == .buffering
-                if playing, !handedOver, pull > 16 {
-                    handedOver = true
-                    host.dock()
+                // A flick — the finger speeding down — or far enough.
+                let flicked = value.velocity.height > 1100 && pull > 24
+                if flicked || pull > 240 {
+                    handOver()
                 }
             }
             .onEnded { value in
-                let closes = !handedOver && pullIsSideways == false
-                    && (value.translation.height > 80 || value.predictedEndTranslation.height > 200)
+                let decided = handedOver
+                let sideways = pullIsSideways != false
                 pullIsSideways = nil
                 handedOver = false
-                if closes {
-                    pull = 0
-                    host.dock()
+                guard !decided, !sideways else {
+                    if !decided { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { pull = 0 } }
+                    return
+                }
+                // Let go: far enough, or thrown, goes; otherwise back.
+                if pull > 110 || value.predictedEndTranslation.height > 300 {
+                    handOver()
+                    handedOver = false
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { pull = 0 }
                 }
             }
+    }
+
+    private func handOver() {
+        handedOver = true
+        host.dock()
+        // Held where the finger left it while PiP takes the video — the
+        // page leaves in one cut, and `pull` is reset with it (onChange of
+        // the mode). If the player is still here after the system's
+        // animation would have finished, PiP was refused: back it goes.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.6))
+            if host.mode == .full, pull > 0 {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { pull = 0 }
+            }
+        }
     }
 }
 
