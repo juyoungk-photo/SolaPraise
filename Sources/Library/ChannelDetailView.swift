@@ -33,6 +33,8 @@ struct ChannelDetailView: View {
     @State private var showsPublishing = false
     @State private var managesChannel = false
     @State private var errorMessage: String?
+    /// The year chip chosen over the playlists; nil shows the newest.
+    @State private var year: Int?
 
     private var videos: [CachedVideo] {
         allVideos.filter { $0.channelId == channel.youtubeChannelId }
@@ -187,8 +189,17 @@ struct ChannelDetailView: View {
             }
             .buttonStyle(.plain)
 
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(shownPlaylists.prefix(Self.playlistPreviewCount)) { playlist in
+            if !years.isEmpty { yearChips }
+            if let year, gridPlaylists.isEmpty {
+                Text("\(String(year))년 재생목록이 없습니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+            }
+
+            // Top-aligned: a one-line title must not push its card down
+            // beside a two-line one.
+            LazyVGrid(columns: columns.map { var column = $0; column.alignment = .top; return column }, spacing: 16) {
+                ForEach(gridPlaylists) { playlist in
                     Button { Task { await play(playlist) } } label: {
                         PlaylistCard(playlist: playlist)
                     }
@@ -202,6 +213,47 @@ struct ChannelDetailView: View {
             }
             .padding(.horizontal, 16)
         }
+    }
+
+    // MARK: Years
+
+    private var years: [Int] {
+        PlaylistYears.chips(playlists.map { ($0.title, $0.publishedAt) })
+    }
+
+    /// The church's own 「2026」 playlist, if it keeps one.
+    private func yearPlaylist(_ year: Int) -> CachedPlaylist? {
+        playlists.first { PlaylistYears.yearOnly($0.title) == year }
+    }
+
+    /// Years as filters over the playlists. A year playlist is not a card
+    /// among the services it collects; it is reached from its chip's menu.
+    private var yearChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterChip(title: "최근", isSelected: year == nil) { year = nil }
+                ForEach(years, id: \.self) { candidate in
+                    FilterChip(title: String(candidate), isSelected: year == candidate) {
+                        year = year == candidate ? nil : candidate
+                    }
+                    .contextMenu {
+                        if let playlist = yearPlaylist(candidate) {
+                            Button { Task { await play(playlist) } } label: {
+                                Label("「\(playlist.title)」 재생목록 재생", systemImage: "play.fill")
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    /// The newest few, or every playlist of the chosen year.
+    private var gridPlaylists: [CachedPlaylist] {
+        let services = shownPlaylists.filter { years.isEmpty || PlaylistYears.yearOnly($0.title) == nil }
+        guard let year else { return Array(services.prefix(Self.playlistPreviewCount)) }
+        return services.filter { PlaylistYears.year(title: $0.title, publishedAt: $0.publishedAt) == year }
     }
 
     /// Pinned first, then the newest.
@@ -377,15 +429,38 @@ struct ChannelPlaylistsView: View {
     var onPinChanged: (() -> Void)? = nil
 
     @State private var searchText = ""
+    @State private var year: Int?
+
+    private var years: [Int] { PlaylistYears.chips(playlists.map { ($0.title, $0.publishedAt) }) }
 
     private var shown: [CachedPlaylist] {
         let needle = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !needle.isEmpty else { return playlists }
-        return playlists.filter { $0.title.lowercased().contains(needle) }
+        var list = playlists
+        if let year {
+            list = list.filter { PlaylistYears.year(title: $0.title, publishedAt: $0.publishedAt) == year }
+        }
+        guard !needle.isEmpty else { return list }
+        return list.filter { $0.title.lowercased().contains(needle) }
     }
 
     var body: some View {
         List {
+            // The same years as the channel page, as filters.
+            if !years.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        FilterChip(title: "전체", isSelected: year == nil) { year = nil }
+                        ForEach(years, id: \.self) { candidate in
+                            FilterChip(title: String(candidate), isSelected: year == candidate) {
+                                year = year == candidate ? nil : candidate
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                .listRowSeparator(.hidden)
+            }
             Section {
                 ForEach(shown) { playlist in
                     HStack(spacing: 10) {
@@ -443,34 +518,48 @@ struct ChannelPlaylistsView: View {
 
 /// A playlist as a card, the size of a video card: artwork, title, count.
 /// On a channel page the artwork is what tells one series from another.
+///
+/// Drawn as a stack — two edges behind the artwork, as YouTube draws a
+/// playlist — so a playlist never reads as one more video on a page that
+/// shows both.
 struct PlaylistCard: View {
     let playlist: CachedPlaylist
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                Color(.secondarySystemBackground)
-                    .aspectRatio(16 / 9, contentMode: .fit)
-                    .overlay {
-                        if let url = playlist.thumbnailURL {
-                            AsyncImage(url: url) { image in
-                                image.resizable().aspectRatio(contentMode: .fill)
-                            } placeholder: { Color.clear }
-                        } else {
-                            Image(systemName: "list.bullet.rectangle.portrait")
-                                .font(.title2).foregroundStyle(.secondary)
+            VStack(spacing: 2) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.secondary.opacity(0.25))
+                    .frame(height: 3)
+                    .padding(.horizontal, 16)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(height: 3)
+                    .padding(.horizontal, 8)
+                ZStack(alignment: .bottomTrailing) {
+                    Color(.secondarySystemBackground)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .overlay {
+                            if let url = playlist.thumbnailURL {
+                                AsyncImage(url: url) { image in
+                                    image.resizable().aspectRatio(contentMode: .fill)
+                                } placeholder: { Color.clear }
+                            } else {
+                                Image(systemName: "list.bullet.rectangle.portrait")
+                                    .font(.title2).foregroundStyle(.secondary)
+                            }
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    HStack(spacing: 3) {
+                        Image(systemName: "list.bullet").font(.caption2)
+                        Text(playlist.itemCount > 0 ? "재생목록 · \(playlist.itemCount)" : "재생목록")
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                HStack(spacing: 3) {
-                    Image(systemName: "list.bullet").font(.caption2)
-                    if playlist.itemCount > 0 { Text("\(playlist.itemCount)") }
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(6)
                 }
-                .font(.caption2.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
-                .padding(6)
             }
             HStack(spacing: 4) {
                 if playlist.isPinned {

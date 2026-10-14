@@ -116,11 +116,11 @@ struct ChannelFilterBar: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip(title: "전체", thumbnail: nil, isSelected: selected == nil) {
+                FilterChip(title: "전체", isSelected: selected == nil) {
                     selected = nil
                 }
                 ForEach(channels) { channel in
-                    chip(
+                    FilterChip(
                         title: channel.shortTitle,
                         thumbnail: channel.thumbnailURL,
                         isSelected: selected == channel.youtubeChannelId
@@ -137,13 +137,17 @@ struct ChannelFilterBar: View {
         .frame(height: 48)
         .background(Color(.systemBackground))
     }
+}
 
-    private func chip(
-        title: String,
-        thumbnail: URL?,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
+/// A filter chip: filled when selected. Shared by the channel row and the
+/// year row on a channel page, so a filter looks like a filter everywhere.
+struct FilterChip: View {
+    let title: String
+    var thumbnail: URL? = nil
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 if let thumbnail {
