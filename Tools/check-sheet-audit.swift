@@ -14,7 +14,8 @@
 //  Run:
 //      swiftc -O -o /tmp/auditcheck \
 //          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
-//          Sources/Team/SheetAudit.swift Tools/check-sheet-audit.swift
+//          Sources/Feed/SongSearchSuggestions.swift Sources/Feed/PlanSongTitle.swift \
+//          Sources/Team/SongTitleTidy.swift Sources/Team/SheetAudit.swift Tools/check-sheet-audit.swift
 //      /tmp/auditcheck
 //
 
@@ -67,6 +68,18 @@ struct CheckSheetAudit {
               "got \(SheetAudit.needsAttention(clean).map(\.id))")
         check("and says the acting account is listed",
               clean.contains { $0.id == "account.actingListed" })
+
+        // Songs entered under a video's whole title: a note with the tidy.
+        check("a healthy setup has no video titles to tidy",
+              !clean.contains { $0.id == "songs.videoTitles" })
+        var titled = healthy
+        titled.songs?.append(["2026-10-11", "주일 2부", "4", "새 노래 | NEW SONG | 어느 워십 | 앨범", url("DDDDDDDDDDD"), ""])
+        let videoTitles = SheetAudit.run(titled).first { $0.id == "songs.videoTitles" }
+        check("a video's title as a song's title is reported, with the tidy",
+              videoTitles?.fix == .tidySongTitles && videoTitles?.title.contains("1개") == true,
+              "got \(String(describing: videoTitles))")
+        check("as a note, not something needing attention",
+              !ids(titled).contains("songs.videoTitles"))
 
         // ACCOUNTS — the mismatch that shipped: YouTube address not on the
         // roster, church account (which is) never connected.

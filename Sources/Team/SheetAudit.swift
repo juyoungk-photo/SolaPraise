@@ -33,6 +33,7 @@ enum SheetAudit {
     enum Fix: Equatable {
         case repairShiftedRows
         case repairDuplicates
+        case tidySongTitles
         case connectChurchAccount
         case signInMain
     }
@@ -82,7 +83,10 @@ enum SheetAudit {
         let roster = rosterEmails(input.members)
         if input.checksAccounts { out += accounts(input.accounts, roster: roster) }
         out += structure(input)
-        if let songs = input.songs { out += songsTab(songs) }
+        if let songs = input.songs {
+            out += songsTab(songs)
+            out += songTitles(songs, attachments: input.attachments)
+        }
         if let schedule = input.schedule { out += scheduleTab(schedule, today: input.today) }
         if let signups = input.signups { out += signupsTab(signups, roster: roster) }
         if let members = input.members { out += membersTab(members) }
@@ -189,6 +193,25 @@ enum SheetAudit {
     }
 
     // MARK: - Songs
+
+    /// Songs entered under a video's title — 「[4k] 곡 (Solo. 이름) - 팀 |
+    /// ep.3」 — and the charts filed under it. Not wrong, so only a note;
+    /// but the 콘티 reads as a list of uploads. See SongTitleTidy.
+    private static func songTitles(_ songs: [[String]], attachments: [[String]]?) -> [Finding] {
+        let plan = SongTitleTidy.plan(songs: songs, attachments: attachments)
+        let files = Set(plan.attachments.map(\.row)).count
+        guard plan.titles > 0 || files > 0 else { return [] }
+        var detail = "Title에는 곡 제목만 남기고, 팀·앨범·연도는 「참고버전」 열로 옮깁니다."
+        if files > 0 { detail += " 첨부 \(files)개의 곡 이름과 파일 이름도 맞춥니다." }
+        if let header = songs.first, let layout = SongTitleTidy.layout(header: header) {
+            detail += layout.move != nil
+                ? " Key·Transpose를 Title 바로 옆으로 옮기고 참고버전 열을 더합니다."
+                : " 참고버전 열을 더합니다."
+        }
+        return [.init(id: "songs.videoTitles", severity: .note, area: "Songs 탭",
+                      title: plan.titles > 0 ? "영상 제목이 그대로인 곡 \(plan.titles)개" : "영상 제목이 그대로인 첨부 \(files)개",
+                      detail: detail, fix: .tidySongTitles)]
+    }
 
     private static func songsTab(_ rows: [[String]]) -> [Finding] {
         var out: [Finding] = []

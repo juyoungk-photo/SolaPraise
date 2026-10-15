@@ -19,7 +19,8 @@
 //  Run:
 //      swiftc -O -o /tmp/liveaudit \
 //          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
-//          Sources/Team/SheetAudit.swift Tools/audit-live-sheet.swift
+//          Sources/Feed/SongSearchSuggestions.swift Sources/Feed/PlanSongTitle.swift \
+//          Sources/Team/SongTitleTidy.swift Sources/Team/SheetAudit.swift Tools/audit-live-sheet.swift
 //      /tmp/liveaudit
 //
 

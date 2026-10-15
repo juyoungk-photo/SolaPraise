@@ -307,10 +307,16 @@ enum SongSearchSuggestions {
         // The team spelled out, when its name is an acronym: 「주사평」 is
         // 「주님의 사랑 평화의 노래」 — the first syllables of its words.
         let initials = String(text.split(separator: " ").compactMap(\.first))
-        return team.contains { name in
+        if team.contains(where: { name in
             name.count >= 3 && name.range(of: #"^\p{Hangul}+$"#, options: .regularExpression) != nil
                 && initials.hasPrefix(name)
-        }
+        }) { return true }
+        // And the other way: the channel spelled out, the title using its
+        // acronym — 「주사평 | 곡」 from 「주님의 사랑 평화의 노래」.
+        let acronym = text.replacingOccurrences(of: " ", with: "")
+        let teamInitials = String(team.compactMap(\.first))
+        return acronym.count >= 3 && acronym.range(of: #"^\p{Hangul}+$"#, options: .regularExpression) != nil
+            && teamInitials.hasPrefix(acronym)
     }
 
     /// A title set in quotes inside a longer one — 「'어려운 일 당할 때'」,

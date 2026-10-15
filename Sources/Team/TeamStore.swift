@@ -73,6 +73,9 @@ struct TeamSong: Identifiable, Hashable {
     /// nowhere to write. It refused, into a note at the bottom of a screen
     /// nobody was looking at.
     var row: Int? = nil
+    /// The channel of the video it came from, when known: it tells the
+    /// team from the song in the video's title (PlanSongTitle).
+    var channel: String? = nil
     var id: String { "\(order)-\(title)" }
 
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
@@ -393,7 +396,9 @@ final class TeamStore: ObservableObject {
         // read — and, with -uiTestDuplicates, a real repeated song in them.
         let day = TeamSheet.dateFormatter.string(from: services.first { !$0.isPast }?.date ?? Date())
         var songRows: [[String]] = [["Date", "Order", "Title", "YouTubeURL"],
-                                    [day, "1", "Sample", "https://youtu.be/AAAAAAAAAAA"]]
+                                    [day, "1", "Sample", "https://youtu.be/AAAAAAAAAAA"],
+                                    // Entered under a video's whole title, for 곡 제목 정리.
+                                    [day, "2", "새 노래 | NEW SONG | 어느 워십", "https://youtu.be/BBBBBBBBBBB"]]
         if DebugHarness.seedDuplicates {
             songRows += [[day, "2", "Sample", "https://youtu.be/AAAAAAAAAAA"],
                          [day, "3", "Sample", "https://youtu.be/AAAAAAAAAAA"]]
@@ -904,8 +909,13 @@ final class TeamStore: ObservableObject {
 
     /// Files attached to one song, matched on the title the 콘티 shows.
     func attachments(for service: TeamService, song: String) -> [Attachment] {
+        // By the song, not the spelling: the sheet's titles are tidied from
+        // a video's long title, and a file attached under either is still
+        // that song's.
         let key = song.trimmingCharacters(in: .whitespaces)
-        return attachments(for: service).filter { $0.song == key }
+        // "" is the service's own files — the 콘티 — and matches only "".
+        guard !key.isEmpty else { return attachments(for: service).filter { $0.song.isEmpty } }
+        return attachments(for: service).filter { !$0.song.isEmpty && PlanSongTitle.sameSong($0.song, key) }
     }
 
     /// Uploads a file and records it against a service, or one of its songs.
@@ -1746,27 +1756,32 @@ final class TeamStore: ObservableObject {
             targets.append(offset + 1)
         }
 
-        func cells(_ song: TeamSong) -> [String] {
-            layout.row(
+        func cells(_ song: TeamSong, over existing: [String]? = nil) -> [String] {
+            // The song, not the video's title; the recording in 참고버전.
+            let tidy = PlanSongTitle.forSheet(song.title, channel: song.channel)
+            return layout.row(
                 date: day,
                 order: String(song.order),
-                title: song.title,
+                title: tidy.title,
                 url: song.url?.absoluteString ?? "",
                 key: song.key ?? "",
                 transpose: song.transpose == 0 ? "" : String(song.transpose),
                 notes: song.notes ?? "",
-                // Columns the app does not own are left exactly as they were,
-                // so a leader's own notes survive a push.
-                existing: targets.isEmpty ? nil : nil
+                reference: tidy.reference,
+                // Columns the app does not own are left exactly as they
+                // were. This passed nil for every row, and a push blanked the
+                // Service column of each row it rewrote.
+                existing: existing
             )
         }
 
         var updates: [(range: String, rows: [[String]])] = []
         for (index, song) in incoming.enumerated() where index < targets.count {
             let row = targets[index]
+            let before = existingRows.indices.contains(row - 1) ? existingRows[row - 1] : nil
             updates.append((
                 "\(TeamSheet.songsTab)!A\(row):\(layout.lastColumnLetter)\(row)",
-                [cells(song)]
+                [cells(song, over: before.map { Array($0.prefix(layout.width)) })]
             ))
         }
         // Rows the old 콘티 used and the new one does not: blanked, not left
@@ -1810,6 +1825,7 @@ final class TeamStore: ObservableObject {
         title: String,
         videoId: String,
         key: String?,
+        channel: String? = nil,
         to service: TeamService,
         sheetId: String
     ) async -> AppendResult {
@@ -1854,17 +1870,20 @@ final class TeamStore: ObservableObject {
             let fresh = Self.parseSongs(existing)[day] ?? []
             let next = (fresh.map(\.order).max() ?? 0) + 1
 
+            // The song as its title, the video's packaging in 참고버전.
+            let tidy = PlanSongTitle.forSheet(title, channel: channel)
             try await client.append(
                 sheetId: sheetId,
                 tab: TeamSheet.songsTab,
                 row: layout.row(
                     date: dayText,
                     order: String(next),
-                    title: title,
+                    title: tidy.title,
                     url: YouTubeID.watchURL(videoId)?.absoluteString ?? "",
                     key: key ?? "",
                     transpose: "",
                     notes: "",
+                    reference: tidy.reference,
                     existing: nil
                 )
             )
@@ -1932,6 +1951,77 @@ final class TeamStore: ObservableObject {
             try await client.batchWrite(sheetId: sheetId, updates: updates)
 
             adoptSongRows(try await rawSongRows(sheetId: sheetId))
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 정리하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // MARK: - Video titles to song titles
+
+    /// Songs' titles from the videos' titles, the recording in 참고버전, and
+    /// the attachments renamed to match. See SongTitleTidy.
+    ///
+    /// Only from a button: it rearranges the team's own document. First the
+    /// columns — Key and Transpose beside Title, a 참고버전 column after
+    /// them — by Sheets' own move and insert, which carry every row's cells
+    /// along; then single cells, never whole rows, worked out from a fresh
+    /// read made after the columns moved.
+    func tidySongTitles(sheetId: String, channels: [String: String]) async -> String? {
+        #if DEBUG
+        if isSample { return "샘플 모드에서는 시트를 바꾸지 않습니다." }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        do {
+            // Row numbers below count from a header on the first row, as
+            // every other write here does; a tab laid out otherwise is not
+            // guessed at.
+            for tab in [TeamSheet.songsTab, TeamSheet.attachmentsTab] {
+                let raw = (try? await client.read(sheetId: sheetId, range: tab)) ?? []
+                if let index = TeamSheet.headerIndex(raw, tab: tab), index != 0 {
+                    return "\(tab) 탭의 머리글이 첫 줄에 있지 않아 정리하지 않았습니다."
+                }
+            }
+
+            var songs = try await rawSongRows(sheetId: sheetId)
+            if let header = songs.first, let layout = SongTitleTidy.layout(header: header) {
+                guard let gid = try await client.tabGid(sheetId: sheetId, title: TeamSheet.songsTab) else {
+                    return "Songs 탭을 찾지 못했습니다."
+                }
+                var requests: [[String: Any]] = []
+                if let move = layout.move, let title = TeamSheet.column(header, ["title", "곡", "곡명", "찬양"]) {
+                    requests.append(["moveDimension": [
+                        "source": ["sheetId": gid, "dimension": "COLUMNS",
+                                   "startIndex": move.lowerBound, "endIndex": move.upperBound],
+                        "destinationIndex": title + 1
+                    ]])
+                }
+                requests.append(["insertDimension": [
+                    "range": ["sheetId": gid, "dimension": "COLUMNS",
+                              "startIndex": layout.insertReferenceAt, "endIndex": layout.insertReferenceAt + 1],
+                    "inheritFromBefore": true
+                ]])
+                try await client.formatUpdate(sheetId: sheetId, requests: requests)
+                let cell = "\(TeamSheet.songsTab)!\(TeamSheet.columnLetter(layout.insertReferenceAt))1"
+                try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: ["참고버전"])
+                songs = try await rawSongRows(sheetId: sheetId)
+            }
+
+            let attachments = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab)
+            let plan = SongTitleTidy.plan(songs: songs, attachments: attachments, channels: channels)
+            var updates: [(range: String, rows: [[String]])] = plan.songs.map {
+                let cell = "\(TeamSheet.columnLetter($0.column))\($0.row)"
+                return ("\(TeamSheet.songsTab)!\(cell):\(cell)", [[$0.value]])
+            }
+            updates += plan.attachments.map {
+                let cell = "\(TeamSheet.columnLetter($0.column))\($0.row)"
+                return ("\(TeamSheet.attachmentsTab)!\(cell):\(cell)", [[$0.value]])
+            }
+            if !updates.isEmpty { try await client.batchWrite(sheetId: sheetId, updates: updates) }
+            await load(sheetId: sheetId)
             return nil
         } catch SheetsClient.SheetsError.http(403, _) {
             isReadOnly = true
@@ -2392,9 +2482,9 @@ final class TeamStore: ObservableObject {
         }
 
         /// "A" … "Z", for the write range.
-        var lastColumnLetter: String {
-            String(UnicodeScalar(UInt8(65 + min(max(width - 1, 0), 25))))
-        }
+        /// Past Z as well: a tab whose header runs to AA was written into
+        /// A…Z with one value too many, which Sheets refuses.
+        var lastColumnLetter: String { TeamSheet.columnLetter(max(width - 1, 0)) }
     }
 
     private(set) var signupLayout = SignupLayout(header: [])
@@ -2402,7 +2492,11 @@ final class TeamStore: ObservableObject {
     /// The Songs tab's own column order, for the same reason.
     struct SongLayout {
         var date = 0, order = 1, title = 2, url = 3, key = 4, transpose = 5, notes = 6
+        /// 참고버전: which recording the song was taken from. Nil on a sheet
+        /// without the column — nothing is written there then.
+        var reference: Int?
         var width = 7
+
 
         init(header: [String]) {
             guard !header.isEmpty else { return }
@@ -2411,13 +2505,15 @@ final class TeamStore: ObservableObject {
             order = TeamSheet.column(header, ["order", "순서", "#"]) ?? 1
             title = TeamSheet.column(header, ["title", "곡", "곡명", "찬양"]) ?? 2
             url = TeamSheet.column(header, ["youtubeurl", "url", "link", "링크", "영상"]) ?? 3
-            key = TeamSheet.column(header, ["key", "키", "원키"]) ?? 4
+            key = TeamSheet.column(header, ["key", "키", "원키", "원곡키"]) ?? 4
             transpose = TeamSheet.column(header, ["transpose", "연주키", "조옮김"]) ?? 5
             notes = TeamSheet.column(header, ["notes", "note", "비고", "메모"]) ?? 6
+            reference = TeamSheet.column(header, TeamSheet.referenceColumnNames)
         }
 
         func row(date: String, order: String, title: String, url: String,
                  key: String, transpose: String, notes: String,
+                 reference: String? = nil,
                  existing: [String]?) -> [String] {
             var cells = existing ?? [String](repeating: "", count: width)
             while cells.count < width { cells.append("") }
@@ -2427,12 +2523,17 @@ final class TeamStore: ObservableObject {
             put(self.date, date); put(self.order, order); put(self.title, title)
             put(self.url, url); put(self.key, key)
             put(self.transpose, transpose); put(self.notes, notes)
+            // Only filled, never cleared: a leader's own note there stays.
+            if let column = self.reference, let reference, !reference.isEmpty,
+               cells.indices.contains(column), cells[column].trimmingCharacters(in: .whitespaces).isEmpty {
+                cells[column] = reference
+            }
             return cells
         }
 
-        var lastColumnLetter: String {
-            String(UnicodeScalar(UInt8(65 + min(max(width - 1, 0), 25))))
-        }
+        /// Past Z as well: a tab whose header runs to AA was written into
+        /// A…Z with one value too many, which Sheets refuses.
+        var lastColumnLetter: String { TeamSheet.columnLetter(max(width - 1, 0)) }
     }
 
     static func parseSignups(_ rows: [[String]]) -> [Date: [TeamSignup]] {

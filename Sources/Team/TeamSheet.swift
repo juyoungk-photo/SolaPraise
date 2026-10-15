@@ -65,6 +65,9 @@ enum TeamSheet {
     static let scheduleTab = "Schedule"
     static let rolesTab    = "Roles"
     static let songsTab    = "Songs"
+    /// The Songs tab's 참고버전 column: which recording a song was taken
+    /// from, apart from its title (SongTitleTidy).
+    static let referenceColumnNames = ["참고버전", "참고 버전", "reference", "version"]
     static let signupsTab  = "Signups"
     static let membersTab  = "Members"
     /// The order of service. See the note on Plan below.
@@ -645,6 +648,23 @@ actor SheetsClient {
         }
         let data = try await send(url: url, method: "GET", rawBody: nil)
         return (try JSONDecoder().decode(Spreadsheet.self, from: data).sheets ?? []).map(\.properties.title)
+    }
+
+    /// A tab's numeric id, which structural edits — moving or inserting a
+    /// column — address it by.
+    func tabGid(sheetId: String, title: String) async throws -> Int? {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("gid") }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)"
+        comps.queryItems = [.init(name: "fields", value: "sheets.properties(sheetId,title)")]
+        guard let url = comps.url else { throw SheetsError.badRange("gid") }
+        struct Spreadsheet: Decodable {
+            struct Sheet: Decodable { struct P: Decodable { let sheetId: Int; let title: String }; let properties: P }
+            let sheets: [Sheet]?
+        }
+        let data = try await send(url: url, method: "GET", rawBody: nil)
+        return (try JSONDecoder().decode(Spreadsheet.self, from: data).sheets ?? [])
+            .first { $0.properties.title == title }?.properties.sheetId
     }
 
     /// One row, as it stands now.

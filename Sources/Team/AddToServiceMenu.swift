@@ -16,6 +16,8 @@ struct AddToServiceMenu<Label: View>: View {
     let videoId: String
     /// A key the app already knows — from a chart, or published by the team.
     var key: String?
+    /// The video's channel: it tells the team from the song in the title.
+    var channel: String? = nil
     @ViewBuilder var label: Label
 
     @EnvironmentObject private var team: TeamStore
@@ -43,7 +45,7 @@ struct AddToServiceMenu<Label: View>: View {
         let name = service.date.formatted(.dateTime.month(.defaultDigits).day())
             + " " + service.title
         let result = await team.appendSong(
-            title: title, videoId: videoId, key: key,
+            title: title, videoId: videoId, key: key, channel: channel,
             to: service, sheetId: sheetId
         )
         // Said where the person is looking. The 콘티 is on another tab, and

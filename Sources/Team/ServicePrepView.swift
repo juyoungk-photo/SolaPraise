@@ -1327,7 +1327,7 @@ struct ServicePrepView: View {
                                                versionLabel: "콘티 \(stem) · \(pageText)"),
                                 conti.addedAt, rank))
             }
-            for (offset, chart) in attachments.enumerated() where !chart.belongsToService && chart.song == song.title {
+            for (offset, chart) in attachments.enumerated() where !chart.belongsToService && PlanSongTitle.sameSong(chart.song, song.title) {
                 let when = chart.addedAt.map { " · \(day.string(from: $0)) 올림" } ?? ""
                 sources.append((ScoreStandItem(attachment: chart, song: song.title, teamKey: song.key,
                                                versionLabel: "악보 \(chart.name)\(when)"),
@@ -1487,7 +1487,8 @@ struct ServicePrepView: View {
                 // detection guessed, otherwise blank for the leader to fill.
                 key: chart?.keyLabel,
                 transpose: chart?.semitoneShift ?? 0,
-                notes: nil
+                notes: nil,
+                channel: item.channelTitle
             )
         }
         guard !songs.isEmpty else {

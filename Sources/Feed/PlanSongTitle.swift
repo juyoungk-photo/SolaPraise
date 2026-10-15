@@ -56,20 +56,36 @@ enum PlanSongTitle {
             meta.append(text)
         }
 
-        for part in SongSearchSuggestions.parts(of: text) {
-            // A bracketed tag is a piece of its own: 「[팀이름] 곡」.
+        // WHICH PIECES ARE THE RECORDING. The song's English title is not:
+        // teams print it right after the Korean — the next part, 「곡 |
+        // ENGLISH TITLE | 팀」, or in parentheses beside it — and it is the
+        // same song again. Beside the title in its own part, only what says
+        // something about this version is kept — 「cover by …」, a series
+        // 「찬송과 묵상 #35」 — not the English 「No Turning Back」.
+        let team = SongSearchSuggestions.teamWords(channel: channel)
+        let parts = SongSearchSuggestions.parts(of: text)
+        let songPart = parts.firstIndex { part in songs.contains { part.contains($0) } }
+        for (index, part) in parts.enumerated() {
+            let isSongPart = index == songPart
             var rest = part
-            for pattern in [#"\[([^\]]*)\]"#, #"【([^】]*)】"#, #"\(([^)]*)\)"#] {
+            for (pattern, aside) in [(#"\[([^\]]*)\]"#, false), (#"【([^】]*)】"#, false), (#"\(([^)]*)\)"#, true)] {
                 guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
                 let range = NSRange(rest.startIndex..., in: rest)
                 for match in regex.matches(in: rest, range: range) {
-                    if let inner = Range(match.range(at: 1), in: rest) { add(String(rest[inner])) }
+                    guard let inner = Range(match.range(at: 1), in: rest) else { continue }
+                    let piece = String(rest[inner])
+                    // 「빚진 자 (The Debtor)」: the title again. A [tag] is not.
+                    if isSongPart, aside, isEnglishTitle(piece, team: team) { continue }
+                    add(piece)
                 }
                 rest = regex.stringByReplacingMatches(in: rest, range: range, withTemplate: " ")
             }
-            // Beside the song in the same part is the song again in English,
-            // or a word like 「Live」: not meta.
-            if songs.contains(where: { rest.contains($0) }) { continue }
+            if isSongPart {
+                for song in songs { rest = rest.replacingOccurrences(of: song, with: " ") }
+                if says(aboutVersion: rest) { add(rest) }
+                continue
+            }
+            if let songPart, index == songPart + 1, isEnglishTitle(rest, team: team) { continue }
             add(rest)
         }
         years.forEach(add)
@@ -81,6 +97,71 @@ enum PlanSongTitle {
         }
         return Parts(title: songs.joined(separator: " + "), hymn: hymn, meta: meta)
     }
+
+    /// Latin words only, naming no team and no packaging: a song's English
+    /// title — 「YOU ARE HOLY」, 「Living Hope」.
+    private static func isEnglishTitle(_ piece: String, team: [String]) -> Bool {
+        let text = tidy(piece)
+        guard !text.isEmpty, text.range(of: #"[\p{Hangul}0-9]"#, options: .regularExpression) == nil,
+              text.range(of: #"[A-Za-z]"#, options: .regularExpression) != nil else { return false }
+        return !SongSearchSuggestions.isPackaging(text, team: team) && !says(aboutVersion: text)
+    }
+
+    /// Words that describe a version rather than name a song.
+    private static func says(aboutVersion piece: String) -> Bool {
+        let text = tidy(piece)
+        guard !text.isEmpty else { return false }
+        if text.range(of: #"[\p{Hangul}0-9]"#, options: .regularExpression) != nil { return true }
+        return text.range(of: #"(?i)\b(cover|by|feat|ft|solo|ver|version|live|acoustic|piano|inst|remix|arr)\b|\.ver"#,
+                          options: .regularExpression) != nil
+    }
+
+    // MARK: - On the sheet
+
+    /// The Songs tab's Title and 참고버전 for a song as it arrived — a
+    /// video's title, or a title typed by hand.
+    ///
+    /// Title is the song, with its hymn number when it has one —
+    /// 「어려운 일 당할 때 (찬송가 543장)」 — since a congregation finds a
+    /// hymn by its number, and 통일 and 새 number differently. 참고버전 is
+    /// which recording: team, album, year. Reading the result again gives
+    /// the same result, so a title already tidied is left alone.
+    static func forSheet(_ raw: String, channel: String? = nil) -> (title: String, reference: String) {
+        let parts = split(raw, channel: channel)
+        var title = parts.title
+        if let hymn = parts.hymn {
+            let hymnal = raw.contains("통일") ? "통일찬송가" : "찬송가"
+            title += " (\(hymnal) \(hymn)장)"
+        }
+        return (title, parts.meta.joined(separator: " · "))
+    }
+
+    /// Whether two titles name the same song — a video's long title and the
+    /// tidied one, or the same title spelled with other packaging. What
+    /// was kept against a title (a 콘티's pages, an attachment) still
+    /// belongs to it after the sheet's titles are tidied.
+    static func sameSong(_ a: String, _ b: String) -> Bool {
+        let left = a.trimmingCharacters(in: .whitespaces), right = b.trimmingCharacters(in: .whitespaces)
+        if left == right { return true }
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        let l = identity(left), r = identity(right)
+        // A number on one side only is the same hymn written two ways.
+        return l.title == r.title && (l.hymn == nil || r.hymn == nil || l.hymn == r.hymn)
+    }
+
+    /// The song a title names, normalised — kept, since it is asked for
+    /// every attachment and 콘티 page on every redraw.
+    private static func identity(_ title: String) -> (title: String, hymn: Int?) {
+        lock.lock()
+        if let known = identities[title] { lock.unlock(); return known }
+        lock.unlock()
+        let parts = split(title)
+        let found = (SongSearchSuggestions.normalised(parts.title), parts.hymn)
+        lock.lock(); identities[title] = found; lock.unlock()
+        return found
+    }
+    private static var identities: [String: (title: String, hymn: Int?)] = [:]
+    private static let lock = NSLock()
 
     private static func matches(_ pattern: String, in text: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -98,6 +179,8 @@ enum PlanSongTitle {
             of: #"(?i)\b(?:official|mv|m/v|lyrics?(?:\s*video)?|audio|4k|hd|kor\s*sub|eng\s*sub|full\s*ver\.?)\b|가사\s*포함|가사|\bmr\b"#,
             with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: #"['‘’"“”「」『』]"#, with: " ", options: .regularExpression)
+        // A channel's hashtag — 「#찬송가부르기」 — not a series number 「#35」.
+        text = text.replacingOccurrences(of: #"#[^\s\d#][^\s#]*"#, with: " ", options: .regularExpression)
         return text
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))

@@ -91,6 +91,8 @@ enum ContiPages {
 
     /// Pages runs as the stand shows them: each song's pages, in order.
     static func pages(of fileId: String, for song: String) -> [Int] {
-        (cached(fileId) ?? [:]).filter { $0.value == song }.map(\.key).sorted()
+        // By the song, so pages kept against a video's long title still
+        // find the tidied one.
+        (cached(fileId) ?? [:]).filter { PlanSongTitle.sameSong($0.value, song) }.map(\.key).sorted()
     }
 }

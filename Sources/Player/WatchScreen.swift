@@ -737,7 +737,8 @@ struct WatchScreen: View {
                 AddToServiceMenu(
                     title: current.title,
                     videoId: current.id,
-                    key: existingSheet(forVideo: current.id)?.keyLabel
+                    key: existingSheet(forVideo: current.id)?.keyLabel,
+                    channel: current.channelTitle
                 ) {
                     Label("콘티에 추가", systemImage: "calendar.badge.plus")
                 }

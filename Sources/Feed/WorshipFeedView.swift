@@ -222,7 +222,8 @@ struct WorshipFeedView: View {
                                               systemImage: "waveform.badge.magnifyingglass")
                                     }
                                     AddToServiceMenu(title: video.title,
-                                                     videoId: video.videoId) {
+                                                     videoId: video.videoId,
+                                                     channel: video.channelTitle) {
                                         Label("콘티에 추가",
                                               systemImage: "calendar.badge.plus")
                                     }
