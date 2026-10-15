@@ -563,9 +563,41 @@ struct WatchScreen: View {
         let suggestions = SongSearchSuggestions.make(
             title: current.title, description: descriptionForSuggestions,
             channel: current.channelTitle)
-        if !suggestions.isEmpty || DevGate.isUnlocked(auth: auth, planning: planning) {
+        if !suggestions.isEmpty || showsChordButton || DevGate.isUnlocked(auth: auth, planning: planning) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    // 악보 검색 first, on 찬양. It was a full-width card of
+                    // its own under the date; here it is one chip among the
+                    // searches it belongs with. Where the team's own chart is
+                    // known — a link in the description, or a store the
+                    // team sells from — it says 공식 on the chip: a signal
+                    // worth more than any search result.
+                    if showsChordButton {
+                        let official = !sheetLinks.isEmpty
+                            || SheetMusicSources.publisher(channel: current.channelTitle, title: current.title) != nil
+                        // The song carries on in PiP while the 악보 page is open.
+                        SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks,
+                                       open: { url in openKeepingSong(url) }) {
+                            HStack(spacing: 5) {
+                                Label("악보 검색", systemImage: "doc.text.magnifyingglass")
+                                    .labelStyle(.titleAndIcon)
+                                if official {
+                                    Text("공식")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Capsule().fill(Color.green))
+                                }
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .foregroundStyle(Color.accentColor)
+                        }
+                        .accessibilityLabel(official ? "악보 검색, 공식 악보 있음" : "악보 검색")
+                    }
                     // 음원 찾기, as one chip at the head of the row rather
                     // than a full-width row of its own. Development only —
                     // AudioSourceMenu hides itself otherwise.
@@ -584,9 +616,21 @@ struct WatchScreen: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    // Each search two ways: for other uploads in YouTube, or
+                    // on the web — where the lyrics, the story behind a song
+                    // and its 악보 are.
                     ForEach(suggestions) { suggestion in
-                        Button {
-                            searching = SearchRequest(query: suggestion.query)
+                        Menu {
+                            Button {
+                                searching = SearchRequest(query: suggestion.query)
+                            } label: {
+                                Label("YouTube에서 찾기", systemImage: "play.rectangle")
+                            }
+                            Button {
+                                if let url = Self.googleURL(suggestion.query) { openKeepingSong(url) }
+                            } label: {
+                                Label("Google에서 찾기", systemImage: "globe")
+                            }
                         } label: {
                             HStack(spacing: 4) {
                                 Text(suggestion.caption)
@@ -599,6 +643,7 @@ struct WatchScreen: View {
                             .padding(.vertical, 6)
                             .background(Capsule().fill(Color(.secondarySystemBackground)))
                         }
+                        .menuOrder(.fixed)
                         .buttonStyle(.plain)
                     }
                 }
@@ -617,6 +662,12 @@ struct WatchScreen: View {
         return (try? context.fetch(FetchDescriptor<CachedVideo>(
             predicate: #Predicate { $0.videoId == id }
         )).first)?.descriptionText
+    }
+
+    static func googleURL(_ query: String) -> URL? {
+        var components = URLComponents(string: "https://www.google.com/search")
+        components?.queryItems = [URLQueryItem(name: "q", value: query)]
+        return components?.url
     }
 
     private func loadDescriptionIfNeeded() async {
@@ -799,38 +850,8 @@ struct WatchScreen: View {
                 worshipSetList
             }
 
-            // Always offered on 찬양, not only when the channel happened to
-            // publish a link. Most worship uploads publish none, so the
-            // official chart — which usually exists and is sold by the team
-            // that wrote the song — was invisible almost every time.
-            if showsChordButton, let current {
-                // The song carries on in PiP while the 악보 page is open.
-                SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks,
-                               open: { url in openKeepingSong(url) }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(sheetLinks.isEmpty ? "공식 악보 찾기" : "공식 악보")
-                                .font(.subheadline)
-                            Text("찾는 동안 음악은 PiP로 계속됩니다")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        if !sheetLinks.isEmpty {
-                            Text("\(sheetLinks.count)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption2)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground),
-                                in: RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-            }
+            // 악보 검색 is a chip at the head of the search row now — see
+            // suggestionChips.
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
