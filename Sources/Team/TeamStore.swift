@@ -688,7 +688,9 @@ final class TeamStore: ObservableObject {
         // They have still not answered, and the orange hollow ring is what
         // says so. The 미응답 chips are for the people the row would
         // otherwise not mention at all.
+        // Each person in a cell: a part can hold several, 「지혜, 민수」.
         let assigned = service.assignments.values
+            .flatMap(TeamSheet.names(inCell:))
             .map { $0.replacingOccurrences(of: " ", with: "") }
             .filter { !$0.isEmpty }
 

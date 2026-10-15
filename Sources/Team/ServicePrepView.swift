@@ -1837,40 +1837,68 @@ struct ServicePrepView: View {
         var id: String { "\(service.id)-\(role ?? "")-\(person ?? "")" }
     }
 
-    private struct KeyPart {
+    /// Somebody on a part, by their own answer or by the leader's plan.
+    private struct Holder {
         let role: String
-        /// Who has it, by answer or by the leader's plan. Nil means nobody.
-        let who: String?
-        /// Set only when this came from someone's answer, which is both what
-        /// makes it green and what keeps them from appearing twice on the row.
+        let who: String
+        /// Set only when they answered for it, which is what makes the chip
+        /// green rather than the orange of a plan they have not agreed to.
         let signupId: String?
+        /// The part, numbered when it has more than one person: VOCAL1.
+        var label: String
     }
 
-    /// Who holds 인도 or 반주 for a service.
+    /// Everyone on every part for a service, and which of 인도 and 반주 has
+    /// nobody.
     ///
-    /// An answer wins over the sheet's own column: somebody saying "I will
-    /// lead" is a stronger fact than a name typed into a plan weeks ago, and
-    /// the two disagree often enough to matter.
-    private func keyPart(_ role: String,
-                         _ service: TeamService,
-                         _ answers: [TeamSignup]) -> KeyPart {
-        if let answer = answers.first(where: {
-            $0.status == .available && PartAliases.matches($0.role, role)
-        }) {
-            return KeyPart(role: role,
-                           who: displayName(answer),
-                           signupId: answer.id)
+    /// WHY A LIST, NOT A NAME PER PART: any part can have several people —
+    /// two on VOCAL, two on 건반 — and the row kept one per part, so the
+    /// second answer or assignment simply was not shown. Each part's people
+    /// come from their answers first — somebody saying "I will" is a
+    /// stronger fact than a name typed into a plan — and then from the
+    /// schedule's cell, which may hold several names. A part with more than
+    /// one is numbered, 보컬1 and 보컬2, so the chips say who is which.
+    ///
+    /// Parts are matched through PartAliases, so a sheet that writes 인도자
+    /// or Piano answers for 인도 and 반주.
+    private func holders(_ service: TeamService, _ answers: [TeamSignup]) -> (holders: [Holder], missing: [String]) {
+        var groups: [(role: String, people: [(who: String, signupId: String?)])] = []
+        func group(_ role: String) -> Int {
+            if let index = groups.firstIndex(where: { PartAliases.matches($0.role, role) }) { return index }
+            groups.append((role, []))
+            return groups.count - 1
         }
-        // Through PartAliases, so a sheet that writes 인도자, 반주자 or Piano
-        // answers for 인도 and 반주. Somebody on Piano HAS staffed 반주, and
-        // showing 「반주 미지정」 beside them was the screen failing to
-        // understand its own schedule.
-        if let planned = service.assignments.first(where: {
-            PartAliases.matches($0.key, role)
-        })?.value, !planned.trimmingCharacters(in: .whitespaces).isEmpty {
-            return KeyPart(role: role, who: planned, signupId: nil)
+        func samePerson(_ a: String, _ b: String) -> Bool {
+            let x = a.replacingOccurrences(of: " ", with: ""), y = b.replacingOccurrences(of: " ", with: "")
+            return x == y || (min(x.count, y.count) >= 2 && (x.contains(y) || y.contains(x)))
         }
-        return KeyPart(role: role, who: nil, signupId: nil)
+        // 인도 and 반주 first, then the schedule's columns in its own order.
+        for role in Self.keyRoleNames { _ = group(role) }
+        for role in team.roleColumns.sorted(by: { $0.value < $1.value }).map(\.key) { _ = group(role) }
+        for answer in answers where answer.status == .available && !answer.role.isEmpty {
+            groups[group(answer.role)].people.append((displayName(answer), answer.id))
+        }
+        // In column order, then by name: a dictionary's own order changes
+        // from one launch to the next, and so did the chips'.
+        let planned = service.assignments.sorted {
+            (team.roleColumns[$0.key] ?? .max, $0.key) < (team.roleColumns[$1.key] ?? .max, $1.key)
+        }
+        for (role, cell) in planned {
+            let index = group(role)
+            for name in TeamSheet.names(inCell: cell)
+            where !groups[index].people.contains(where: { samePerson($0.who, name) }) {
+                groups[index].people.append((name, nil))
+            }
+        }
+        var out: [Holder] = []
+        for group in groups {
+            for (number, person) in group.people.enumerated() {
+                out.append(Holder(role: group.role, who: person.who, signupId: person.signupId,
+                                  label: group.people.count > 1 ? "\(group.role)\(number + 1)" : group.role))
+            }
+        }
+        let missing = Self.keyRoleNames.filter { role in !out.contains { PartAliases.matches($0.role, role) } }
+        return (out, missing)
     }
 
     private func isFirstOfMonth(_ service: TeamService, in list: [TeamService]) -> Bool {
@@ -2233,10 +2261,9 @@ struct ServicePrepView: View {
                            answers: [TeamSignup],
                            open: Bool) -> some View {
         let pending = team.pendingNames(for: upcoming)
-        let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
-        let spokenFor = Set(parts.compactMap(\.signupId))
+        let staffed = holders(upcoming, answers)
+        let spokenFor = Set(staffed.holders.compactMap(\.signupId))
         let rest = answers.filter { !spokenFor.contains($0.id) }
-        let planned = plannedParts(upcoming, besides: parts, answers: answers)
 
         // Wrapping on both sizes.
         //
@@ -2244,32 +2271,7 @@ struct ServicePrepView: View {
         // the same height, which made the month scannable — but it also hid
         // half the team behind a scroll nobody tries, on the row whose job is
         // to say who is on. Seeing everyone beats rows of equal height.
-        return ChipFlow { chips(upcoming, parts, planned, rest, pending, open: open) }
-    }
-
-    /// Every other part the schedule names somebody for, who has not
-    /// answered yet — 「지혜 VOCAL」.
-    ///
-    /// WHY: assigning a part takes that person off 「미응답」, on the grounds
-    /// that the row already shows them, in orange, against their part. It
-    /// did only for 인도 and 반주. Assigned to VOCAL or 건반, a person left
-    /// 미응답 and appeared nowhere — the assignment looked like it had
-    /// removed them.
-    private func plannedParts(_ service: TeamService, besides parts: [KeyPart],
-                              answers: [TeamSignup]) -> [(role: String, who: String)] {
-        let answered = answers.map { displayName($0).replacingOccurrences(of: " ", with: "") }
-        return service.assignments
-            .filter { role, who in
-                !who.trimmingCharacters(in: .whitespaces).isEmpty
-                    && !Self.keyRoleNames.contains { PartAliases.matches(role, $0) }
-                    && !answered.contains { name in
-                        let cell = who.replacingOccurrences(of: " ", with: "")
-                        return name == cell || (min(name.count, cell.count) >= 2 && (name.contains(cell) || cell.contains(name)))
-                    }
-            }
-            // In the schedule's own column order.
-            .sorted { (team.roleColumns[$0.key] ?? .max) < (team.roleColumns[$1.key] ?? .max) }
-            .map { (role: $0.key, who: $0.value.trimmingCharacters(in: .whitespaces)) }
+        return ChipFlow { chips(upcoming, staffed, rest, pending, open: open) }
     }
 
     /// Whether this account may put other people's names on the schedule.
@@ -2312,30 +2314,22 @@ struct ServicePrepView: View {
 
     @ViewBuilder
     private func chips(_ service: TeamService,
-                       _ parts: [KeyPart],
-                       _ planned: [(role: String, who: String)],
+                       _ staffed: (holders: [Holder], missing: [String]),
                        _ rest: [TeamSignup],
                        _ pending: [String],
                        open: Bool) -> some View {
-        ForEach(parts, id: \.role) { part in
-            assignable(service, role: part.role, person: nil) {
-                if let who = part.who {
-                    // Green when somebody answered for it, orange when it is
-                    // only the leader's plan and that person has not said yes
-                    // yet.
-                    chip(who, detail: part.role,
-                         color: part.signupId == nil ? .orange : .green,
-                         dashed: part.signupId == nil)
-                } else {
-                    chip("\(part.role) 미지정", detail: nil, color: .red)
-                }
+        ForEach(staffed.missing, id: \.self) { role in
+            assignable(service, role: role, person: nil) {
+                chip("\(role) 미지정", detail: nil, color: .red)
             }
         }
-        ForEach(planned, id: \.role) { part in
-            // The leader's plan, not their answer: orange and dashed, as
-            // for 인도 and 반주.
-            assignable(service, role: part.role, person: nil) {
-                chip(part.who, detail: part.role, color: .orange, dashed: true)
+        ForEach(Array(staffed.holders.enumerated()), id: \.offset) { _, holder in
+            // Green when they answered for it, orange and dashed when it is
+            // only the leader's plan and they have not said yes yet.
+            assignable(service, role: holder.role, person: nil) {
+                chip(holder.who, detail: holder.label,
+                     color: holder.signupId == nil ? .orange : .green,
+                     dashed: holder.signupId == nil)
             }
         }
         ForEach(rest) { answer in

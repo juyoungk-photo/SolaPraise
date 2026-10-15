@@ -55,7 +55,7 @@ enum TeamSampleData {
                 time: "오전 11:30",
                 location: "본당",
                 notes: week == 0 ? "새가족 환영 주일입니다." : nil,
-                assignments: week == 1 ? ["반주": "김은혜", "드럼": "성훈"] : [:]
+                assignments: week == 1 ? ["반주": "김은혜", "드럼": "성훈", "보컬": "지혜, 민수"] : [:]
             ))
             if week == 1 {
                 services.append(TeamService(

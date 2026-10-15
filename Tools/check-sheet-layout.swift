@@ -108,6 +108,14 @@ struct CheckSheetLayout {
         }.first ?? ""
         check("tidy's date rules start on the first data row (3)", formula.contains("$A3"), "got \(formula)")
 
+        // A part with several people: one Schedule cell, comma-separated.
+        check("a cell's people, by comma", TeamSheet.names(inCell: "지혜, 민수") == ["지혜", "민수"])
+        check("by slash, 「·」 or a line break typed by hand",
+              TeamSheet.names(inCell: "지혜/민수 · 수형\n은혜") == ["지혜", "민수", "수형", "은혜"])
+        check("one name is one person", TeamSheet.names(inCell: " 김은혜 ") == ["김은혜"])
+        check("an empty cell is nobody", TeamSheet.names(inCell: "  ").isEmpty)
+        check("written back as one cell", TeamSheet.cell(of: ["지혜", "민수"]) == "지혜, 민수")
+
         print(failures == 0 ? "\nall sheet layout checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

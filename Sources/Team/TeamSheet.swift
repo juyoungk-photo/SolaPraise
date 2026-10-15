@@ -450,6 +450,18 @@ enum TeamSheet {
     /// Every tab is read this way now. A person adds a column, renames one,
     /// or builds a tab by duplicating another — all of which move the
     /// positions this used to count on.
+    /// The people in a Schedule cell. A part can have several — two on
+    /// VOCAL — written as 「지혜, 민수」; a slash, 「·」 or a line break
+    /// typed by hand separates them too.
+    static func names(inCell cell: String) -> [String] {
+        cell.components(separatedBy: CharacterSet(charactersIn: ",/·、&\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// A Schedule cell holding these people.
+    static func cell(of names: [String]) -> String { names.joined(separator: ", ") }
+
     static func column(_ header: [String], _ names: [String]) -> Int? {
         header.firstIndex {
             names.contains($0.trimmingCharacters(in: .whitespaces).lowercased())

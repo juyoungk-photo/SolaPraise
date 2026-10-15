@@ -10,6 +10,11 @@
 //  from it saves and closes. The two-picker form this replaces made you open
 //  a picker to answer a question the chip had already asked.
 //
+//  SEVERAL ON A PART. Any part can have more than one person — two on
+//  VOCAL — so choosing someone ADDS them to the part rather than putting
+//  them in place of whoever was there, and choosing someone already on it
+//  takes them off. The cell holds them all, 「지혜, 민수」.
+//
 //  WHAT THIS IS NOT: it is not answering for them. The schedule says who is
 //  MEANT to do it; the signups say who has AGREED. Assigning writes the first
 //  and never the second, so an assigned person's chip stays orange until they
@@ -95,24 +100,16 @@ struct AssignRoleSheet: View {
     private func partSection(for who: String) -> some View {
         Section {
             ForEach(parts, id: \.self) { part in
+                let others = holders(of: part).filter { $0 != who }
+                let isOn = holders(of: part).contains(who)
                 row(title: part,
-                    subtitle: holder(of: part).flatMap { $0 == who ? nil : "현재 \($0)" },
-                    isCurrent: holder(of: part) == who) {
-                    save(role: part, name: who)
+                    subtitle: isOn ? "누르면 뺍니다" : (others.isEmpty ? nil : "함께 \(others.joined(separator: ", "))"),
+                    isCurrent: isOn) {
+                    save(role: part, names: toggled(who, in: part))
                 }
             }
         } footer: {
-            Text("지정은 계획입니다. 본인이 직접 「가능」이라고 답하기 전까지는 확정으로 표시되지 않습니다.")
-        }
-
-        if let held = parts.first(where: { holder(of: $0) == who }) {
-            Section {
-                Button(role: .destructive) {
-                    save(role: held, name: nil)
-                } label: {
-                    Label("\(held)에서 빼기", systemImage: "person.badge.minus")
-                }
-            }
+            Text("한 파트에 여러 명을 둘 수 있습니다. 지정은 계획입니다. 본인이 직접 「가능」이라고 답하기 전까지는 확정으로 표시되지 않습니다.")
         }
     }
 
@@ -122,22 +119,23 @@ struct AssignRoleSheet: View {
     private func personSection(for part: String) -> some View {
         Section {
             ForEach(team.assignableNames, id: \.self) { name in
+                let isOn = holders(of: part).contains(name)
                 row(title: name,
-                    subtitle: otherPart(of: name, besides: part).map { "현재 \($0)" },
-                    isCurrent: holder(of: part) == name) {
-                    save(role: part, name: name)
+                    subtitle: isOn ? "누르면 뺍니다" : otherPart(of: name, besides: part).map { "현재 \($0)" },
+                    isCurrent: isOn) {
+                    save(role: part, names: toggled(name, in: part))
                 }
             }
         } footer: {
-            Text("지정은 계획입니다. 본인이 직접 「가능」이라고 답하기 전까지는 확정으로 표시되지 않습니다.")
+            Text("한 파트에 여러 명을 둘 수 있습니다 — 누를 때마다 더하거나 뺍니다. 지정은 계획입니다. 본인이 직접 「가능」이라고 답하기 전까지는 확정으로 표시되지 않습니다.")
         }
 
-        if holder(of: part) != nil {
+        if holders(of: part).count > 1 {
             Section {
                 Button(role: .destructive) {
-                    save(role: part, name: nil)
+                    save(role: part, names: [])
                 } label: {
-                    Label("\(part) 비우기", systemImage: "person.badge.minus")
+                    Label("\(part) 모두 비우기", systemImage: "person.badge.minus")
                 }
             }
         }
@@ -169,24 +167,35 @@ struct AssignRoleSheet: View {
 
     // MARK: - Reading the current plan
 
-    /// Who holds a part, through the alias rule — so a sheet that staffs
-    /// Piano answers for 반주.
-    private func holder(of part: String) -> String? {
-        if let exact = service.assignments[part]?.trimmingCharacters(in: .whitespaces),
-           !exact.isEmpty { return exact }
+    /// Who is on a part, through the alias rule — so a sheet that staffs
+    /// Piano answers for 반주. Its own column first: that is the cell a
+    /// save writes.
+    private func holders(of part: String) -> [String] {
+        if let exact = service.assignments[part], !TeamSheet.names(inCell: exact).isEmpty {
+            return TeamSheet.names(inCell: exact)
+        }
         return service.assignments.first {
-            PartAliases.matches($0.key, part)
-                && !$0.value.trimmingCharacters(in: .whitespaces).isEmpty
-        }?.value
+            PartAliases.matches($0.key, part) && !TeamSheet.names(inCell: $0.value).isEmpty
+        }.map { TeamSheet.names(inCell: $0.value) } ?? []
+    }
+
+    /// The part's people with this one added, or taken off if already on.
+    private func toggled(_ name: String, in part: String) -> [String] {
+        let now = holders(of: part)
+        return now.contains(name) ? now.filter { $0 != name } : now + [name]
     }
 
     /// Another part this person already has, so putting them somewhere new
     /// does not quietly double-book them.
     private func otherPart(of name: String, besides part: String) -> String? {
-        parts.first { $0 != part && holder(of: $0) == name }
+        parts.first { $0 != part && holders(of: $0).contains(name) }
     }
 
     // MARK: - Writing
+
+    private func save(role: String, names: [String]) {
+        save(role: role, name: names.isEmpty ? nil : TeamSheet.cell(of: names))
+    }
 
     private func save(role: String, name: String?) {
         guard let sheetId else {
