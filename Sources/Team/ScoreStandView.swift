@@ -76,6 +76,8 @@ struct ScoreStandView: View {
     @State private var chordAction: ChordAction?
     @State private var entry: ChordEntry?
     @State private var choosingPage = false
+    /// 가사 확인 open, for the song on the stand.
+    @State private var checkingLyrics: ScoreStandItem?
     @State private var confirmingReread = false
     /// Where an added chord starts: near the top left of the page, clear of
     /// the title, ready to be dragged.
@@ -155,6 +157,14 @@ struct ScoreStandView: View {
         .focusable()
         .onKeyPress(.rightArrow) { go(1); return .handled }
         .onKeyPress(.leftArrow) { go(-1); return .handled }
+        #if DEBUG
+        .onChange(of: item.flatMap { model.charts[$0.id]?.isEmpty == false } ?? false) { _, ready in
+            if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
+        }
+        #endif
+        .sheet(item: $checkingLyrics) { item in
+            LyricCheckSheet(systems: model.charts[item.id] ?? [], song: item.song)
+        }
         .alert("악보", isPresented: .constant(model.note != nil)) {
             Button("확인") {
                 model.note = nil
@@ -293,7 +303,18 @@ struct ScoreStandView: View {
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
             } else if let state, state.isReady {
-                versionMenu(item)
+                HStack(spacing: 14) {
+                    versionMenu(item)
+                    // What was read off the page, against what is sung.
+                    if showsChart, let systems = model.charts[item.id], !systems.isEmpty {
+                        Button { checkingLyrics = item } label: {
+                            Label("가사 확인", systemImage: "text.badge.checkmark")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                    }
+                }
                 Text(keyLine(item, state))
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.7))

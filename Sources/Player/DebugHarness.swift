@@ -132,6 +132,13 @@ enum DebugHarness {
     /// Open 악보 연주모드 for the first service: -uiTestOpenStand
     static var openStand: Bool { args.contains("-uiTestOpenStand") }
 
+    /// 가사 확인 opened on the stand's 코드표 with this video's description
+    /// (with -uiTestScore): -uiTestLyricCheck VIDEOID
+    static var lyricCheckVideo: String? {
+        guard let i = args.firstIndex(of: "-uiTestLyricCheck"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
     /// Open one channel's page, by part of its title: -uiTestChannel 코너스톤교회
     static var channelPage: String? {
         guard let i = args.firstIndex(of: "-uiTestChannel"), i + 1 < args.count else { return nil }
