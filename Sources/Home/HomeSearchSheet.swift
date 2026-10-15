@@ -33,6 +33,8 @@ struct HomeSearchSheet: View {
     /// the same rather than more of whatever is in the box now.
     @State private var searchedQuery = ""
     @State private var isSearching = false
+    /// Lengths of the results, for telling a Short — one unit a page.
+    @State private var durations: [String: Int] = [:]
     /// Shorts already asked for, for the query on screen.
     @State private var searchedShorts = false
     @State private var errorMessage: String?
@@ -161,13 +163,13 @@ struct HomeSearchSheet: View {
 
             if !remoteResults.isEmpty {
                 Section("YouTube") {
-                    ForEach(remoteResults) { result in
+                    ForEach(FeedFilter.arrangeResults(remoteResults, seconds: { durations[$0] })) { result in
                         Button { play(result) } label: { row(
                             title: result.title,
                             channel: result.snippet?.channelTitle,
                             thumb: result.snippet?.thumbnails?.best,
                             published: result.snippet?.publishedAt,
-                            duration: nil
+                            duration: result.videoId.flatMap { durations[$0] }
                         ) }
                         .buttonStyle(.plain)
                     }
@@ -298,9 +300,17 @@ struct HomeSearchSheet: View {
             nextPageToken = page.nextPageToken
             searchedQuery = query
             searchedShorts = false
+            await loadDurations(page.items)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    private func loadDurations(_ items: [YTSearchResult]) async {
+        let ids = items.compactMap(\.videoId).filter { durations[$0] == nil }
+        guard !ids.isEmpty,
+              let videos = try? await AppServices.client(auth: auth, quota: quota).videos(ids: ids) else { return }
+        for video in videos { if let seconds = video.durationSeconds { durations[video.id] = seconds } }
     }
 
     /// The same search among short videos, added after what is shown.
@@ -315,6 +325,7 @@ struct HomeSearchSheet: View {
             let known = Set(remoteResults.compactMap(\.videoId))
             remoteResults += page.items.filter { $0.videoId.map { !known.contains($0) } ?? false }
             searchedShorts = true
+            await loadDurations(page.items)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -335,6 +346,7 @@ struct HomeSearchSheet: View {
             let known = Set(remoteResults.compactMap(\.videoId))
             remoteResults += page.items.filter { $0.videoId.map { !known.contains($0) } ?? false }
             nextPageToken = page.nextPageToken
+            await loadDurations(page.items)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

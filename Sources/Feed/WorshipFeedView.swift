@@ -370,7 +370,8 @@ struct WorshipFeedView: View {
                     .padding(.horizontal, 16)
             }
             if hasRemoteResults {
-                RemoteResultSection(results: remoteResults, detail: resultDetail) { result in
+                RemoteResultSection(results: FeedFilter.arrangeResults(remoteResults, seconds: { resultDetail[$0]?.0 }),
+                                    detail: resultDetail) { result in
                     guard let id = result.videoId else { return }
                     let info = resultDetail[id]
                     host.play(queue: [PlayableVideo(

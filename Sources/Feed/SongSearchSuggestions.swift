@@ -178,6 +178,14 @@ enum SongSearchSuggestions {
                                             position: position, medley: medleyIndex))
             }
         }
+        // A Korean song name beside Latin parts: the Latin is its English
+        // title or the album, never the song to search. 「거룩하신 전능의 주 |
+        // YOU ARE HOLY | OPEN WORSHIP | Sustaining Grace」 opened its
+        // description with the album, and the first-line bonus made the
+        // album 「다른 버전」.
+        if candidates.contains(where: { hangulShare(of: $0.text) >= 0.5 }) {
+            candidates.removeAll { hangulShare(of: $0.text) < 0.2 }
+        }
         guard let best = candidates.max(by: { a, b in
             a.score != b.score ? a.score < b.score
                 : (a.position != b.position ? a.position > b.position : a.medley > b.medley)

@@ -57,6 +57,7 @@ struct SettingsView: View {
                 }
                 appearanceSection
                 playerSection
+                feedFilterSection
                 teamPlaylistSection
                 readingSection
                 refreshSection
@@ -173,6 +174,33 @@ struct SettingsView: View {
             Text("플레이어")
         } footer: {
             Text("플레이어를 내리거나 다른 탭으로 가면, 재생 중인 곡은 PiP 창으로 계속됩니다. 일시정지 중이면 플레이어가 닫힙니다. PiP 창의 「돌아가기」로 플레이어가 다시 열리고, 닫기(✕)를 누르면 끝납니다. 재생 중에 홈으로 나가면 영상이 작은 창(PiP)으로 계속 재생됩니다. 끄거나 PiP 창을 닫으면 앱을 나갈 때 일시정지합니다. YouTube 약관상 영상 없이 소리만 재생할 수는 없습니다.")
+        }
+    }
+
+    @AppStorage(FeedFilter.noticesKey) private var skipsNotices = true
+    @AppStorage(FeedFilter.originalsKey) private var prefersOriginals = true
+
+    /// Everything feeds and 찬양 search change, in plain sight.
+    private var feedFilterSection: some View {
+        Section {
+            Toggle(isOn: $skipsNotices) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("안내·공지·예고편 건너뛰기")
+                    Text("제목에 " + FeedFilter.noticeWords.map { "「\($0)」" }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Toggle(isOn: $prefersOriginals) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Shorts는 원본으로")
+                    Text("\(FeedFilter.shortsSeconds)초 이하나 #shorts — 같은 채널의 같은 곡 원본이 있으면 그것을, 없으면 Shorts 그대로")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("피드·찬양 검색")
+        } footer: {
+            Text("피드의 다음 곡 목록과 찬양 검색 결과에만 쓰입니다 — 이것 말고 빼는 것은 없습니다. 직접 누른 영상, 재생목록, 콘티는 언제나 있는 그대로 재생합니다.")
         }
     }
 

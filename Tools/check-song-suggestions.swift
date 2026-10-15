@@ -225,6 +225,13 @@ struct CheckSongSuggestions {
                                          description: "찬송가 1장부터 645장까지 매주 한 곡씩")
                 .allSatisfy { $0.kind != .hymn })
 
+        // An upload whose description opens with the album: the Korean
+        // song name is still the one 「다른 버전」 searches.
+        let albumFirst = SongSearchSuggestions.songTitles(
+            title: "새 노래 | NEW SONG | 어느 워십 | Album Name",
+            description: "Album Name | 어느 워십\n새 노래 [NEW SONG]", channel: "어느 워십")
+        check("the album opening a description is not the song", albumFirst.first == "새 노래", "got \(albumFirst)")
+
         print(failures == 0 ? "\nall suggestion checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

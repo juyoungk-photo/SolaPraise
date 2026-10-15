@@ -175,31 +175,14 @@ final class PlayerHost: ObservableObject {
         mode = .full
     }
 
-    /// Drops what nobody queued a playlist to watch.
-    ///
-    /// A channel's uploads carry trailers, notices and Shorts alongside the
-    /// music, and once they are in the queue they play automatically — the
-    /// exact interruption this app exists to avoid. The video actually chosen
-    /// is always kept, however it looks: tapping a Short should still play
-    /// that Short.
+    /// A feed's 「next」 as 설정 › 피드·찬양 검색 says (FeedFilter): notices
+    /// and trailers out, a Short as its full-length original when the feed
+    /// has it — never just dropped. The video actually chosen plays as it
+    /// is: tapping a Short still plays that Short.
     static func watchable(_ videos: [PlayableVideo], keeping: PlayableVideo) -> [PlayableVideo] {
-        videos.filter { video in
-            if video.id == keeping.id { return true }
-            // A Short is a minute or less by definition. Unknown durations
-            // are kept, because a missing length is not evidence of anything.
-            if let seconds = video.durationSeconds, seconds <= 70 { return false }
-            return !isPromotional(video.title)
-        }
-    }
-
-    private static let promotionalMarkers = [
-        "#shorts", "shorts", "예고", "광고", "홍보", "안내", "공지",
-        "teaser", "trailer", "preview"
-    ]
-
-    private static func isPromotional(_ title: String) -> Bool {
-        let lower = title.lowercased()
-        return promotionalMarkers.contains { lower.contains($0) }
+        let items = videos.map(FeedFilter.Item.init(playable:))
+        let byId = Dictionary(videos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return FeedFilter.arrange(items, keeping: keeping.id).compactMap { byId[$0.id] }
     }
 
     /// Drops a song from the queue.
@@ -734,5 +717,25 @@ private struct SkipFlashView: View {
                 withAnimation(.easeIn(duration: 0.25)) { visible = false }
             }
         }
+    }
+}
+
+extension FeedFilter.Item {
+    init(playable video: PlayableVideo) {
+        self.init(id: video.id, title: video.title, seconds: video.durationSeconds, channel: video.channelTitle)
+    }
+}
+
+extension FeedFilter {
+    /// Search results as 설정 › 피드·찬양 검색 says: notices out, a Short as
+    /// its original when the results hold it. `seconds`: each video's
+    /// length, when known.
+    static func arrangeResults(_ results: [YTSearchResult], seconds: (String) -> Int?) -> [YTSearchResult] {
+        let items = results.compactMap { result -> Item? in
+            guard let id = result.videoId else { return nil }
+            return Item(id: id, title: result.title, seconds: seconds(id), channel: result.snippet?.channelTitle)
+        }
+        let byId = Dictionary(results.compactMap { r in r.videoId.map { ($0, r) } }, uniquingKeysWith: { first, _ in first })
+        return arrange(items).compactMap { byId[$0.id] }
     }
 }
