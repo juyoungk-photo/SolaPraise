@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 7
+    static let version = 8
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -867,6 +867,11 @@ enum ScoreRecognition {
            let bar = word.lastIndex(where: { "Il|".contains($0) }) {
             word.replaceSubrange(bar...bar, with: "/")
         }
+        // A printed ♯ the reader could not name: 「Gt」, 「G‡」, 「G＃」. No
+        // chord is spelled with these, and 「G♯」 is what the page has — a
+        // phone missed the G♯ on a hymn's third line every time.
+        word = word.replacingOccurrences(of: #"^([A-G])[t‡†＃♯](?=$|m|7|/|sus|maj|dim|aug|add|\d)"#,
+                                         with: "$1#", options: .regularExpression)
         word = word.replacingOccurrences(of: "E#", with: "F#").replacingOccurrences(of: "B#", with: "C#")
         return word
     }

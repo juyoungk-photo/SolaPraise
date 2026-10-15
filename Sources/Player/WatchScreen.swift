@@ -437,6 +437,27 @@ struct WatchScreen: View {
                 }
             }
 
+            // A tap on the wrong song: back to the one before, where it was.
+            if let back = host.returnTo {
+                Button { host.goBack() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                        Text("이전 곡으로")
+                            .fontWeight(.semibold)
+                        Text("\(PlanSongTitle.split(back.video.title).title) · \(ISO8601Duration.format(Int(back.at)))")
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 16)
+                .transition(.opacity)
+            }
+
             actionRow
 
             if showsChordButton { searchSuggestionRow } else { seriesRow }

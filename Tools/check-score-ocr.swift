@@ -424,6 +424,11 @@ struct CheckScoreOCR {
         staffPage()
         hymnPage()
 
+        check("a ♯ read as t, ‡ or ＃ is a sharp",
+              ScoreRecognition.repairedChordWord("Gt") == "G#" && ScoreRecognition.repairedChordWord("C‡m") == "C#m"
+                && ScoreRecognition.repairedChordWord("F＃7") == "F#7")
+        check("a word that merely starts with a letter is left alone",
+              ScoreRecognition.repairedChordWord("Go") == "Go" && ScoreRecognition.repairedChordWord("Ate") == "Ate")
         check("score in G, team plays in A → +2",
               ScoreRecognition.shift(fromScoreChords: ["G", "D", "Em", "C", "G", "D", "G"],
                                      toKey: "A") == 2)

@@ -329,16 +329,18 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// from three of its own buttons, so a song that simply ended into the
     /// next was never recorded, and one that ended and was then skipped was
     /// recorded twice.
-    var onLeave: ((_ videoId: String, _ seconds: Int, _ completed: Bool) -> Void)?
+    var onLeave: ((_ videoId: String, _ seconds: Int, _ completed: Bool, _ position: Double) -> Void)?
 
     private func reportLeaving() {
         guard let id = loadedVideoId else { return }
         let seconds = Int(maxTimeReached.rounded())
-        if seconds > 0 { onLeave?(id, seconds, didEnd) }
+        if seconds > 0 { onLeave?(id, seconds, didEnd, currentTime) }
         maxTimeReached = 0
     }
 
-    func load(videoId: String) {
+    /// - start: where to begin, in seconds — 이전 곡으로 picks up where it
+    ///   was left.
+    func load(videoId: String, start: Double = 0) {
         reportLeaving()
         // Whoever asks — the next song, a tap in the queue, PiP carrying on —
         // this is now the song, watched like any other. Callers that came
@@ -366,7 +368,9 @@ final class PlayerCoordinator: NSObject, ObservableObject {
             return
         }
         let js = "(function () { if (!window.player || !player.loadVideoById) return false; "
-            + "player.loadVideoById('\(escape(videoId))'); return true; })()"
+            + (start > 0
+               ? "player.loadVideoById({ videoId: '\(escape(videoId))', startSeconds: \(Int(start)) }); return true; })()"
+               : "player.loadVideoById('\(escape(videoId))'); return true; })()")
         webView.evaluateJavaScript(js) { [weak self] result, error in
             guard let self, self.loadedVideoId == videoId else { return }
             if error != nil || (result as? Bool) != true {

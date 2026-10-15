@@ -64,10 +64,13 @@ final class PlayerHost: ObservableObject {
     private var played: [String: PlayableVideo] = [:]
 
     init() {
-        coordinator.onLeave = { [weak self] id, seconds, completed in
+        coordinator.onLeave = { [weak self] id, seconds, completed, position in
             guard let self else { return }
             let video = self.played[id] ?? self.queue.first { $0.id == id } ?? PlayableVideo(id: id, title: "")
             self.recordWatch?(video, seconds, completed)
+            // Left part-way through, after listening a while: offer the way
+            // back — a tap on the wrong row should not cost the place.
+            if !completed, position >= 10 { self.offerReturn(to: video, at: position) }
         }
         // When the floating window goes away — its 「돌아가기」, or its close
         // button — the player comes back: full if the song is still going
@@ -158,6 +161,40 @@ final class PlayerHost: ObservableObject {
     @Published var alternateError: String?
 
     var hasNext: Bool { index + 1 < queue.count }
+
+    // MARK: - 이전 곡으로
+
+    /// The song left part-way a moment ago, and where — 「이전 곡으로」.
+    struct Return: Equatable {
+        let video: PlayableVideo
+        let at: Double
+        let id = UUID()
+        static func == (l: Return, r: Return) -> Bool { l.id == r.id }
+    }
+    @Published private(set) var returnTo: Return?
+
+    private func offerReturn(to video: PlayableVideo, at position: Double) {
+        let offer = Return(video: video, at: position)
+        returnTo = offer
+        Task { @MainActor [weak self] in
+            // Long enough to notice the wrong song; not a standing button.
+            try? await Task.sleep(for: .seconds(15))
+            if self?.returnTo == offer { self?.returnTo = nil }
+        }
+    }
+
+    /// Back to the song left a moment ago, at the place it was left.
+    func goBack() {
+        guard let back = returnTo else { return }
+        returnTo = nil
+        if let at = queue.firstIndex(where: { $0.id == back.video.id }) {
+            index = at
+        } else {
+            // The queue was replaced: the song goes back in where it plays now.
+            queue.insert(back.video, at: min(index, queue.count))
+        }
+        coordinator.load(videoId: back.video.id, start: back.at)
+    }
 
     var current: PlayableVideo? {
         queue.indices.contains(index) ? queue[index] : nil
@@ -337,6 +374,7 @@ final class PlayerHost: ObservableObject {
         leavingForPictureInPicture = false
         cancelSleepTimer()
         coordinator.detach()
+        returnTo = nil
         queue = []
         index = 0
         mode = .closed
