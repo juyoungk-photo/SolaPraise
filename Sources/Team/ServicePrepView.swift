@@ -129,6 +129,7 @@ struct ServicePrepView: View {
     @State private var assigning: AssignmentTarget?
     /// The service whose 찬양 are being filled from a playlist.
     @State private var fillingFrom: TeamService?
+    @State private var exportingTo: TeamService?
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
@@ -224,6 +225,10 @@ struct ServicePrepView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(item: $exportingTo) { service in
+                ExportToPlaylistSheet(service: service)
+                    .environmentObject(team)
+            }
             .sheet(item: $fillingFrom) { service in
                 FillFromPlaylistSheet(
                     service: service,
@@ -956,6 +961,16 @@ struct ServicePrepView: View {
                 }
             }
             .disabled(isPushing)
+
+            // The other way: the 콘티 written out to a playlist, so the set
+            // can be listened through in YouTube.
+            if items.contains(where: { $0.kind == .song && $0.videoId != nil }) {
+                Button {
+                    exportingTo = service
+                } label: {
+                    Label("재생목록으로 내보내기", systemImage: "square.and.arrow.up")
+                }
+            }
 
             if let note = pushNote {
                 Text(note).font(.caption).foregroundStyle(.secondary)
