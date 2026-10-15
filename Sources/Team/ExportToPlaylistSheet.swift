@@ -29,8 +29,11 @@ struct ExportToPlaylistSheet: View {
 
     /// The playlist chosen last on this device.
     @AppStorage("conti.exportPlaylist") private var chosenId = ""
-    /// Keep the songs already in the playlist. Remembered.
-    @AppStorage("conti.exportKeeps") private var keepsOthers = false
+    /// Keep the songs already in the playlist. Remembered, and on unless
+    /// turned off: taking songs out of a shared playlist cannot be undone
+    /// in YouTube, and the first version, off by default, emptied one.
+    @AppStorage("conti.exportKeepsOthers") private var keepsOthers = true
+    @State private var confirmingRemoval = false
 
     struct Destination: Hashable {
         let id: String
@@ -119,6 +122,13 @@ struct ExportToPlaylistSheet: View {
                         HStack {
                             Text("내보낼 순서 · \(entries.count)곡")
                             Spacer()
+                            if let snapshot, snapshot.map(\.video) != present.map(\.video) {
+                                // The list as it was before the last export,
+                                // to send back.
+                                Button("내보내기 전으로") { entries = snapshot }
+                                    .font(.caption)
+                                    .textCase(nil)
+                            }
                             Button("처음대로") { rebuild() }
                                 .font(.caption)
                                 .textCase(nil)
@@ -146,12 +156,22 @@ struct ExportToPlaylistSheet: View {
                     if working {
                         ProgressView()
                     } else {
-                        Button("내보내기") { Task { await export() } }
-                            .disabled(done || !loaded || steps.isEmpty || !auth.isSignedIn)
+                        Button("내보내기") {
+                            // Asked first whenever a song would come out.
+                            if removals > 0 { confirmingRemoval = true } else { Task { await export() } }
+                        }
+                        .disabled(done || !loaded || steps.isEmpty || !auth.isSignedIn)
                     }
                 }
             }
             .disabled(working)
+            .confirmationDialog("재생목록에서 \(removals)곡을 지울까요?", isPresented: $confirmingRemoval,
+                                titleVisibility: .visible) {
+                Button("\(removals)곡 지우고 내보내기", role: .destructive) { Task { await export() } }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("목록에 없는 곡은 「\(destination?.title ?? "재생목록")」에서 지워집니다. YouTube에서는 되돌릴 수 없지만, 이 앱이 내보내기 전 목록을 기억해 두어 「내보내기 전으로」로 다시 채울 수 있습니다.")
+            }
         }
         .task {
             if destination == nil {
@@ -196,6 +216,30 @@ struct ExportToPlaylistSheet: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(.systemGroupedBackground))
+    }
+
+    private var removals: Int {
+        steps.filter { if case .remove = $0 { return true }; return false }.count
+    }
+
+    // MARK: - Before each export
+
+    /// The playlist as it was before the last export to it, on this device:
+    /// its videos and titles in order. YouTube keeps no undo.
+    private static func snapshotKey(_ id: String) -> String { "conti.exportBefore.\(id)" }
+
+    private func saveSnapshot(for destination: Destination) {
+        let rows = current.compactMap { item in item.videoId.map { [$0, item.snippet?.title ?? $0] } }
+        UserDefaults.standard.set(rows, forKey: Self.snapshotKey(destination.id))
+    }
+
+    private var snapshot: [Entry]? {
+        guard let id = destination?.id,
+              let rows = UserDefaults.standard.array(forKey: Self.snapshotKey(id)) as? [[String]],
+              !rows.isEmpty else { return nil }
+        return rows.compactMap { row in
+            row.count == 2 ? Entry(video: row[0], title: row[1], fromConti: false) : nil
+        }
     }
 
     private func badge(_ entry: Entry) -> String {
@@ -265,6 +309,10 @@ struct ExportToPlaylistSheet: View {
         working = true
         defer { working = false }
         var written = 0
+        // Remembered before anything is touched.
+        if steps.contains(where: { if case .remove = $0 { return true }; return false }) {
+            saveSnapshot(for: destination)
+        }
         do {
             for step in steps {
                 switch step {
