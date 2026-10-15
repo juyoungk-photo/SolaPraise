@@ -36,6 +36,9 @@ struct ScoreChartView: View {
     /// for a chord the reader has since removed.
     let chord: (UUID) -> String?
     let scale: CGFloat
+    /// How much room the lyrics get, apart from their size: 1 as first
+    /// drawn, more to space syllables, words and lines further apart.
+    var spacing: CGFloat = 1
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -58,7 +61,7 @@ struct ScoreChartView: View {
                     // bar marks; a line with chords starts a new group.
                     let chorded = Self.hasChords(system)
                     line(system, index: index, rowHeight: chorded ? chordRowHeight : chordRowHeight * 0.35)
-                        .padding(.top, index == 0 ? 0 : chorded ? 34 : 6)
+                        .padding(.top, index == 0 ? 0 : (chorded ? 34 : 6) * spacing)
                 }
                 Text("악보에서 읽은 코드와 가사입니다. 틀린 글자가 있을 수 있으니 악보와 함께 확인하세요.")
                     .font(.footnote)
@@ -208,7 +211,7 @@ struct ScoreChartView: View {
         // A chord runs to the right over the syllables after it. Only where
         // it would reach the next chord does the line open up — by exactly
         // the overlap, just before that next chord's syllable.
-        var widths = slots.map { cellWidth($0.cell, $0.syllables) + $0.gapAfter }
+        var widths = slots.map { cellWidth($0.cell, $0.syllables) + syllableGap + $0.gapAfter }
         for i in slots.indices {
             guard let id = slots[i].cell.chord, let name = chord(id) else { continue }
             let need = textWidth(name, chordSize, bold: true) + 8
@@ -235,7 +238,7 @@ struct ScoreChartView: View {
             tokens.append(.repeatEnd(returnTo: numbering.returns["\(systemIndex)-\(system.bars.count - 1)"]))
         }
 
-        return LineFlow(lineSpacing: 12) {
+        return LineFlow(lineSpacing: 12 * spacing) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
                 switch token {
                 case let .verseNumbers(count):
@@ -257,7 +260,11 @@ struct ScoreChartView: View {
     }
 
     /// Room between words: a space as the singer reads it.
-    private var wordGap: CGFloat { lyricSize * 0.65 }
+    private var wordGap: CGFloat { lyricSize * 0.65 * spacing }
+    /// Room after every syllable, beyond its own width.
+    private var syllableGap: CGFloat { lyricSize * 0.3 * max(0, spacing - 1) }
+    /// One verse's row, line to line.
+    private var verseRow: CGFloat { lyricSize * (1.25 + 0.3 * max(0, spacing - 1)) }
 
     private var chordSize: CGFloat { 20 * scale * deviceScale }
 
@@ -337,9 +344,10 @@ struct ScoreChartView: View {
                     }
                 }
                 .foregroundStyle(.white.opacity(verse == 0 ? 0.95 : 0.72))
-                .frame(height: lyricSize * 1.25, alignment: .leading)
+                .frame(height: verseRow, alignment: .leading)
             }
         }
+        .padding(.trailing, syllableGap)
         // The bar that starts here: a thin mark in the chord row, just
         // before the syllable — the lyrics under it run on.
         .overlay(alignment: .topLeading) {
@@ -385,7 +393,7 @@ struct ScoreChartView: View {
                 .frame(width: repeatStart || repeatEnd ? 3 : 1)
             if repeatStart { repeatDots }
         }
-        .frame(height: rowHeight + 2 + CGFloat(verses) * (lyricSize * 1.25 + 2))
+        .frame(height: rowHeight + 2 + CGFloat(verses) * (verseRow + 2))
         .padding(.horizontal, 7)
     }
 
@@ -404,7 +412,7 @@ struct ScoreChartView: View {
                 Text("\(verse).")
                     .font(.system(size: lyricSize * 0.8, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.white.opacity(0.4))
-                    .frame(height: lyricSize * 1.25)
+                    .frame(height: verseRow)
             }
         }
         .padding(.trailing, 8)

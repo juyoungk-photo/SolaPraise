@@ -63,6 +63,11 @@ struct ScoreStandView: View {
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
+    /// How far apart the 코드표's lyrics sit, apart from their size.
+    @AppStorage("score.chartSpacing") private var chartSpacing: Double = 1.35
+    static let spacings: [(title: String, value: Double)] = [
+        ("촘촘", 0.85), ("기본", 1.0), ("넓게", 1.35), ("아주 넓게", 1.7)
+    ]
     /// The pinch in progress on the 코드표, as a factor of its size.
     @GestureState private var pinch: CGFloat = 1
     /// 코드표: the page read as bars of chords and lyrics, instead of the
@@ -461,7 +466,8 @@ struct ScoreStandView: View {
                 ScoreChartView(systems: systems, chord: { id in
                     originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
                 }, scale: min(ScoreStandModel.chartScaleRange.upperBound,
-                              max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)))
+                              max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)),
+                   spacing: chartSpacing)
                 // Two fingers size the 코드표 as they move, and the size is
                 // kept when they lift — the A buttons step it, a pinch lands
                 // anywhere between.
@@ -634,11 +640,27 @@ struct ScoreStandView: View {
             .disabled(!ready || larger)
             .accessibilityLabel(showsChart ? "코드표 글자 크게" : "코드 글자 크게")
 
-        Button { editing.toggle() } label: {
-            pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
+        // On the 코드표, where 편집 does nothing, its place is the spacing:
+        // the lyrics' room, apart from their size.
+        if showsChart {
+            Menu {
+                Picker("간격", selection: $chartSpacing) {
+                    ForEach(Self.spacings, id: \.value) { option in
+                        Text(option.title).tag(option.value)
+                    }
+                }
+            } label: {
+                pill(Text("간격").font(.system(size: 15, weight: .semibold)), wide: true)
+            }
+            .menuOrder(.fixed)
+            .accessibilityLabel("가사 간격")
+        } else {
+            Button { editing.toggle() } label: {
+                pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
+            }
+            .disabled(!(state?.isReady ?? false))
+            .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
         }
-        .disabled(!(state?.isReady ?? false) || showsChart)
-        .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
 
         // Not while editing — sharing an edit in progress is what 완료 then
         // 공유 is for — but their place is kept, so 완료 sits exactly where
