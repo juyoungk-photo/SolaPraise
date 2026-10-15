@@ -57,7 +57,7 @@ struct ScoreChartView: View {
                     // sits close under it, its empty chord row shrunk to the
                     // bar marks; a line with chords starts a new group.
                     let chorded = Self.hasChords(system)
-                    line(system, rowHeight: chorded ? chordRowHeight : chordRowHeight * 0.35)
+                    line(system, index: index, rowHeight: chorded ? chordRowHeight : chordRowHeight * 0.35)
                         .padding(.top, index == 0 ? 0 : chorded ? 34 : 6)
                 }
                 Text("악보에서 읽은 코드와 가사입니다. 틀린 글자가 있을 수 있으니 악보와 함께 확인하세요.")
@@ -66,7 +66,8 @@ struct ScoreChartView: View {
                     .padding(.top, 8)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 24)
+            .padding(.bottom, 12)
         }
     }
 
@@ -81,6 +82,11 @@ struct ScoreChartView: View {
         var barBefore = false
         var repeatStart = false
         var repeatEndBefore = false
+        /// The number of the repeat that starts here, ①.
+        var startNumber: Int?
+        /// Where the repeat that ends just before this goes back to: its
+        /// number, or 0 for the beginning.
+        var returnTo: Int?
         /// Space after it so the chord over it has finished before the next
         /// chord — an extender line when that falls inside a word.
         var room: CGFloat = 0
@@ -96,7 +102,7 @@ struct ScoreChartView: View {
         case verseNumbers(Int)
         /// A word: drawn as one piece, so a line wraps only between words.
         case word([Slot])
-        case repeatEnd
+        case repeatEnd(returnTo: Int?)
     }
 
     /// The staff as words, in the order sung.
@@ -110,7 +116,35 @@ struct ScoreChartView: View {
         system.bars.contains { bar in bar.cells.contains { $0.chord != nil } }
     }
 
-    private func line(_ system: ScoreChart.System, rowHeight: CGFloat) -> some View {
+    // MARK: - Repeats, numbered
+
+    /// Each repeat numbered in reading order — ① where it starts, 「↩①」
+    /// where it ends — so a chart with several says which end goes back
+    /// where. An end with no start before it goes back to the beginning.
+    private var repeats: (starts: [String: Int], returns: [String: Int]) {
+        var starts: [String: Int] = [:], returns: [String: Int] = [:]
+        var count = 0
+        var open: [Int] = []
+        for (s, system) in systems.enumerated() {
+            for (b, bar) in system.bars.enumerated() {
+                if bar.repeatStart {
+                    count += 1
+                    starts["\(s)-\(b)"] = count
+                    open.append(count)
+                }
+                if bar.repeatEnd { returns["\(s)-\(b)"] = open.popLast() ?? 0 }
+            }
+        }
+        return (starts, returns)
+    }
+
+    static func repeatLabel(_ number: Int) -> String {
+        guard number > 0 else { return "처음" }
+        return number <= 20 ? String(UnicodeScalar(0x2460 + UInt32(number - 1))!) : "\(number)"
+    }
+
+    private func line(_ system: ScoreChart.System, index systemIndex: Int, rowHeight: CGFloat) -> some View {
+        let numbering = repeats
         let verses = max(system.verses, 1)
         let empty = ScoreChart.Cell(chord: nil, syllables: Array(repeating: "", count: verses))
 
@@ -124,6 +158,8 @@ struct ScoreChartView: View {
                     slot.barBefore = index > 0 || bar.repeatStart
                     slot.repeatStart = bar.repeatStart
                     slot.repeatEndBefore = index > 0 && system.bars[index - 1].repeatEnd
+                    slot.startNumber = numbering.starts["\(systemIndex)-\(index)"]
+                    if index > 0 { slot.returnTo = numbering.returns["\(systemIndex)-\(index - 1)"] }
                 }
                 slots.append(slot)
             }
@@ -195,7 +231,9 @@ struct ScoreChartView: View {
             word.append(slot)
         }
         if !word.isEmpty { tokens.append(.word(word)) }
-        if system.bars.last?.repeatEnd == true { tokens.append(.repeatEnd) }
+        if system.bars.last?.repeatEnd == true {
+            tokens.append(.repeatEnd(returnTo: numbering.returns["\(systemIndex)-\(system.bars.count - 1)"]))
+        }
 
         return LineFlow(lineSpacing: 12) {
             ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
@@ -208,8 +246,11 @@ struct ScoreChartView: View {
                             slotView(slot, verses: verses, rowHeight: rowHeight)
                         }
                     }
-                case .repeatEnd:
+                case .repeatEnd(let returnTo):
                     barMark(verses: verses, rowHeight: rowHeight, repeatStart: false, repeatEnd: true)
+                        .overlay(alignment: .top) {
+                            if let returnTo { repeatBadge("↩" + Self.repeatLabel(returnTo)).offset(y: -rowHeight * 0.55) }
+                        }
                 }
             }
         }
@@ -305,8 +346,26 @@ struct ScoreChartView: View {
             if slot.barBefore {
                 barTick(repeatStart: slot.repeatStart, repeatEnd: slot.repeatEndBefore, rowHeight: rowHeight)
                     .offset(x: -4)
+                    // Above the bar line: where a repeat starts, its number;
+                    // where one ends, where it goes back to.
+                    .overlay(alignment: .topLeading) {
+                        HStack(spacing: 3) {
+                            if let back = slot.returnTo { repeatBadge("↩" + Self.repeatLabel(back)) }
+                            if let number = slot.startNumber { repeatBadge(Self.repeatLabel(number)) }
+                        }
+                        .fixedSize()
+                        .offset(x: -2, y: -rowHeight * 0.55)
+                    }
             }
         }
+    }
+
+    private func repeatBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: max(11, lyricSize * 0.6), weight: .bold, design: .rounded))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 4)
+            .background(Capsule().fill(.white.opacity(0.85)))
     }
 
     /// A bar line in the chord row only.

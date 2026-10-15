@@ -38,7 +38,7 @@ enum ScoreChart {
     /// One chord as the chart needs it: which, and where on the page.
     /// Raised whenever the reading changes what it returns, so a 코드표
     /// kept on the device from an older reading is read again.
-    static let version = 1
+    static let version = 2
 
     struct ChordMark {
         let id: UUID

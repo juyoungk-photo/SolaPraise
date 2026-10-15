@@ -63,6 +63,8 @@ struct ScoreStandView: View {
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
+    /// The pinch in progress on the 코드표, as a factor of its size.
+    @GestureState private var pinch: CGFloat = 1
     /// 코드표: the page read as bars of chords and lyrics, instead of the
     /// page itself. Remembered on this device.
     @AppStorage("score.showsChart") private var showsChart = false
@@ -458,7 +460,16 @@ struct ScoreStandView: View {
                 let shift = state.showsOriginal ? 0 : state.shift
                 ScoreChartView(systems: systems, chord: { id in
                     originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
-                }, scale: model.chartScale)
+                }, scale: min(ScoreStandModel.chartScaleRange.upperBound,
+                              max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)))
+                // Two fingers size the 코드표 as they move, and the size is
+                // kept when they lift — the A buttons step it, a pinch lands
+                // anywhere between.
+                .simultaneousGesture(
+                    MagnifyGesture()
+                        .updating($pinch) { value, pinch, _ in pinch = value.magnification }
+                        .onEnded { value in model.setChartScale(model.chartScale * value.magnification) }
+                )
             }
         } else if let failure = model.states[item.id]?.failure {
             Text(failure)
@@ -611,14 +622,14 @@ struct ScoreStandView: View {
         // printed small; applies to the export too — or the 코드표, each
         // its own setting, remembered on this device.
         let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale <= 0.71
-        let larger = showsChart ? model.chartScale >= 1.99 : model.chordScale >= 2.49
+        let larger = showsChart ? model.chartScale >= 2.39 : model.chordScale >= 2.49
         Button {
-            if showsChart { model.resizeChart(by: -0.1) } else { model.resize(by: -0.1) }
+            if showsChart { model.resizeChart(by: -0.05) } else { model.resize(by: -0.05) }
         } label: { pill(Text("A").font(.system(size: 13, weight: .bold))) }
             .disabled(!ready || smaller)
             .accessibilityLabel(showsChart ? "코드표 글자 작게" : "코드 글자 작게")
         Button {
-            if showsChart { model.resizeChart(by: 0.1) } else { model.resize(by: 0.1) }
+            if showsChart { model.resizeChart(by: 0.05) } else { model.resize(by: 0.05) }
         } label: { pill(Text("A").font(.system(size: 21, weight: .bold))) }
             .disabled(!ready || larger)
             .accessibilityLabel(showsChart ? "코드표 글자 크게" : "코드 글자 크게")
@@ -881,7 +892,8 @@ final class ScoreStandModel: ObservableObject {
         (UserDefaults.standard.object(forKey: "score.chordScale") as? Double).map { CGFloat($0) } ?? 1
 
     func resize(by step: CGFloat) {
-        chordScale = min(2.5, max(0.7, (chordScale + step) * 10).rounded() / 10)
+        // Steps of 0.05: 0.1 jumped past the size wanted.
+        chordScale = min(2.5, max(0.7, ((chordScale + step) * 20).rounded() / 20))
         UserDefaults.standard.set(Double(chordScale), forKey: "score.chordScale")
     }
 
@@ -892,7 +904,14 @@ final class ScoreStandModel: ObservableObject {
         (UserDefaults.standard.object(forKey: "score.chartScale") as? Double).map { CGFloat($0) } ?? 1
 
     func resizeChart(by step: CGFloat) {
-        chartScale = min(2, max(0.6, (chartScale + step) * 10).rounded() / 10)
+        setChartScale(((chartScale + step) * 20).rounded() / 20)
+    }
+
+    static let chartScaleRange: ClosedRange<CGFloat> = 0.6...2.4
+
+    /// Any size in range — a pinch lands between the buttons' steps.
+    func setChartScale(_ value: CGFloat) {
+        chartScale = min(Self.chartScaleRange.upperBound, max(Self.chartScaleRange.lowerBound, value))
         UserDefaults.standard.set(Double(chartScale), forKey: "score.chartScale")
     }
 
