@@ -418,7 +418,7 @@ enum ScoreChart {
     /// 「알파」 as 「악파」. A syllable is kept when two reads see it there,
     /// and spelled the way most of them spell it.
     static func lyricWords(in image: CGImage, staves: [CGRect], chords: [CGRect] = []) -> [Word] {
-        var reads: [[Word]] = [[], [], []]
+        var reads: [[Word]] = [[], [], [], []]
         reads[0] = readWords(image).filter { word in
             staves.contains { word.box.midY > $0.maxY && word.box.midY < $0.maxY + $0.height * 4.5 }
         }
@@ -470,6 +470,33 @@ enum ScoreChart {
                          box: CGRect(x: word.box.minX, y: lineTop + word.box.minY * lineHeight,
                                      width: word.box.width, height: word.box.height * lineHeight))
                 }
+                // Pass 3, each line again in two halves that overlap. On a
+                // phone a whole verse line — 「밝히 비춰 주시니」 — came back
+                // empty from every read of the full width; a shorter piece
+                // of the same line is read where the long one is given up.
+                let width = piece.width
+                var halves: [Word] = []
+                for (start, end) in [(0, width * 55 / 100), (width * 45 / 100, width)] {
+                    guard end - start > 8,
+                          let half = piece.cropping(to: CGRect(x: start, y: 0, width: end - start, height: piece.height)),
+                          let largeHalf = ScoreRecognition.enlarged(half, by: 2) else { continue }
+                    let x0 = CGFloat(start) / CGFloat(width), share = CGFloat(end - start) / CGFloat(width)
+                    for found in readWords(largeHalf) {
+                        let word = Word(text: found.text,
+                                        box: CGRect(x: x0 + found.box.minX * share,
+                                                    y: lineTop + found.box.minY * lineHeight,
+                                                    width: found.box.width * share,
+                                                    height: found.box.height * lineHeight),
+                                        held: found.held)
+                        // Read in both halves where they overlap: once.
+                        let twice = halves.contains { other in
+                            min(other.box.maxX, word.box.maxX) - max(other.box.minX, word.box.minX)
+                                > min(other.box.width, word.box.width) * 0.4
+                        }
+                        if !twice { halves.append(word) }
+                    }
+                }
+                reads[3] += halves
             }
         }
         // Nothing printed on a staff, and no chord symbol, is a lyric.
@@ -485,7 +512,7 @@ enum ScoreChart {
         // letter — the first of each bar — so only this read had them, and
         // the vote dropped 「의」지하는, 「내」 주를, 「더」욱 in all four
         // verses.
-        let words = voted(reads, trusted: 2)
+        let words = voted(reads, trusted: [2, 3])
         // On a Korean chart a Latin word under the staff is a chord read
         // badly — 「DSUS4」, 「D9E」 — or an instruction, not a lyric.
         let hangul = words.filter { isKorean($0.text) }.count
@@ -502,7 +529,7 @@ enum ScoreChart {
     /// One word per place where at least two reads put one, spelled as
     /// most of them spell it — the first read that has it breaking a tie.
     /// A Korean syllable only `trusted` saw is kept too.
-    static func voted(_ reads: [[Word]], trusted: Int? = nil) -> [Word] {
+    static func voted(_ reads: [[Word]], trusted: Set<Int> = []) -> [Word] {
         struct Slot { var box: CGRect; var texts: [Int: String]; var held = false }
         var slots: [Slot] = []
         for (pass, read) in reads.enumerated() {
@@ -523,7 +550,7 @@ enum ScoreChart {
         }
         let agreed = slots.filter { $0.texts.count >= 2 }
         return slots.compactMap { slot in
-            if slot.texts.count == 1, let trusted, let text = slot.texts[trusted], isKorean(text) {
+            if slot.texts.count == 1, let (pass, text) = slot.texts.first, trusted.contains(pass), isKorean(text) {
                 // Not where a syllable the reads agreed on already stands:
                 // the same syllable boxed a little to one side is a
                 // duplicate, 「주만만」.
