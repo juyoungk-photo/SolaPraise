@@ -123,6 +123,8 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// the floating window rather than stopping on an end card nobody can
     /// see. Returns false when there is nothing next.
     var advanceInPictureInPicture: (() -> Bool)?
+    /// ⏮ ⏭ from earphones, a car or the lock screen: true for next.
+    var onRemoteTrack: ((_ next: Bool) -> Void)?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var backgroundPause: Task<Void, Never>?
     /// Set when PiP was started by leaving the app, so returning can put
@@ -562,6 +564,23 @@ extension PlayerCoordinator {
         }
         return originalPause.apply(this, arguments);
       };
+      // Earphones, a car, the lock screen: their ⏮ ⏭ are the song before
+      // and after in the app's queue. iOS sends them to the page's media
+      // session, which is this frame's — so the handlers are set here and
+      // kept: YouTube's embed sets its own for these actions (nothing, or
+      // its own playlist), which would leave the buttons dead.
+      if (navigator.mediaSession && navigator.mediaSession.setActionHandler) {
+        var session = navigator.mediaSession;
+        var set = session.setActionHandler.bind(session);
+        var ours = {
+          nexttrack: function () { post({ event: 'remote', action: 'next' }); },
+          previoustrack: function () { post({ event: 'remote', action: 'previous' }); }
+        };
+        session.setActionHandler = function (action, handler) {
+          return set(action, ours[action] || handler);
+        };
+        try { set('nexttrack', ours.nexttrack); set('previoustrack', ours.previoustrack); } catch (e) {}
+      }
       new MutationObserver(scan).observe(document.documentElement,
                                          { childList: true, subtree: true });
       document.addEventListener('DOMContentLoaded', scan);
@@ -819,6 +838,9 @@ extension PlayerCoordinator: WKScriptMessageHandler {
             mediaFrame = frame
             canPictureInPicture = (body["pip"] as? Bool ?? false)
                 && Self.systemSupportsPictureInPicture
+
+        case "remote":
+            onRemoteTrack?((body["action"] as? String) == "next")
 
         case "pipSettled":
             #if DEBUG

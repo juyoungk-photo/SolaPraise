@@ -113,6 +113,22 @@ final class PlayerHost: ObservableObject {
                     }
                 }
             }
+        // ⏮ ⏭ from earphones, a car or the lock screen, in the app, in PiP
+        // or in the background — the same steps as the player's own.
+        coordinator.onRemoteTrack = { [weak self] next in
+            guard let self, self.mode != .closed else { return }
+            if next {
+                guard self.hasNext else { return }
+                self.index += 1
+            } else if self.coordinator.currentTime > 3 || self.index == 0 {
+                // As in any music player: a song under way starts again.
+                self.coordinator.seek(to: 0)
+                return
+            } else {
+                self.index -= 1
+            }
+            if let song = self.current { self.coordinator.load(videoId: song.id) }
+        }
         pipSettledWatch = coordinator.pictureInPictureSettled
             .sink { [weak self] in self?.pictureInPictureHasSettled() }
         // A song ending in PiP moves on to the next one, so a 콘티 plays
