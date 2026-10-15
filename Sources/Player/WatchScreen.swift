@@ -162,7 +162,6 @@ struct WatchScreen: View {
             // Asked first, always: an unanswered 「이 영상 끝나면」 would
             // stop the next video instead.
             let sleeping = host.takeSleepAtEnd()
-            logWatch(completed: true)
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
             // 이어 듣기 is a run: the next episode starts on its own.
@@ -396,7 +395,6 @@ struct WatchScreen: View {
 
     private func jump(to position: Int) {
         guard queue.indices.contains(position), position != index else { return }
-        logWatch(completed: false)
         host.index = position
         player.load(videoId: queue[position].id)
     }
@@ -1323,7 +1321,6 @@ struct WatchScreen: View {
     /// Steps through the queue, swapping the video inside the live player
     /// rather than reloading the document.
     private func move(by delta: Int) {
-        logWatch(completed: delta > 0 && player.didEnd)
         let target = index + delta
         guard queue.indices.contains(target) else { return }
         host.index = target
@@ -1333,29 +1330,9 @@ struct WatchScreen: View {
     }
 
     private func finishAndClose() {
-        logWatch(completed: player.didEnd)
         host.close()
     }
 
-    // MARK: - Watch log
-
-    /// Records how much of the current video was actually watched. Uses the
-    /// high-water mark so seeking backwards doesn't shrink the total.
-    private func logWatch(completed: Bool) {
-        guard let current else { return }
-        let seconds = Int(player.maxTimeReached.rounded())
-        guard seconds > 0 else { return }
-
-        modelContext.insert(
-            WatchEvent(
-                videoId: current.id,
-                title: current.title,
-                secondsWatched: seconds,
-                completed: completed
-            )
-        )
-        try? modelContext.save()
-    }
 }
 
 

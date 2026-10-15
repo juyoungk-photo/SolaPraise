@@ -329,17 +329,27 @@ final class TopicSearch {
 final class WatchEvent {
     var videoId: String
     var title: String?
+    /// When it was left — the moment the play was recorded.
     var startedAt: Date
     var secondsWatched: Int
     var completed: Bool
+    /// Who published it, and what it was played as — for 재생 기록's
+    /// filters. Nil on plays recorded before they were kept.
+    var channelTitle: String?
+    var channelId: String?
+    var purposeRaw: String?
 
     init(videoId: String, title: String? = nil, startedAt: Date = Date(),
-         secondsWatched: Int = 0, completed: Bool = false) {
+         secondsWatched: Int = 0, completed: Bool = false,
+         channelTitle: String? = nil, channelId: String? = nil, purpose: Purpose? = nil) {
         self.videoId = videoId
         self.title = title
         self.startedAt = startedAt
         self.secondsWatched = secondsWatched
         self.completed = completed
+        self.channelTitle = channelTitle
+        self.channelId = channelId
+        self.purposeRaw = purpose?.rawValue
     }
 }
 

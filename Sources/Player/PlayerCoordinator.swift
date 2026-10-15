@@ -317,7 +317,27 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 
     // MARK: - Commands
 
+    /// Told once for each video as it is left — for the next one, or the
+    /// player closing: its id, the furthest point reached in seconds, and
+    /// whether it ran to the end. 재생 기록 is written from this.
+    ///
+    /// WHY HERE: every way of leaving a song comes through load or detach —
+    /// next, previous, the song ending and the next starting by itself, a
+    /// tap in the queue, closing from PiP. The screen used to record a play
+    /// from three of its own buttons, so a song that simply ended into the
+    /// next was never recorded, and one that ended and was then skipped was
+    /// recorded twice.
+    var onLeave: ((_ videoId: String, _ seconds: Int, _ completed: Bool) -> Void)?
+
+    private func reportLeaving() {
+        guard let id = loadedVideoId else { return }
+        let seconds = Int(maxTimeReached.rounded())
+        if seconds > 0 { onLeave?(id, seconds, didEnd) }
+        maxTimeReached = 0
+    }
+
     func load(videoId: String) {
+        reportLeaving()
         // Whoever asks — the next song, a tap in the queue, PiP carrying on —
         // this is now the song, watched like any other. Callers that came
         // straight here used to leave `loadedVideoId` on the last song, so a
@@ -439,6 +459,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// Must be called when the view goes away, or the userContentController
     /// keeps a strong reference to this coordinator forever.
     func detach() {
+        reportLeaving()
         readinessWatchdog?.cancel()
         readinessWatchdog = nil
         canRetryLoad = false

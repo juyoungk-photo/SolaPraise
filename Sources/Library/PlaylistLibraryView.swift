@@ -187,6 +187,15 @@ struct PlaylistLibraryView: View {
                 }
             }
 
+            // Signed in or not: it is this device's own record.
+            Section {
+                NavigationLink {
+                    PlayHistoryView()
+                } label: {
+                    Label("재생 기록", systemImage: "clock.arrow.circlepath")
+                }
+            }
+
             // Only where 작업실 has no tab of its own — see showsStudioTab.
             if showsStudio {
             Section {

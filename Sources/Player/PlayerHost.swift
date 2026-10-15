@@ -57,7 +57,18 @@ final class PlayerHost: ObservableObject {
         withTransaction(still) { mode = .pip }
     }
 
+    /// Writes one play to 재생 기록; set by the app, which owns the store.
+    var recordWatch: ((PlayableVideo, _ seconds: Int, _ completed: Bool) -> Void)?
+    /// Every video played this session, by id: the queue has often moved
+    /// on, or been replaced, by the time the last one is recorded.
+    private var played: [String: PlayableVideo] = [:]
+
     init() {
+        coordinator.onLeave = { [weak self] id, seconds, completed in
+            guard let self else { return }
+            let video = self.played[id] ?? self.queue.first { $0.id == id } ?? PlayableVideo(id: id, title: "")
+            self.recordWatch?(video, seconds, completed)
+        }
         // When the floating window goes away — its 「돌아가기」, or its close
         // button — the player comes back: full if the song is still going
         // (that is what 「돌아가기」 means), docked if it stopped, so the
@@ -152,6 +163,7 @@ final class PlayerHost: ObservableObject {
         let cleaned = Self.watchable(queue, keeping: chosen)
 
         self.queue = cleaned
+        for video in cleaned { played[video.id] = video }
         index = cleaned.firstIndex { $0.id == chosen.id } ?? 0
         // Something new was chosen to watch: out of the floating window and
         // onto the screen.

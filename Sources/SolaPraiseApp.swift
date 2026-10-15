@@ -91,6 +91,7 @@ struct SolaPraiseApp: App {
                 .environmentObject(channelManager)
                 .environmentObject(morning)
                 .preferredColorScheme(appearance.colorScheme)
+                .onAppear { recordPlays() }
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
                     GIDSignIn.sharedInstance.handle(url)
@@ -108,6 +109,20 @@ struct SolaPraiseApp: App {
                 // system queue is picked up without needing Settings.
                 Task { await ReadingNotifications.schedule() }
             }
+        }
+    }
+
+    /// 재생 기록: each video the player leaves is one entry, on this device
+    /// only. The store is the app's, so the player is handed a way to write.
+    private func recordPlays() {
+        let context = container.mainContext
+        playerHost.recordWatch = { video, seconds, completed in
+            context.insert(WatchEvent(videoId: video.id,
+                                      title: video.title.isEmpty ? nil : video.title,
+                                      secondsWatched: seconds, completed: completed,
+                                      channelTitle: video.channelTitle, channelId: video.channelId,
+                                      purpose: video.purpose))
+            try? context.save()
         }
     }
 
