@@ -57,6 +57,7 @@ struct SettingsView: View {
                 }
                 appearanceSection
                 playerSection
+                teamPlaylistSection
                 readingSection
                 refreshSection
                 todaySection
@@ -172,6 +173,24 @@ struct SettingsView: View {
             Text("플레이어")
         } footer: {
             Text("플레이어를 내리거나 다른 탭으로 가면, 재생 중인 곡은 PiP 창으로 계속됩니다. 일시정지 중이면 플레이어가 닫힙니다. PiP 창의 「돌아가기」로 플레이어가 다시 열리고, 닫기(✕)를 누르면 끝납니다. 재생 중에 홈으로 나가면 영상이 작은 창(PiP)으로 계속 재생됩니다. 끄거나 PiP 창을 닫으면 앱을 나갈 때 일시정지합니다. YouTube 약관상 영상 없이 소리만 재생할 수는 없습니다.")
+        }
+    }
+
+    private var teamPlaylistSection: some View {
+        Section {
+            NavigationLink {
+                TeamPlaylistSettingsView()
+            } label: {
+                LabeledContent {
+                    Text(TeamPlaylist.title)
+                } label: {
+                    Label("팀 콘티 재생목록", systemImage: "music.note.list")
+                }
+            }
+        } header: {
+            Text("찬양팀")
+        } footer: {
+            Text("예배표에서 콘티를 내보낼 재생목록입니다.")
         }
     }
 

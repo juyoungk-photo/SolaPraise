@@ -875,7 +875,8 @@ struct ServicePrepView: View {
                                 item.videoId.map { PlayableVideo(id: $0, title: item.title) }
                             },
                             startIndex: 0,
-                            purpose: .worship
+                            purpose: .worship,
+                            curated: true
                         )
                     } label: {
                         HStack(spacing: 6) {
@@ -1150,7 +1151,7 @@ struct ServicePrepView: View {
                             song.videoId.map { PlayableVideo(id: $0, title: song.title) }
                         }
                         let start = songs.firstIndex { $0.id == item.id } ?? 0
-                        host.play(queue: queue, startIndex: start, purpose: .worship)
+                        host.play(queue: queue, startIndex: start, purpose: .worship, curated: true)
                     } else {
                         host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
                     }

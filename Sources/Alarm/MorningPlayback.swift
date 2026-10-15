@@ -134,7 +134,7 @@ final class MorningPlayback: ObservableObject {
             guard !Task.isCancelled else { return }
             guard !queue.isEmpty else { phase = .failed("\(title): 재생할 수 있는 곡이 없습니다."); return }
             phase = .idle
-            host.play(queue: queue, purpose: .worship)
+            host.play(queue: queue, purpose: .worship, curated: true)
         } catch {
             phase = .failed("\(title)을(를) 불러오지 못했습니다.")
         }

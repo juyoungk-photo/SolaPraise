@@ -33,6 +33,8 @@ struct HomeSearchSheet: View {
     /// the same rather than more of whatever is in the box now.
     @State private var searchedQuery = ""
     @State private var isSearching = false
+    /// Shorts already asked for, for the query on screen.
+    @State private var searchedShorts = false
     @State private var errorMessage: String?
     @FocusState private var fieldFocused: Bool
     @StateObject private var history = SearchHistory.shared("home")
@@ -101,6 +103,19 @@ struct HomeSearchSheet: View {
     @ViewBuilder
     private var results: some View {
         List {
+            // A pasted link — a Short's share link too — plays as it is. A
+            // search may never surface a given upload: a team's #shorts of
+            // a song was not among the results, short-only or not.
+            if let linked = pastedVideoId {
+                Section {
+                    Button {
+                        host.play(queue: [PlayableVideo(id: linked, title: "")], startIndex: 0)
+                    } label: {
+                        Label("이 링크 재생", systemImage: "play.circle.fill")
+                    }
+                }
+            }
+
             if !localMatches.isEmpty {
                 Section("내 채널·주제  ·  무료") {
                     ForEach(localMatches) { video in
@@ -181,6 +196,27 @@ struct HomeSearchSheet: View {
                         .buttonStyle(.plain)
                         .disabled(isSearching || !quota.canSearch)
                     }
+
+                    // Shorts, asked for: a plain search ranks them far down,
+                    // and a team's short cut of a song is often the one
+                    // wanted. Another search, so it is on a button.
+                    if !searchedShorts {
+                        Button {
+                            Task { await loadShorts() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "play.square.stack")
+                                Text("짧은 영상(Shorts)도 찾기")
+                                Spacer()
+                                Text("검색 1회")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.footnote)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isSearching || !quota.canSearch)
+                    }
                 }
             }
         }
@@ -214,6 +250,14 @@ struct HomeSearchSheet: View {
     }
 
     // MARK: - Data
+
+    /// The video a pasted YouTube link names — only for a link, so a typed
+    /// word that happens to look like an id is still a search.
+    private var pastedVideoId: String? {
+        let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.lowercased().contains("youtu") else { return nil }
+        return YouTubeID.parse(raw)
+    }
 
     private var localMatches: [CachedVideo] {
         let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
@@ -253,6 +297,24 @@ struct HomeSearchSheet: View {
             remoteResults = page.items
             nextPageToken = page.nextPageToken
             searchedQuery = query
+            searchedShorts = false
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// The same search among short videos, added after what is shown.
+    private func loadShorts() async {
+        guard !searchedQuery.isEmpty else { return }
+        isSearching = true
+        errorMessage = nil
+        defer { isSearching = false }
+        let client = AppServices.client(auth: auth, quota: quota)
+        do {
+            let page = try await client.searchPage(query: searchedQuery, shortsOnly: true)
+            let known = Set(remoteResults.compactMap(\.videoId))
+            remoteResults += page.items.filter { $0.videoId.map { !known.contains($0) } ?? false }
+            searchedShorts = true
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

@@ -466,7 +466,8 @@ final class YouTubeAPIClient {
         query: String,
         channelId: String? = nil,
         maxResults: Int = 24,
-        pageToken: String? = nil
+        pageToken: String? = nil,
+        shortsOnly: Bool = false
     ) async throws -> (items: [YTSearchResult], nextPageToken: String?) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return ([], nil) }
@@ -478,6 +479,9 @@ final class YouTubeAPIClient {
         ]
         if let channelId { searchQuery.append(.init(name: "channelId", value: channelId)) }
         if let pageToken { searchQuery.append(.init(name: "pageToken", value: pageToken)) }
+        // Under four minutes: where Shorts are. A plain search ranks them
+        // far down — a team's #shorts of a song was not in the first 24.
+        if shortsOnly { searchQuery.append(.init(name: "videoDuration", value: "short")) }
 
         let page: YTListResponse<YTSearchResult> = try await get(
             "search",

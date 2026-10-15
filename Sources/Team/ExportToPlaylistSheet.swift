@@ -58,10 +58,9 @@ struct ExportToPlaylistSheet: View {
     @State private var message: String?
     @State private var done = false
 
-    /// The team's shared 콘티 playlist, the default.
+    /// The team's 콘티 playlist — 「CCC 찬양콘티」 unless changed in 설정.
     private static var teamPlaylist: Destination? {
-        DefaultChannels.defaultPlaylists.first { $0.title == "CCC 찬양콘티" }
-            .map { Destination(id: $0.playlistId, title: $0.title) }
+        TeamPlaylist.id.isEmpty ? nil : Destination(id: TeamPlaylist.id, title: TeamPlaylist.title)
     }
 
     /// The 콘티's songs that have a video, in order.

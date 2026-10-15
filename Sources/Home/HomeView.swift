@@ -858,7 +858,7 @@ struct HomeView: View {
                 playlistError = "\(title): 재생할 수 있는 곡이 없습니다."
                 return
             }
-            host.play(queue: queue, startIndex: 0)
+            host.play(queue: queue, startIndex: 0, curated: true)
         } catch {
             playlistError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

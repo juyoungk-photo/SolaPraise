@@ -478,7 +478,7 @@ struct WorshipFeedView: View {
                 : "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
-        host.play(queue: queue, startIndex: 0, purpose: .worship)
+        host.play(queue: queue, startIndex: 0, purpose: .worship, curated: true)
     }
 
     /// The browse feed: every worship video the cache holds, newest first,

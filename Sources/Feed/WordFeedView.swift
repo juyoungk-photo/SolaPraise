@@ -407,7 +407,7 @@ struct WordFeedView: View {
                 playlistError = "\(playlist.title): 재생할 수 있는 영상이 없습니다."
                 return
             }
-            host.play(queue: queue, startIndex: 0, purpose: .word)
+            host.play(queue: queue, startIndex: 0, purpose: .word, curated: true)
         } catch {
             playlistError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

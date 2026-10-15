@@ -152,7 +152,11 @@ final class PlayerHost: ObservableObject {
     /// - purpose: what the tab it was started from plays — 찬양 or 말씀 —
     ///   stamped on each video that does not already say, so the player
     ///   gives 찬양 its whole feature set and 말씀 the reduced one.
-    func play(queue: [PlayableVideo], startIndex: Int = 0, purpose: Purpose? = nil) {
+    /// - curated: a playlist or a 콘티 somebody put together. Played as it
+    ///   is — the Short and promo filter below is for feeds, where it keeps
+    ///   「next」 on songs. It took 「#shorts」 out of a team playlist, so
+    ///   the app played two songs of three.
+    func play(queue: [PlayableVideo], startIndex: Int = 0, purpose: Purpose? = nil, curated: Bool = false) {
         guard !queue.isEmpty else { return }
         let queue = queue.map { video -> PlayableVideo in
             var video = video
@@ -160,7 +164,7 @@ final class PlayerHost: ObservableObject {
             return video
         }
         let chosen = queue.indices.contains(startIndex) ? queue[startIndex] : queue[0]
-        let cleaned = Self.watchable(queue, keeping: chosen)
+        let cleaned = curated ? queue : Self.watchable(queue, keeping: chosen)
 
         self.queue = cleaned
         for video in cleaned { played[video.id] = video }
