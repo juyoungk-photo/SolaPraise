@@ -874,8 +874,11 @@ struct ServicePrepView: View {
                         )
                     } label: {
                         HStack(spacing: 6) {
-                            Text("찬양 이어 듣기").font(.caption2.weight(.medium))
-                            Image(systemName: "play.circle").font(.title3)
+                            Text("찬양 이어 듣기").font(.footnote.weight(.semibold))
+                            // Centred in the same width as each song's ▶,
+                            // so it stands in that column, a size larger.
+                            Image(systemName: "play.circle").font(.title2)
+                                .frame(width: Self.playColumn)
                         }
                     }
                     .buttonStyle(.plain)
@@ -1138,6 +1141,7 @@ struct ServicePrepView: View {
                     }
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
+                        .frame(width: Self.playColumn)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
@@ -1821,6 +1825,9 @@ struct ServicePrepView: View {
     /// so the row does not reshuffle as the sheet is edited.
     private static let keyRoleNames = ["인도", "반주"]
 
+    /// The column the 순서's ▶ buttons stand in.
+    private static let playColumn: CGFloat = 34
+
     /// What a tapped chip was about: a part, a person, or both.
     struct AssignmentTarget: Identifiable {
         let service: TeamService
@@ -2228,6 +2235,7 @@ struct ServicePrepView: View {
         let parts = Self.keyRoleNames.map { keyPart($0, upcoming, answers) }
         let spokenFor = Set(parts.compactMap(\.signupId))
         let rest = answers.filter { !spokenFor.contains($0.id) }
+        let planned = plannedParts(upcoming, besides: parts, answers: answers)
 
         // Wrapping on both sizes.
         //
@@ -2235,7 +2243,32 @@ struct ServicePrepView: View {
         // the same height, which made the month scannable — but it also hid
         // half the team behind a scroll nobody tries, on the row whose job is
         // to say who is on. Seeing everyone beats rows of equal height.
-        return ChipFlow { chips(upcoming, parts, rest, pending, open: open) }
+        return ChipFlow { chips(upcoming, parts, planned, rest, pending, open: open) }
+    }
+
+    /// Every other part the schedule names somebody for, who has not
+    /// answered yet — 「지혜 VOCAL」.
+    ///
+    /// WHY: assigning a part takes that person off 「미응답」, on the grounds
+    /// that the row already shows them, in orange, against their part. It
+    /// did only for 인도 and 반주. Assigned to VOCAL or 건반, a person left
+    /// 미응답 and appeared nowhere — the assignment looked like it had
+    /// removed them.
+    private func plannedParts(_ service: TeamService, besides parts: [KeyPart],
+                              answers: [TeamSignup]) -> [(role: String, who: String)] {
+        let answered = answers.map { displayName($0).replacingOccurrences(of: " ", with: "") }
+        return service.assignments
+            .filter { role, who in
+                !who.trimmingCharacters(in: .whitespaces).isEmpty
+                    && !Self.keyRoleNames.contains { PartAliases.matches(role, $0) }
+                    && !answered.contains { name in
+                        let cell = who.replacingOccurrences(of: " ", with: "")
+                        return name == cell || (min(name.count, cell.count) >= 2 && (name.contains(cell) || cell.contains(name)))
+                    }
+            }
+            // In the schedule's own column order.
+            .sorted { (team.roleColumns[$0.key] ?? .max) < (team.roleColumns[$1.key] ?? .max) }
+            .map { (role: $0.key, who: $0.value.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// Whether this account may put other people's names on the schedule.
@@ -2279,6 +2312,7 @@ struct ServicePrepView: View {
     @ViewBuilder
     private func chips(_ service: TeamService,
                        _ parts: [KeyPart],
+                       _ planned: [(role: String, who: String)],
                        _ rest: [TeamSignup],
                        _ pending: [String],
                        open: Bool) -> some View {
@@ -2294,6 +2328,13 @@ struct ServicePrepView: View {
                 } else {
                     chip("\(part.role) 미지정", detail: nil, color: .red)
                 }
+            }
+        }
+        ForEach(planned, id: \.role) { part in
+            // The leader's plan, not their answer: orange and dashed, as
+            // for 인도 and 반주.
+            assignable(service, role: part.role, person: nil) {
+                chip(part.who, detail: part.role, color: .orange, dashed: true)
             }
         }
         ForEach(rest) { answer in
