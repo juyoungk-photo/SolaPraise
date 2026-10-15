@@ -74,6 +74,16 @@ struct CheckPlaylistExport {
               apply(PlaylistExport.plan(current: lastWeek, wanted: []), to: lastWeek).isEmpty)
         check("cost is 50 a step", PlaylistExport.cost(steps) == steps.count * 50)
 
+        // Keeping what is there: the 콘티 first, then the rest as it was.
+        let start = PlaylistExport.startingList(current: ["a", "b", "c"], conti: ["d", "b"], keepingOthers: true)
+        check("keeping: the 콘티 first, then the songs already there", start == ["d", "b", "a", "c"], "got \(start)")
+        check("not keeping: the 콘티 alone",
+              PlaylistExport.startingList(current: ["a", "b"], conti: ["d", "b"], keepingOthers: false) == ["d", "b"])
+        // The list as edited — reordered, a song taken out — is what is written.
+        let edited = ["a", "d", "b"]
+        check("an edited list is written as it stands",
+              apply(PlaylistExport.plan(current: lastWeek, wanted: edited), to: lastWeek) == edited)
+
         print(failures == 0 ? "\nall playlist export checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

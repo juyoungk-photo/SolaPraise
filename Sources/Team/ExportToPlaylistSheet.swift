@@ -7,9 +7,14 @@
 //
 //  Where it goes: the service's own playlist when the Schedule names one;
 //  otherwise the one chosen here last, remembered on this device; otherwise
-//  the team's 「CCC 찬양콘티」. What will change — songs in, songs out,
-//  songs moved — and its quota cost are shown before anything is written
-//  (PlaylistExport plans it).
+//  the team's 「CCC 찬양콘티」.
+//
+//  WHAT IS SHOWN IS WHAT IS WRITTEN. The screen is the playlist as it will
+//  be — the 콘티's songs and, with 「지금 있는 곡 유지」, the songs already
+//  in it after them — and, like 순서 추가 및 조정, it can be dragged into
+//  another order and trimmed by a swipe before anything is sent. 내보내기
+//  makes the playlist that list, in the fewest writes (PlaylistExport), and
+//  says what that costs first.
 //
 
 import SwiftUI
@@ -24,16 +29,28 @@ struct ExportToPlaylistSheet: View {
 
     /// The playlist chosen last on this device.
     @AppStorage("conti.exportPlaylist") private var chosenId = ""
+    /// Keep the songs already in the playlist. Remembered.
+    @AppStorage("conti.exportKeeps") private var keepsOthers = false
 
     struct Destination: Hashable {
         let id: String
         let title: String
     }
 
+    /// One row of the playlist-to-be.
+    struct Entry: Identifiable, Equatable {
+        let id = UUID()
+        let video: String
+        let title: String
+        /// On this service's 콘티, rather than already in the playlist.
+        let fromConti: Bool
+    }
+
     @State private var destination: Destination?
     @State private var mine: [Destination] = []
     @State private var current: [YTPlaylistItem] = []
-    @State private var steps: [PlaylistExport.Step]?
+    @State private var entries: [Entry] = []
+    @State private var loaded = false
     @State private var working = false
     @State private var message: String?
     @State private var done = false
@@ -58,36 +75,56 @@ struct ExportToPlaylistSheet: View {
         return out
     }
 
+    private var present: [(item: String, video: String)] {
+        current.compactMap { item in item.videoId.map { (item: item.id, video: $0) } }
+    }
+
+    private var steps: [PlaylistExport.Step] {
+        PlaylistExport.plan(current: present, wanted: entries.map(\.video))
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Picker("재생목록", selection: $destination) {
-                        ForEach(options, id: \.self) { option in
-                            Text(option.title).tag(Optional(option))
-                        }
-                    }
-                } footer: {
-                    Text("재생목록이 이 예배의 콘티와 같아지도록 곡을 더하고, 빼고, 순서를 맞춥니다. 재생목록을 만든 계정(또는 공동 작업자)으로 로그인해야 바꿀 수 있습니다.")
-                }
-
-                Section("바뀌는 것") {
-                    if !auth.isSignedIn {
-                        Text("YouTube 계정으로 로그인해야 재생목록을 바꿀 수 있습니다.")
-                            .foregroundStyle(.secondary)
-                    } else if let steps {
-                        if steps.isEmpty {
-                            Label("이미 콘티와 같습니다", systemImage: "checkmark.circle")
-                                .foregroundStyle(.green)
-                        } else {
-                            ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                                describe(step)
-                            }
-                            Text("YouTube 할당량 \(PlaylistExport.cost(steps)) 사용")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    } else {
+            // The controls above the list, not inside it or in an inset on
+            // it: the list is always in edit mode, and anything under that
+            // — a switch, a picker — stops answering taps.
+            VStack(spacing: 0) {
+            controls
+            List {
+                if !auth.canReadYouTube {
+                    EmptyView()
+                } else if !loaded {
+                    Section {
                         HStack { ProgressView(); Text("재생목록을 읽는 중…").foregroundStyle(.secondary) }
+                    }
+                } else {
+                    Section {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            HStack(spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.title).lineLimit(2)
+                                    Text(badge(entry))
+                                        .font(.caption2)
+                                        .foregroundStyle(entry.fromConti ? Color.accentColor : .secondary)
+                                }
+                            }
+                        }
+                        .onMove { from, to in entries.move(fromOffsets: from, toOffset: to) }
+                        .onDelete { entries.remove(atOffsets: $0) }
+                    } header: {
+                        HStack {
+                            Text("내보낼 순서 · \(entries.count)곡")
+                            Spacer()
+                            Button("처음대로") { rebuild() }
+                                .font(.caption)
+                                .textCase(nil)
+                        }
+                    } footer: {
+                        Text(summary)
                     }
                 }
 
@@ -95,6 +132,10 @@ struct ExportToPlaylistSheet: View {
                     Section { Text(message).font(.footnote).foregroundStyle(done ? Color.green : Color.orange) }
                 }
             }
+            // Always in edit mode: dragging is what the list is for.
+            .environment(\.editMode, .constant(.active))
+            }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("재생목록으로 내보내기")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -106,7 +147,7 @@ struct ExportToPlaylistSheet: View {
                         ProgressView()
                     } else {
                         Button("내보내기") { Task { await export() } }
-                            .disabled(done || steps?.isEmpty != false || !auth.isSignedIn)
+                            .disabled(done || !loaded || steps.isEmpty || !auth.isSignedIn)
                     }
                 }
             }
@@ -120,25 +161,62 @@ struct ExportToPlaylistSheet: View {
             }
             await loadMine()
         }
-        .task(id: destination) { await planFor(destination) }
+        .task(id: destination) { await read(destination) }
+        .onChange(of: keepsOthers) { rebuild() }
     }
 
-    @ViewBuilder
-    private func describe(_ step: PlaylistExport.Step) -> some View {
-        switch step {
-        case .remove(let item):
-            Label(current.first { $0.id == item }?.snippet?.title ?? "곡", systemImage: "minus.circle")
-                .foregroundStyle(.red)
-        case .add(let video, let at):
-            Label("\(at + 1). \(title(of: video))", systemImage: "plus.circle")
-                .foregroundStyle(.green)
-        case .move(_, let video, let to):
-            Label("\(to + 1). \(title(of: video))", systemImage: "arrow.up.arrow.down.circle")
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("재생목록")
+                    Spacer()
+                    Picker("재생목록", selection: $destination) {
+                        ForEach(options, id: \.self) { option in
+                            Text(option.title).tag(Optional(option))
+                        }
+                    }
+                    .labelsHidden()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                Divider().padding(.leading, 16)
+                Toggle("지금 있는 곡 유지", isOn: $keepsOthers)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+            Text((keepsOthers
+                  ? "재생목록에 있던 곡은 콘티 뒤에 그대로 남습니다."
+                  : "재생목록이 이 콘티만 담도록 다른 곡은 뺍니다.")
+                 + " 아래 목록이 그대로 재생목록이 됩니다 — 끌어서 순서를 바꾸고, 왼쪽으로 밀어 빼세요."
+                 + (auth.isSignedIn ? "" : " 내보내려면 재생목록을 만든 계정(또는 공동 작업자)으로 로그인하세요."))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private func badge(_ entry: Entry) -> String {
+        let inPlaylist = present.contains { $0.video == entry.video }
+        switch (entry.fromConti, inPlaylist) {
+        case (true, true):   return "콘티 · 이미 있음"
+        case (true, false):  return "콘티 · 새로 추가"
+        case (false, _):     return "재생목록에 있던 곡"
         }
     }
 
-    private func title(of video: String) -> String {
-        songs.first { $0.videoId == video }.map { PlanSongTitle.split($0.title).title } ?? video
+    /// What 내보내기 will do, counted, and its cost.
+    private var summary: String {
+        let steps = self.steps
+        guard !steps.isEmpty else { return "재생목록이 이미 이 목록과 같습니다." }
+        let adds = steps.filter { if case .add = $0 { return true }; return false }.count
+        let removes = steps.filter { if case .remove = $0 { return true }; return false }.count
+        let moves = steps.count - adds - removes
+        let parts = [adds > 0 ? "추가 \(adds)" : nil, removes > 0 ? "빼기 \(removes)" : nil,
+                     moves > 0 ? "순서 \(moves)" : nil].compactMap { $0 }
+        return parts.joined(separator: " · ") + " — YouTube 할당량 \(PlaylistExport.cost(steps)) 사용"
     }
 
     // MARK: - Reading and writing
@@ -150,22 +228,40 @@ struct ExportToPlaylistSheet: View {
         mine = playlists.map { Destination(id: $0.id, title: $0.snippet?.title ?? $0.id) }
     }
 
-    private func planFor(_ destination: Destination?) async {
-        steps = nil
+    private func read(_ destination: Destination?) async {
+        loaded = false
         message = nil
         done = false
-        guard let destination, auth.isSignedIn else { return }
+        guard let destination, auth.canReadYouTube else { return }
         do {
             current = try await client.playlistItems(playlistId: destination.id)
-            let present = current.compactMap { item in item.videoId.map { (item: item.id, video: $0) } }
-            steps = PlaylistExport.plan(current: present, wanted: songs.compactMap(\.videoId))
+            rebuild()
+            loaded = true
         } catch {
+            // A read cut off by choosing another playlist is not a failure:
+            // its replacement is already on the way.
+            guard !Task.isCancelled else { return }
             message = "재생목록을 읽지 못했습니다: " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
+    /// The list as it starts: the 콘티, then — kept — what was there.
+    private func rebuild() {
+        let conti = songs.compactMap(\.videoId)
+        let order = PlaylistExport.startingList(current: present.map(\.video), conti: conti,
+                                                keepingOthers: keepsOthers)
+        entries = order.map { video in
+            if let song = songs.first(where: { $0.videoId == video }) {
+                return Entry(video: video, title: PlanSongTitle.split(song.title).title, fromConti: true)
+            }
+            let title = current.first { $0.videoId == video }?.snippet?.title ?? video
+            return Entry(video: video, title: title, fromConti: false)
+        }
+    }
+
     private func export() async {
-        guard let destination, let steps else { return }
+        guard let destination else { return }
+        let steps = self.steps
         working = true
         defer { working = false }
         var written = 0
@@ -183,14 +279,16 @@ struct ExportToPlaylistSheet: View {
             }
             chosenId = destination.id
             done = true
-            message = "「\(destination.title)」을(를) 콘티 \(songs.count)곡과 같게 맞췄습니다."
+            message = "「\(destination.title)」을(를) 이 목록 \(entries.count)곡으로 맞췄습니다."
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             message = written == 0
                 ? "바꾸지 못했습니다: \(reason) — 재생목록을 만든 계정으로 로그인했는지 확인하세요."
                 : "\(written)/\(steps.count) 단계까지 했고 멈췄습니다: \(reason). 다시 열어 남은 것을 이어서 맞추세요."
             // What is there now, so the next press finishes rather than repeats.
-            await planFor(destination)
+            let wanted = entries
+            await read(destination)
+            entries = wanted
         }
     }
 }

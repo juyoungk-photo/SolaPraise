@@ -24,8 +24,23 @@ enum PlaylistExport {
         case move(item: String, video: String, to: Int)
     }
 
+    /// What the playlist should become, before anyone edits it: the 콘티's
+    /// songs in order and, when `keepingOthers`, the songs already in the
+    /// playlist after them, in their order — for a playlist that collects
+    /// every week's songs rather than mirroring one week's. The list is
+    /// then the reader's to reorder and trim, like 순서 추가 및 조정.
+    static func startingList(current: [String], conti: [String], keepingOthers: Bool) -> [String] {
+        var out: [String] = []
+        for video in conti where !out.contains(video) { out.append(video) }
+        if keepingOthers {
+            for video in current where !out.contains(video) { out.append(video) }
+        }
+        return out
+    }
+
+    /// The steps that make the playlist `wanted`, in that order.
     /// `current`: the playlist as it is, in order — each item's id and its
-    /// video. `wanted`: the 콘티's videos in order.
+    /// video.
     static func plan(current: [(item: String, video: String)], wanted: [String]) -> [Step] {
         var order: [String] = []
         for video in wanted where !order.contains(video) { order.append(video) }
