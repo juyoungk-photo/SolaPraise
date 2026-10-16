@@ -148,6 +148,14 @@ struct ScoreFinderView: View {
     }
 
     @State private var capture: Capture?
+    /// The page's large pictures, for 「악보만 보기」.
+    @State private var pictures: [Picture]?
+
+    struct Picture: Identifiable {
+        let id = UUID()
+        let data: Data
+        let image: UIImage
+    }
     @State private var capturing = false
     @State private var note: String?
     @State private var title = ""
@@ -180,6 +188,9 @@ struct ScoreFinderView: View {
             page.load(start)
         }
         .sheet(item: $capture) { capture in review(capture) }
+        .sheet(isPresented: Binding(get: { pictures != nil }, set: { if !$0 { pictures = nil } })) {
+            picturesSheet
+        }
         // Played, then back where the search began.
         .fullScreenCover(item: $stand, onDismiss: { close() }) { item in
             ScoreStandView(items: [item])
@@ -191,17 +202,31 @@ struct ScoreFinderView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 6) {
-            Button {
-                Task { await take() }
-            } label: {
-                HStack {
-                    if capturing { ProgressView().tint(.white) } else { Image(systemName: "music.note.list") }
-                    Text("이 악보로 연주").fontWeight(.semibold)
+            HStack(spacing: 10) {
+                // The page's charts alone, past its ads and text.
+                Button {
+                    Task { await collectPictures() }
+                } label: {
+                    HStack {
+                        Image(systemName: "rectangle.grid.2x2")
+                        Text("악보만 보기").fontWeight(.semibold)
+                    }
+                    .padding(.vertical, 12).padding(.horizontal, 14)
+                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(Color.accentColor)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
-                .foregroundStyle(.white)
+                Button {
+                    Task { await take() }
+                } label: {
+                    HStack {
+                        if capturing { ProgressView().tint(.white) } else { Image(systemName: "music.note.list") }
+                        Text("이 악보로 연주").fontWeight(.semibold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(.white)
+                }
             }
             .disabled(capturing)
             Text("악보가 화면에 크게 보일 때 누르세요 — PDF나 그림이면 그 파일을, 아니면 화면의 가장 큰 그림을 씁니다.")
@@ -241,6 +266,77 @@ struct ScoreFinderView: View {
            let data = shot.pngData() {
             note = "화면의 그림을 찾지 못해 보이는 화면을 그대로 씁니다."
             capture = Capture(data: data, isPDF: false)
+        }
+    }
+
+    // MARK: - 악보만 보기
+
+    /// Every large picture on the page, in page order: a blog's charts,
+    /// without what surrounds them.
+    static let largeImagesScript = """
+    (function () {
+      var out = [], seen = {};
+      var imgs = document.images;
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i], src = img.currentSrc || img.src;
+        if (!src || seen[src]) continue;
+        if ((img.naturalWidth || 0) < 400 || (img.naturalHeight || 0) < 300) continue;
+        seen[src] = true;
+        out.push(src);
+        if (out.length >= 24) break;
+      }
+      return out;
+    })()
+    """
+
+    private func collectPictures() async {
+        capturing = true
+        defer { capturing = false }
+        let sources = (try? await page.web.evaluateJavaScript(Self.largeImagesScript) as? [String]) ?? []
+        var found: [Picture] = []
+        for source in sources {
+            if let data = await ScoreFinder.fetch(source, referer: page.url), let image = UIImage(data: data) {
+                found.append(Picture(data: data, image: image))
+            }
+        }
+        if found.isEmpty {
+            note = "이 페이지에서 큰 그림을 찾지 못했습니다. 악보가 그림으로 올라온 페이지에서 눌러 보세요."
+        } else {
+            pictures = found
+        }
+    }
+
+    private var picturesSheet: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                    ForEach(pictures ?? []) { picture in
+                        Button {
+                            pictures = nil
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(400))
+                                capture = Capture(data: picture.data, isPDF: false)
+                            }
+                        } label: {
+                            Image(uiImage: picture.image)
+                                .resizable().scaledToFit()
+                                .background(Color.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.3)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("이 페이지의 그림 \(pictures?.count ?? 0)개")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("닫기") { pictures = nil } }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Text("연주할 악보를 누르세요.").font(.footnote).foregroundStyle(.secondary).padding(8)
+            }
         }
     }
 
@@ -378,7 +474,103 @@ final class WebPage: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
 
     func load(_ url: URL) {
         guard web.url == nil else { return }
-        web.load(URLRequest(url: url))
+        // Ads off first, then the page: the rules apply only to loads made
+        // after they are in place.
+        Task { @MainActor in
+            if let rules = await Self.adRules() {
+                web.configuration.userContentController.add(rules)
+            }
+            web.configuration.userContentController.addUserScript(WKUserScript(
+                source: Self.labelledAdScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+            web.load(URLRequest(url: url))
+        }
+    }
+
+    // MARK: - Ads
+
+    /// The ad networks that cover a chart on the blogs people post them on —
+    /// a banner across the top of a Tistory or Naver page took half the
+    /// screen. Their requests are not made, and the slots they fill are
+    /// hidden. Only ads: a page's own pictures are what is being looked for.
+    static let adHosts = [
+        "googlesyndication\\.com", "doubleclick\\.net", "googleadservices\\.com",
+        "adservice\\.google\\.", "amazon-adsystem\\.com", "adnxs\\.com", "criteo\\.",
+        "taboola\\.com", "outbrain\\.com", "dable\\.io", "mobon\\.net", "adfit\\.",
+        "t1\\.daumcdn\\.net/kas/", "kakaoad", "ader\\.naver\\.com", "veta\\.naver\\.com",
+        "adcr\\.naver\\.com", "tpmn\\.co\\.kr", "realclick\\.co\\.kr", "adpopcorn",
+        "ad\\.daum\\.net", "ad\\.kakao\\.com", "analytics\\.ad\\.daum", "aem-kakao", "adfit\\.kakao"
+    ]
+
+    static let adSelectors = [
+        "ins.adsbygoogle", ".adsbygoogle", "[id^='google_ads']", "[id^='div-gpt-ad']",
+        ".revenue_unit_wrap", ".revenue_unit_item", ".kakao_ad_area", "[class*='AdFit']",
+        ".tt_adsense", ".adfit", "[id^='dablewidget']", ".ad_wrap", ".ad-area",
+        "iframe[src*='googlesyndication']", "iframe[src*='doubleclick']", "iframe[src*='ad.daum']", "iframe[src*='adfit']",
+        "[data-ad-unit]", "[data-tistory-react-app='Revenue']", "div[class*='revenue']",
+        "ins.kakao_ad_area", "[id*='kakao_ad']"
+    ]
+
+    /// Ads a page's own script puts in, with no class to match — a blog's
+    /// text-link box marked 「광고」 or 「AD」. Each is hidden from that
+    /// badge up to the largest box around it that is still small — under
+    /// 300 characters, six levels at most, and holding no picture — so the
+    /// article and its charts stay. Watched
+    /// for as the page goes on adding them.
+    static let labelledAdScript = """
+    (function () {
+      function sweep(root) {
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        var badges = [], n;
+        while ((n = walker.nextNode())) {
+          var t = n.nodeValue.trim();
+          if (t === '광고' || t === 'AD' || t === 'Ad' || t === '스폰서') badges.push(n.parentElement);
+        }
+        // A box holding a real picture is the page's content, never an ad
+        // box: a post that is mostly a chart has little text, and the
+        // first version hid the whole post.
+        function holdsPicture(e) {
+          var imgs = e.querySelectorAll('img');
+          for (var i = 0; i < imgs.length; i++) {
+            if ((imgs[i].naturalWidth || imgs[i].width) >= 300) return true;
+          }
+          return false;
+        }
+        badges.forEach(function (badge) {
+          var box = null, e = badge, depth = 0;
+          while (e && e !== document.body && depth < 6) {
+            if ((e.innerText || '').length > 300 || holdsPicture(e)) break;
+            if (e.querySelector('a')) box = e;
+            e = e.parentElement;
+            depth++;
+          }
+          if (box) box.style.setProperty('display', 'none', 'important');
+        });
+      }
+      sweep(document.body);
+      var pending = false;
+      new MutationObserver(function () {
+        if (pending) return;
+        pending = true;
+        setTimeout(function () { pending = false; sweep(document.body); }, 400);
+      }).observe(document.body, { childList: true, subtree: true });
+    })();
+    """
+
+    private static var compiled: WKContentRuleList?
+
+    static func adRules() async -> WKContentRuleList? {
+        if let compiled { return compiled }
+        var rules: [[String: Any]] = adHosts.map {
+            ["trigger": ["url-filter": $0], "action": ["type": "block"]]
+        }
+        rules.append(["trigger": ["url-filter": ".*"],
+                      "action": ["type": "css-display-none", "selector": adSelectors.joined(separator: ", ")]])
+        guard let data = try? JSONSerialization.data(withJSONObject: rules),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        let list = try? await WKContentRuleListStore.default()
+            .compileContentRuleList(forIdentifier: "score-finder-ads-2", encodedContentRuleList: json)
+        compiled = list
+        return list
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
