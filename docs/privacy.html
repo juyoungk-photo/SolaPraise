@@ -11,7 +11,7 @@
 <main>
 <header>
   <h1>Privacy Policy — SolaPraise</h1>
-  <p class="updated">Last updated: 7 October 2026</p>
+  <p class="updated">Last updated: 16 October 2026</p>
 </header>
 
 <p>SolaPraise is a free, open-source iPhone and iPad app built for a church
@@ -32,13 +32,23 @@ receives your data, because there is nowhere for it to be sent.</p>
 <p>Signing in is optional. Most of the app — the worship and scripture feeds,
 search, playback, the Psalms, and chord detection — works with no account at
 all.</p>
-<p>If you do sign in, the app requests two Google permissions:</p>
+<p>If you do sign in, the app may request these Google permissions. Each is
+asked for only when you use the feature that needs it:</p>
 <table>
   <tr><th>Scope</th><th>Why</th></tr>
   <tr><td><code>https://www.googleapis.com/auth/youtube</code></td>
-      <td>To list, play from, and edit <strong>your own</strong> YouTube playlists.</td></tr>
+      <td>To list, play from, and edit <strong>your own</strong> YouTube playlists,
+      including writing a service's song list to a playlist you choose.</td></tr>
   <tr><td><code>https://www.googleapis.com/auth/spreadsheets</code></td>
       <td>To read and write your team's planning spreadsheet.</td></tr>
+  <tr><td><code>https://www.googleapis.com/auth/drive.file</code></td>
+      <td>To upload sheet music you choose to your team's shared folder, and to
+      open those files again. This permission reaches only files the app
+      itself created or that you opened with it — not the rest of your Drive.</td></tr>
+  <tr><td><code>https://www.googleapis.com/auth/youtube.readonly</code></td>
+      <td>Only for an account that manages a church's YouTube channel, if it
+      chooses to connect: to list that channel's unlisted videos and playlists
+      so they can be shared with the congregation's members.</td></tr>
 </table>
 <p>What happens to the resulting access and refresh tokens:</p>
 <ul>
@@ -84,6 +94,9 @@ privacy policy, which governs that interaction:</p>
   <tr><th>Service</th><th>Used for</th></tr>
   <tr><td>YouTube / Google APIs</td><td>Video feeds, search, playback, playlists</td></tr>
   <tr><td>Google Sheets API</td><td>The team planning sheet</td></tr>
+  <tr><td>Google Drive API</td><td>Sheet music your team attaches to a song</td></tr>
+  <tr><td>Web pages you open in the in-app browser</td><td>Finding sheet music; the
+      page you choose to use is downloaded to your device</td></tr>
   <tr><td>Crossway ESV API (<code>api.esv.org</code>)</td><td>English scripture text</td></tr>
   <tr><td>API.Bible (<code>scripture.api.bible</code>)</td><td>Additional scripture translations</td></tr>
   <tr><td>Apple iTunes Search API</td><td>Looking up recordings of a song</td></tr>
@@ -91,6 +104,13 @@ privacy policy, which governs that interaction:</p>
 </table>
 
 <div class="lede">
+<p>SolaPraise uses YouTube API Services. By using the app you also agree to the
+<a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>, and
+Google's handling of your data is described in the
+<a href="https://policies.google.com/privacy">Google Privacy Policy</a>. You can
+revoke the app's access at any time from
+<a href="https://security.google.com/settings/security/permissions">Google
+security settings</a>.</p>
 <p>The app's use of information received from Google APIs adheres to the
 <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
 API Services User Data Policy</a>, including the Limited Use requirements.
