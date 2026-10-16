@@ -337,7 +337,7 @@ struct WatchScreen: View {
                             // you are about to rehearse rather than the one
                             // currently sounding.
                             if isWorship(item) {
-                                SheetMusicMenu(title: item.title, channel: item.channelTitle) {
+                                SheetMusicMenu(title: item.title, channel: item.channelTitle, videoId: item.id) {
                                     Image(systemName: "doc.text.magnifyingglass")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
@@ -596,9 +596,10 @@ struct WatchScreen: View {
                     if showsChordButton {
                         let official = !sheetLinks.isEmpty
                             || SheetMusicSources.publisher(channel: current.channelTitle, title: current.title) != nil
-                        // The song carries on in PiP while the 악보 page is open.
+                        // Searched in the app's finder: the song plays on
+                        // underneath, and the chart found opens on the stand.
                         SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks,
-                                       open: { url in openKeepingSong(url) }) {
+                                       videoId: current.id) {
                             HStack(spacing: 5) {
                                 Label("악보 검색", systemImage: "doc.text.magnifyingglass")
                                     .labelStyle(.titleAndIcon)

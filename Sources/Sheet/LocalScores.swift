@@ -77,7 +77,8 @@ final class LocalScores: ObservableObject {
         return add(data: jpeg, extension: "jpg", title: title)
     }
 
-    private func add(data: Data, extension ext: String, title: String) -> Item? {
+    @discardableResult
+    func add(data: Data, extension ext: String, title: String) -> Item? {
         let id = UUID()
         let file = "\(id.uuidString).\(ext)"
         do { try data.write(to: folder.appendingPathComponent(file), options: .atomic) }

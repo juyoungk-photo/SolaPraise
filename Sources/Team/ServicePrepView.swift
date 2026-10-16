@@ -133,6 +133,14 @@ struct ServicePrepView: View {
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
     @State private var standService: TeamService?
+    /// One song's chart on the stand — its 악보 button.
+    @State private var standSong: SongStand?
+
+    struct SongStand: Identifiable {
+        let service: TeamService
+        let song: String
+        var id: String { service.id + "|" + song }
+    }
     @State private var preparingStand = false
     /// The stand was opened to make the next 콘티 version.
     @State private var makingConti = false
@@ -279,6 +287,12 @@ struct ServicePrepView: View {
                                versions: songVersions(service),
                                setFileName: nextContiName(service),
                                exportOnOpen: makingConti)
+            }
+            .fullScreenCover(item: $standSong) { entry in
+                let versions = songVersions(entry.service)
+                ScoreStandView(items: Array((versions[entry.song] ?? []).prefix(1)),
+                               setTitle: PlanSongTitle.split(entry.song).title,
+                               versions: versions.filter { $0.key == entry.song })
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $reordering) { service in
@@ -1005,6 +1019,28 @@ struct ServicePrepView: View {
         return f
     }()
 
+    /// This song's chart, alone on the stand: the one thing on the row
+    /// that says 악보 in words. 연주모드 below the 순서 opens the whole set.
+    @ViewBuilder
+    private func songChartButton(_ item: PlanItem, in service: TeamService) -> some View {
+        if songVersions(service)[item.title]?.isEmpty == false {
+            Button { standSong = SongStand(service: service, song: item.title) } label: {
+                // Not a Label: in a list row it takes the row's icon column.
+                HStack(spacing: 3) {
+                    Image(systemName: "music.note.list")
+                    Text("악보")
+                }
+                .font(.caption.weight(.semibold))
+                .fixedSize()
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 보기")
+        }
+    }
+
     private func planRow(_ item: PlanItem, startsAt: Date?,
                          in service: TeamService) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1040,7 +1076,12 @@ struct ServicePrepView: View {
                             .font(.caption2.weight(.semibold).monospacedDigit())
                             .foregroundStyle(.secondary)
                     } ?? Text("")
-                    Text("\(Text(parts.title).font(.subheadline.weight(.medium)))\(number)")
+                    // The key it is played in, on the same line: what a
+                    // player looks for first.
+                    let key = item.key.map {
+                        Text("  \($0)").font(.subheadline.weight(.bold)).foregroundStyle(Color.accentColor)
+                    } ?? Text("")
+                    Text("\(Text(parts.title).font(.subheadline.weight(.medium)))\(key)\(number)")
                         .fixedSize(horizontal: false, vertical: true)
                     if !parts.meta.isEmpty {
                         Text(parts.meta.joined(separator: " · "))
@@ -1058,7 +1099,7 @@ struct ServicePrepView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    if let key = item.key {
+                    if item.kind != .song, let key = item.key {
                         Text(key).font(.caption.weight(.semibold)).foregroundStyle(.tint)
                     }
                     // The key the attached chart was last shown in on the
@@ -1076,6 +1117,7 @@ struct ServicePrepView: View {
                     if let person = item.person {
                         Text(person).font(.caption2).foregroundStyle(.secondary)
                     }
+                    if !isWide, item.kind == .song { songChartButton(item, in: service) }
                     if item.kind == .song, let chart = existingSheet(forTitle: item.title) {
                         // Tappable. It used to be a label that said a chart
                         // existed and gave you no way to it — the one place
@@ -1096,13 +1138,18 @@ struct ServicePrepView: View {
 
             Spacer(minLength: 0)
 
+            // On iPad beside the row's buttons; on a phone, where the title
+            // needs the width, under it — see songChartButton.
+            if isWide, item.kind == .song { songChartButton(item, in: service) }
+
             if item.kind == .song {
                 // 악보 only. Analysing audio lives in 작업실 and the
                 // player; here it was one more item above what people came
                 // to the menu for.
                 Menu {
                     SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId),
-                                    published: sheetLinks(forVideo: item.videoId))
+                                    published: sheetLinks(forVideo: item.videoId),
+                                    destination: ScoreDestination(service: service, song: item.title, key: item.key))
                 } label: {
                     Image(systemName: "doc.text.magnifyingglass")
                         .foregroundStyle(.secondary)

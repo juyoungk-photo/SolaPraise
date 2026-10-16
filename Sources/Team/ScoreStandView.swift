@@ -274,7 +274,8 @@ struct ScoreStandView: View {
         let state = model.states[item.id]
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(item.song.isEmpty ? item.attachment.name : item.song)
+                // The song, not the video's title it was entered under.
+                Text(item.song.isEmpty ? item.attachment.name : PlanSongTitle.split(item.song).title)
                     .font(.system(size: 24, weight: .bold))
                     .lineLimit(1)
                 if items.count > 1 {

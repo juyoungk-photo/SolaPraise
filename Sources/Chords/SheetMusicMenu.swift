@@ -17,14 +17,38 @@ struct SheetMusicLinks: View {
     /// The channel the song came from, which names its team.
     var channel: String? = nil
     var published: [SheetMusicLink] = []
-    /// How a link opens, when the screen wants a say — the player carries
-    /// the song into PiP first. Otherwise the system opens it.
+    /// Kept for callers; every link now opens in the app's 악보 finder.
     var open: ((URL) -> Void)? = nil
+    /// The video the song is playing from, which finds its place on a 콘티.
+    var videoId: String? = nil
+    /// Where a chart found goes, when the caller knows: a song on a 콘티.
+    var destination: ScoreDestination? = nil
 
-    @Environment(\.openURL) private var systemOpenURL
+    @EnvironmentObject private var team: TeamStore
+    @EnvironmentObject private var auth: GoogleAuthManager
+    @EnvironmentObject private var planning: PlanningAuth
+    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.modelContext) private var modelContext
 
+    /// Every link opens in the app's 악보 finder (ScoreFinder): the music
+    /// goes on underneath, and the chart found opens on the stand —
+    /// attached to the song on its 콘티 when it is on one.
     private func openURL(_ url: URL) {
-        if let open { open(url) } else { systemOpenURL(url) }
+        ScoreFinder.present(url: url, song: SheetMusicSources.plan(title: title, channel: channel).song,
+                            destination: destination ?? found,
+                            team: team, auth: auth, planning: planning, quota: quota, context: modelContext)
+    }
+
+    /// This song on the nearest upcoming 콘티: by its video, else by title.
+    private var found: ScoreDestination? {
+        for service in team.services.filter({ !$0.isPast }).sorted(by: { $0.date < $1.date }) {
+            let songs = team.plan(for: service).filter { $0.kind == .song }
+            if let item = songs.first(where: { videoId != nil && $0.videoId == videoId })
+                ?? songs.first(where: { PlanSongTitle.sameSong($0.title, title) }) {
+                return ScoreDestination(service: service, song: item.title, key: item.key)
+            }
+        }
+        return nil
     }
 
     /// Top to bottom: 악보 검색 for this song, then the official chart when
@@ -87,11 +111,12 @@ struct SheetMusicMenu<Label: View>: View {
     /// Links the channel published itself, which outrank any search.
     var published: [SheetMusicLink] = []
     var open: ((URL) -> Void)? = nil
+    var videoId: String? = nil
     @ViewBuilder var label: Label
 
     var body: some View {
         Menu {
-            SheetMusicLinks(title: title, channel: channel, published: published, open: open)
+            SheetMusicLinks(title: title, channel: channel, published: published, open: open, videoId: videoId)
         } label: {
             label
         }

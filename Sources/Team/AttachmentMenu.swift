@@ -64,7 +64,7 @@ struct AttachmentMenu<Content: View>: View {
                     ForEach(contiPages, id: \.file.id) { entry in
                         Button {
                             stand = ScoreStandItem(attachment: entry.file, song: song,
-                                                   teamKey: team.plan(for: service).first { $0.title == song }?.key,
+                                                   teamKey: team.plan(for: service).first { PlanSongTitle.sameSong($0.title, song) }?.key,
                                                    pages: entry.pages)
                         } label: {
                             Label("\(pageLabel(entry.pages)) · \(entry.file.name)", systemImage: "doc.on.doc")
@@ -181,7 +181,7 @@ struct AttachmentMenu<Content: View>: View {
             return ScoreStandItem(attachment: item, song: (item.name as NSString).deletingPathExtension, teamKey: nil)
         }
         return ScoreStandItem(attachment: item, song: song,
-                              teamKey: team.plan(for: service).first { $0.title == song }?.key)
+                              teamKey: team.plan(for: service).first { PlanSongTitle.sameSong($0.title, song) }?.key)
     }
 
     private var canUpload: Bool { team.canAttach && sheetId != nil }
