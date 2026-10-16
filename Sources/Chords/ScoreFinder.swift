@@ -347,7 +347,7 @@ struct ScoreFinderView: View {
 // MARK: - The page
 
 @MainActor
-final class WebPage: NSObject, ObservableObject, WKNavigationDelegate {
+final class WebPage: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let web: WKWebView
     @Published var url: URL?
     @Published var canGoBack = false
@@ -364,6 +364,16 @@ final class WebPage: NSObject, ObservableObject, WKNavigationDelegate {
             : "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
         super.init()
         web.navigationDelegate = self
+        web.uiDelegate = self
+    }
+
+    /// A link that opens a new window — Google Images' 「Visit」, most
+    /// 「open in new tab」 links — opens here instead. A web view has no
+    /// other windows, and without this the tap did nothing.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
+        return nil
     }
 
     func load(_ url: URL) {

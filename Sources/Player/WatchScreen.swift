@@ -161,12 +161,11 @@ struct WatchScreen: View {
             guard ended else { return }
             // Asked first, always: an unanswered 「이 영상 끝나면」 would
             // stop the next video instead.
-            let sleeping = host.takeSleepAtEnd()
+            // Reached only when nothing comes next: a song with a next one
+            // moves on where it ends (PlayerHost, advanceAtEnd).
+            _ = host.takeSleepAtEnd()
             finishDetection(showSheet: SolaPraiseConfig.endBehavior == .overlay)
             if SolaPraiseConfig.endBehavior == .dismiss { host.close() }
-            // 이어 듣기 is a run: the next episode starts on its own.
-            if !sleeping, !showsChordButton, seriesDirection != DailySeries.Direction.off.rawValue,
-               host.hasNext { host.onAdvance?() }
         }
         // A video the player can never show should stop being offered.
         //

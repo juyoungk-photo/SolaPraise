@@ -137,11 +137,19 @@ final class PlayerHost: ObservableObject {
         // A song ending in PiP moves on to the next one, so a 콘티 plays
         // through in the floating window. Through the screen's own handler
         // when it is installed, so the watch log records the song.
-        coordinator.advanceInPictureInPicture = { [weak self] in
-            // 취침: 「이 영상 끝나면」 means nothing after it, in PiP too.
+        // A song ending moves on to the next one — on screen, in PiP and in
+        // the background alike — so a playlist or a 콘티 plays through as on
+        // YouTube. Decided here, where the song ends, rather than by the
+        // player screen, which is not there in PiP and did not advance on
+        // screen at all: a playlist stopped after every song.
+        coordinator.advanceAtEnd = { [weak self] in
+            // 취침: 「이 영상 끝나면」 means nothing after it.
             // Not consumed here: the player then stops and reports the
             // end, and WatchScreen takes it there, once.
             guard let self, !self.sleepsAtEnd, self.hasNext else { return false }
+            // A 말씀 feed's 「next」 goes on only as 이어 듣기.
+            let series = UserDefaults.standard.string(forKey: "word.series.direction") ?? "off"
+            guard self.continuesAtEnd || series != "off" else { return false }
             if let advance = self.onAdvance {
                 advance()
             } else {
@@ -161,6 +169,15 @@ final class PlayerHost: ObservableObject {
     @Published var alternateError: String?
 
     var hasNext: Bool { index + 1 < queue.count }
+
+    /// The queue is a playlist or a 콘티 someone put together.
+    private(set) var isCurated = false
+
+    /// Whether the next video starts by itself when one ends: a playlist,
+    /// a 콘티 and a 찬양 feed play through, as on YouTube. A 말씀 feed's
+    /// 「next」 is only the channel's other uploads — a sermon is not a run
+    /// — so it stops there unless 이어 듣기 is on.
+    var continuesAtEnd: Bool { isCurated || current?.purpose != .word }
 
     // MARK: - 이전 곡으로
 
@@ -218,6 +235,7 @@ final class PlayerHost: ObservableObject {
         }
         let chosen = queue.indices.contains(startIndex) ? queue[startIndex] : queue[0]
         let cleaned = curated ? queue : Self.watchable(queue, keeping: chosen)
+        isCurated = curated
 
         self.queue = cleaned
         for video in cleaned { played[video.id] = video }

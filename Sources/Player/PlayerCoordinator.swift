@@ -122,7 +122,7 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     /// Called when a song ends while in PiP, so the queue can carry on in
     /// the floating window rather than stopping on an end card nobody can
     /// see. Returns false when there is nothing next.
-    var advanceInPictureInPicture: (() -> Bool)?
+    var advanceAtEnd: (() -> Bool)?
     /// ⏮ ⏭ from earphones, a car or the lock screen: true for next.
     var onRemoteTrack: ((_ next: Bool) -> Void)?
     private var lifecycleObservers: [NSObjectProtocol] = []
@@ -820,7 +820,7 @@ extension PlayerCoordinator: WKScriptMessageHandler {
                 // In PiP the end card cannot be seen, and stopping would
                 // close the floating window. Carry on to the next song
                 // instead; YouTube's grid is drawn in the page, not in PiP.
-                if isPictureInPicture, advanceInPictureInPicture?() == true {
+                if advanceAtEnd?() == true {
                     return
                 }
                 // THE critical line. Stop before YouTube can paint its
