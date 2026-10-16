@@ -297,7 +297,8 @@ struct ChannelDetailView: View {
                 errorMessage = "재생할 수 있는 영상이 없습니다."
                 return
             }
-            host.play(queue: queue, startIndex: 0, curated: true)
+            host.play(queue: queue, startIndex: 0, curated: true,
+                      source: .init(playlistId: playlist.playlistId, title: playlist.title))
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

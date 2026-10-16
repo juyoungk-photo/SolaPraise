@@ -98,6 +98,7 @@ struct WatchScreen: View {
     @Environment(\.modelContext) private var context
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
+    @State private var managingQueue = false
     @AppStorage("word.series.direction") private var seriesDirection = DailySeries.Direction.off.rawValue
     @State private var leadSheet: SavedSong?
     /// A channel whose page is open, from tapping its name.
@@ -207,6 +208,7 @@ struct WatchScreen: View {
             #endif
         }
         .sheet(item: $addTarget) { AddToPlaylistSheet(video: $0) }
+        .sheet(isPresented: $managingQueue) { QueueManageSheet() }
         // Sheets with their own NavigationStack: the player is an overlay on
         // the stage, not inside any tab's navigation, so a NavigationLink
         // from here would have nowhere to push.
@@ -305,10 +307,28 @@ struct WatchScreen: View {
             VStack(alignment: .leading, spacing: 8) {
                 Divider().padding(.top, 16)
 
-                Text("재생목록 \(queue.count)곡")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+                HStack {
+                    Text("재생목록 \(queue.count)곡")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    // Order and take out, as 순서 추가 및 조정 does.
+                    if queue.count > 1 {
+                        Button { managingQueue = true } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.arrow.down")
+                                Text("관리")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityLabel("재생목록 관리")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
 
                 ForEach(Array(queue.enumerated()), id: \.element.id) { position, item in
                     SwipeToRemoveRow {

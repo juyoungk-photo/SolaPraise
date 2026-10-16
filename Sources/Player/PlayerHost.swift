@@ -173,6 +173,28 @@ final class PlayerHost: ObservableObject {
     /// The queue is a playlist or a 콘티 someone put together.
     private(set) var isCurated = false
 
+    /// The YouTube playlist the queue was played from, whole.
+    struct QueueSource: Equatable {
+        let playlistId: String
+        let title: String
+    }
+    @Published private(set) var source: QueueSource?
+
+    /// The queue as arranged in 재생목록 관리: the song playing plays on
+    /// where it now stands; if it was taken out, the one in its place
+    /// starts.
+    func rearrange(_ newQueue: [PlayableVideo]) {
+        guard !newQueue.isEmpty else { close(); return }
+        let playing = current?.id
+        queue = newQueue
+        if let playing, let at = newQueue.firstIndex(where: { $0.id == playing }) {
+            index = at
+        } else {
+            index = min(index, newQueue.count - 1)
+            if let song = current { coordinator.load(videoId: song.id) }
+        }
+    }
+
     /// Whether the next video starts by itself when one ends: a playlist,
     /// a 콘티 and a 찬양 feed play through, as on YouTube. A 말씀 feed's
     /// 「next」 is only the channel's other uploads — a sermon is not a run
@@ -226,7 +248,11 @@ final class PlayerHost: ObservableObject {
     ///   is — the Short and promo filter below is for feeds, where it keeps
     ///   「next」 on songs. It took 「#shorts」 out of a team playlist, so
     ///   the app played two songs of three.
-    func play(queue: [PlayableVideo], startIndex: Int = 0, purpose: Purpose? = nil, curated: Bool = false) {
+    /// - source: the YouTube playlist the queue is, whole — so 재생목록
+    ///   관리 can save a new order back to it. Nil for anything else,
+    ///   including a playlist played filtered.
+    func play(queue: [PlayableVideo], startIndex: Int = 0, purpose: Purpose? = nil, curated: Bool = false,
+              source: QueueSource? = nil) {
         guard !queue.isEmpty else { return }
         let queue = queue.map { video -> PlayableVideo in
             var video = video
@@ -236,6 +262,7 @@ final class PlayerHost: ObservableObject {
         let chosen = queue.indices.contains(startIndex) ? queue[startIndex] : queue[0]
         let cleaned = curated ? queue : Self.watchable(queue, keeping: chosen)
         isCurated = curated
+        self.source = source
 
         self.queue = cleaned
         for video in cleaned { played[video.id] = video }

@@ -479,7 +479,9 @@ struct WorshipFeedView: View {
                 : "\(playlist.title): 최근 항목에서 찾지 못했습니다."
             return
         }
-        host.play(queue: queue, startIndex: 0, purpose: .worship, curated: true)
+        // A filtered playlist is not the playlist: nothing is saved back.
+        host.play(queue: queue, startIndex: 0, purpose: .worship, curated: true,
+                  source: filter == nil ? .init(playlistId: playlist.playlistId, title: playlist.title) : nil)
     }
 
     /// The browse feed: every worship video the cache holds, newest first,

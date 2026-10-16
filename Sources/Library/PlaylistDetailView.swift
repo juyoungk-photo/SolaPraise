@@ -55,7 +55,8 @@ struct PlaylistDetailView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if !playableVideos.isEmpty {
                     Button {
-                        host.play(queue: playableVideos, startIndex: 0, curated: true)
+                        host.play(queue: playableVideos, startIndex: 0, curated: true,
+                                  source: .init(playlistId: playlist.id, title: playlist.snippet?.title ?? "재생목록"))
                     } label: {
                         Image(systemName: "play.fill")
                     }
@@ -211,7 +212,8 @@ struct PlaylistDetailView: View {
         guard let id = item.videoId else { return }
         let queue = playableVideos
         let start = queue.firstIndex { $0.id == id } ?? 0
-        host.play(queue: queue, startIndex: start, curated: true)
+        host.play(queue: queue, startIndex: start, curated: true,
+                  source: .init(playlistId: playlist.id, title: playlist.snippet?.title ?? "재생목록"))
     }
 
     // MARK: - Editing
