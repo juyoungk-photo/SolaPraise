@@ -21,7 +21,8 @@ enum ChartLookup {
     /// newest 콘티 file, then 작업실's. Each opens on the stand in the key
     /// the 순서 gives the song.
     static func charts(videoId: String?, title: String, team: TeamStore,
-                       local: LocalScores = .shared) -> [ScoreStandItem] {
+                       local: LocalScores? = nil) -> [ScoreStandItem] {
+        let local = local ?? .shared
         var out: [ScoreStandItem] = []
         var seen = Set<String>()
         func add(_ item: ScoreStandItem) {

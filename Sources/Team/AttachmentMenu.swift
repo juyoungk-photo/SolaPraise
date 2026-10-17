@@ -57,86 +57,15 @@ struct AttachmentMenu<Content: View>: View {
         return pages.isEmpty ? [] : [(latest, pages)]
     }
 
-    var body: some View {
-        Menu {
-            if !contiPages.isEmpty {
-                Section("콘티에서 (최신)") {
-                    ForEach(contiPages, id: \.file.id) { entry in
-                        Button {
-                            stand = ScoreStandItem(attachment: entry.file, song: song,
-                                                   teamKey: team.plan(for: service).first { PlanSongTitle.sameSong($0.title, song) }?.key,
-                                                   pages: entry.pages)
-                        } label: {
-                            Label("\(pageLabel(entry.pages)) · \(entry.file.name)", systemImage: "doc.on.doc")
-                        }
-                    }
-                }
-            }
-            if !existing.isEmpty {
-                Section(song.isEmpty ? "올린 콘티 파일" : "첨부한 악보 — 최신부터") {
-                    ForEach(existing) { item in
-                        // On the stand: a song's chart in the team's key, a
-                        // whole 콘티 as it was made.
-                        Button {
-                            stand = standItem(item)
-                        } label: {
-                            Label(item.name, systemImage: item.belongsToService
-                                  ? "doc" : "music.note.list")
-                        }
-                    }
-                    ForEach(existing) { item in
-                        Button { openURL(item.url) } label: {
-                            Label("\(item.name) 원본 링크", systemImage: "arrow.up.right.square")
-                        }
-                    }
-                }
-                Section {
-                    ForEach(existing) { item in
-                        Button(role: .destructive) {
-                            Task { await remove(item) }
-                        } label: {
-                            Label("\(item.name) 지우기", systemImage: "trash")
-                        }
-                    }
-                }
-            }
+    @State private var showsList = false
 
-            Section {
-                if team.canAttach {
-                    // PhotosPicker cannot live inside a Menu, so the menu
-                    // sets a flag and the picker is attached to the label.
-                    Button { showPhotos = true } label: {
-                        Label("사진에서 추가", systemImage: "photo")
-                    }
-                    Button { showFiles = true } label: {
-                        Label("파일에서 추가", systemImage: "folder")
-                    }
-                } else {
-                    // A PERMISSION, not an account.
-                    //
-                    // The first wording said "시트 계정 연결", which is wrong
-                    // for the common case and confusing in every case: the
-                    // reader is already signed in — possibly as the very
-                    // account being asked for — and is being told to
-                    // connect an account they are looking at the name of.
-                    //
-                    // What is actually missing is Drive permission, which
-                    // Google will not grant in the same breath as YouTube.
-                    // The same account is fine; it is one extra sign-in.
-                    Button {
-                        Task {
-                            await planning.signIn()
-                            team.configure(auth: auth, planning: planning)
-                        }
-                    } label: {
-                        Label("구글 드라이브 권한 연결", systemImage: "externaldrive.badge.plus")
-                    }
-                    Text("악보를 올리려면 드라이브 권한이 필요합니다. 지금 쓰는 계정 그대로 한 번 더 로그인하면 됩니다 — 구글이 유튜브 권한과 드라이브 권한을 한 번에 주지 않습니다.")
-                }
-            }
-        } label: {
-            label
-        }
+    var body: some View {
+        // A list, not a menu: each chart once — a tap opens it on the stand,
+        // a swipe takes it off. The menu listed every chart three times
+        // (open, its Drive link, delete), which read as three kinds of
+        // thing; the link is now a button on the stand.
+        Button { showsList = true } label: { label }
+        .sheet(isPresented: $showsList) { listSheet }
         // Never disabled outright: opening an attachment needs no account
         // at all, so a member without the second grant must still be able
         // to tap through to what the team has put up.
@@ -171,6 +100,88 @@ struct AttachmentMenu<Content: View>: View {
             Button("확인") { note = nil }
         } message: {
             Text(note ?? "")
+        }
+    }
+
+    private var listSheet: some View {
+        NavigationStack {
+            List {
+                if !contiPages.isEmpty {
+                    Section("콘티에서 (최신)") {
+                        ForEach(contiPages, id: \.file.id) { entry in
+                            Button {
+                                open(ScoreStandItem(attachment: entry.file, song: song,
+                                                    teamKey: team.plan(for: service).first { PlanSongTitle.sameSong($0.title, song) }?.key,
+                                                    pages: entry.pages))
+                            } label: {
+                                Label("\(pageLabel(entry.pages)) · \(entry.file.name)", systemImage: "doc.on.doc")
+                            }
+                        }
+                    }
+                }
+                if !existing.isEmpty {
+                    Section(song.isEmpty ? "올린 콘티 파일" : "첨부한 악보 — 최신부터") {
+                        ForEach(existing) { item in
+                            Button { open(standItem(item)) } label: {
+                                Label(item.name, systemImage: item.belongsToService ? "doc" : "music.note.list")
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    Task { await remove(item) }
+                                } label: { Label("지우기", systemImage: "trash") }
+                            }
+                        }
+                    }
+                }
+                Section {
+                    if team.canAttach {
+                        Button {
+                            showsList = false
+                            later { showPhotos = true }
+                        } label: { Label("사진에서 추가", systemImage: "photo") }
+                        Button {
+                            showsList = false
+                            later { showFiles = true }
+                        } label: { Label("파일에서 추가", systemImage: "folder") }
+                    } else {
+                        Button {
+                            showsList = false
+                            Task {
+                                await planning.signIn()
+                                team.configure(auth: auth, planning: planning)
+                            }
+                        } label: {
+                            Label("구글 드라이브 권한 연결", systemImage: "externaldrive.badge.plus")
+                        }
+                    }
+                } footer: {
+                    if !team.canAttach {
+                        Text("악보를 올리려면 드라이브 권한이 필요합니다. 지금 쓰는 계정 그대로 한 번 더 로그인하면 됩니다 — 구글이 유튜브 권한과 드라이브 권한을 한 번에 주지 않습니다.")
+                    } else if !existing.isEmpty {
+                        Text("누르면 연주 모드로 열립니다. 왼쪽으로 밀면 지웁니다.")
+                    }
+                }
+            }
+            .navigationTitle(song.isEmpty ? "콘티 파일" : PlanSongTitle.split(song).title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("닫기") { showsList = false } }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// From the list to the stand: the list goes, then the stand comes.
+    private func open(_ item: ScoreStandItem) {
+        showsList = false
+        later { stand = item }
+    }
+
+    /// After the sheet has gone: one presentation at a time.
+    private func later(_ action: @escaping () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            action()
         }
     }
 

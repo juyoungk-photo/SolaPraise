@@ -668,6 +668,14 @@ struct ServicePrepView: View {
                         if let sheetId { await team.checkTidy(sheetId: sheetId) }
                     }
                 }
+                // Every chart the team has put up, in Drive: the shared 콘티
+                // folder, which everyone sees. The folder this account's own
+                // uploads go to holds only its own, so it is the fallback.
+                if let url = ContiFolder.folderURL ?? DriveClient.folderURL {
+                    Button { openURL(url) } label: {
+                        Label("악보 Archive", systemImage: "archivebox")
+                    }
+                }
                 if let url = ChurchSheetSource.url {
                     Button { openURL(url) } label: {
                         Label([AppSecrets.churchName, "예배 정보 Sheet"].compactMap { $0 }.joined(separator: " "),

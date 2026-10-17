@@ -60,6 +60,7 @@ struct ScoreStandView: View {
     @State private var index: Int
     @StateObject private var model = ScoreStandModel()
     @EnvironmentObject private var team: TeamStore
+    @Environment(\.openURL) private var openFile
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
@@ -284,6 +285,18 @@ struct ScoreStandView: View {
                         .foregroundStyle(.white.opacity(0.55))
                 }
                 Spacer(minLength: 0)
+                // The file itself, in Drive: to check what was uploaded.
+                if !item.attachment.fileId.hasPrefix("local-") {
+                    Button { openFile(item.attachment.url) } label: {
+                        Image(systemName: "link")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 34, height: 30)
+                            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .accessibilityLabel("원본 파일 열기")
+                }
                 // Not while editing: 편집 works on 악보 only.
                 if !editing {
                     Picker("보기", selection: $showsChart) {
