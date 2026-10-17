@@ -89,6 +89,17 @@ struct ContentView: View {
         return items
     }
 
+    /// The tab choice, seeing a tab pressed again too: pressing the tab
+    /// already shown while the player covers it means 「show me this page」 —
+    /// the player goes to PiP. A change of tab is handled by onChange below;
+    /// the same tab changes nothing, so it was never noticed.
+    private var tabSelection: Binding<Tab> {
+        Binding(get: { selection }, set: { new in
+            if new == selection, playerHost.mode == .full { playerHost.dock(orClose: true) }
+            selection = new
+        })
+    }
+
     @ViewBuilder
     private func screen(for tab: Tab) -> some View {
         switch tab {
@@ -135,7 +146,7 @@ struct ContentView: View {
         // the old one. The same edit had to be made twice and was made once.
         // One list now decides which tabs exist, what they are called, and
         // what order they come in, on both devices.
-        TabView(selection: $selection) {
+        TabView(selection: tabSelection) {
             ForEach(tabItems) { item in
                 screen(for: item.tag)
                     .tabItem { Label(item.title, systemImage: item.symbol) }
@@ -159,7 +170,7 @@ struct ContentView: View {
         // tabs mean something — see onChange below, where it docks.
         .overlay(alignment: .bottom) {
             if AppLayout.usesCustomTabBar {
-                BottomTabBar(selection: $selection, items: tabItems)
+                BottomTabBar(selection: tabSelection, items: tabItems)
             }
         }
         // Leaving for another tab docks the player rather than closing it.

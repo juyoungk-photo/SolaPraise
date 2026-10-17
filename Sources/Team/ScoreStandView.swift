@@ -340,6 +340,11 @@ struct ScoreStandView: View {
     /// What the reader needs to trust the default: where the chart started,
     /// where it is now, and why.
     private func keyLine(_ item: ScoreStandItem, _ state: ScoreStandModel.State) -> String {
+        if state.isReading { return "코드를 읽는 중…" }
+        guard state.isRead else {
+            return "악보 그대로 보는 중 — 키를 바꾸거나 코드표·편집을 열면 코드를 읽습니다."
+                + (item.teamKey.map { " (순서의 키 \($0))" } ?? "")
+        }
         guard state.chordCount > 0 else {
             return "코드를 찾지 못했습니다 — 손글씨, 사진 각도, 어두운 배경은 읽지 못할 수 있습니다."
         }
@@ -409,7 +414,7 @@ struct ScoreStandView: View {
         } else {
             VStack(spacing: 12) {
                 ProgressView().tint(.white)
-                Text("악보에서 코드를 읽는 중…")
+                Text("악보를 여는 중…")
                     .font(.callout)
                     .foregroundStyle(.white.opacity(0.7))
             }
@@ -454,7 +459,11 @@ struct ScoreStandView: View {
     private func songContent(_ song: ScoreStandItem) -> some View {
         if showsChart && !editing {
             chart(song)
-                .task(id: chartKey(song)) { if showsChart { await model.loadChart(song) } }
+                .task(id: chartKey(song)) {
+                    guard showsChart else { return }
+                    await model.ensureRead(song)
+                    await model.loadChart(song)
+                }
         } else {
             pages(song)
         }
@@ -572,8 +581,10 @@ struct ScoreStandView: View {
     @ViewBuilder
     private func keyGroup(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
-        let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        Button { model.step(item, -1) } label: { pill(Text("−")) }
+        // Unread counts as ready: the first press reads the chords.
+        let ready = state?.isReady == true && state?.isReading != true
+            && (state?.isRead == false || (state?.chordCount ?? 0) > 0)
+        Button { Task { await model.stepAsking(item, -1) } } label: { pill(Text("−")) }
             .disabled(!ready)
             .accessibilityLabel("반음 내리기")
 
@@ -589,11 +600,11 @@ struct ScoreStandView: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("지금 키 \(state.flatMap(ScoreStandModel.keyName) ?? "모름"), \(shiftLabel(state))")
 
-        Button { model.step(item, 1) } label: { pill(Text("+")) }
+        Button { Task { await model.stepAsking(item, 1) } } label: { pill(Text("+")) }
             .disabled(!ready)
             .accessibilityLabel("반음 올리기")
 
-        Button { model.toggleFlats(item) } label: {
+        Button { Task { await model.ensureRead(item); model.toggleFlats(item) } } label: {
             pill(Text("♯/♭").font(.system(size: 15, weight: .semibold)),
                  active: state?.flatsOverride != nil, wide: true)
         }
@@ -609,7 +620,8 @@ struct ScoreStandView: View {
 
     private func originalButton(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
-        let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
+        // Nothing is drawn over an unread page: it IS the original.
+        let ready = state?.isReady == true && state?.isRead == true && (state?.chordCount ?? 0) > 0
         return Button { model.toggleOriginal(item) } label: {
             pill(Text("원본"), active: state?.showsOriginal == true, wide: true)
         }
@@ -677,7 +689,9 @@ struct ScoreStandView: View {
             .menuOrder(.fixed)
             .accessibilityLabel("가사 간격")
         } else {
-            Button { editing.toggle() } label: {
+            Button {
+                if editing { editing = false } else { Task { await model.ensureRead(item); editing = true } }
+            } label: {
                 pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
             }
             .disabled(!(state?.isReady ?? false))
@@ -903,6 +917,12 @@ final class ScoreStandModel: ObservableObject {
         var flatsOverride: Bool?
         /// Chords moved, corrected, removed or added by hand on this device.
         var isEdited = false
+        /// The chords have been read (or a reading was kept). Until then the
+        /// page is shown as it is — reading is seconds a page, and asked for
+        /// only when something needs it: a key change, 코드표, 편집.
+        var isRead = false
+        /// A reading under way, for the stand to say so.
+        var isReading = false
 
         var chordCount: Int { pages.reduce(0) { $0 + $1.chords.count } }
 
@@ -1006,7 +1026,9 @@ final class ScoreStandModel: ObservableObject {
             shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
         }
         if let old = saved, !old.edited, old.version != ScoreRecognition.version { saved = nil }
-        guard var read = await ScoreTransposer.read(data: data, recognise: saved == nil, only: item.pages),
+        // The pages only: what is shown at once. Chords come from a kept
+        // reading, or are read when a key change, 코드표 or 편집 asks.
+        guard var read = await ScoreTransposer.read(data: data, recognise: false, only: item.pages),
               !read.pages.isEmpty else {
             // Drive answers a file that is not shared by link with a
             // sign-in page, which is neither a PDF nor an image.
@@ -1022,34 +1044,74 @@ final class ScoreStandModel: ObservableObject {
         if let saved, saved.pages.count == read.pages.count {
             for index in read.pages.indices { read.pages[index].chords = saved.pages[index] }
             state.isEdited = saved.edited
-        } else {
-            if saved != nil {
-                // The file changed shape since; read it afresh.
-                ScoreEditStore.remove(item.id)
-                if let fresh = await ScoreTransposer.read(data: data, only: item.pages) { read = fresh }
-            }
-            // After 다시 읽기, the shared corrections it set aside are
-            // remembered as seen, so they are not taken up again.
-            ScoreEditStore.save(read.pages.map(\.chords), edited: false, for: item.id,
-                                sharedFrom: rereading.contains(item.id) ? remoteId : nil)
-            rereading.remove(item.id)
+            state.isRead = true
+        } else if saved != nil {
+            // The file changed shape since; it is read again when asked.
+            ScoreEditStore.remove(item.id)
         }
         state.pages = read.pages
         state.source = read.source
-        // The chart's key: what its name says, if it says one — that is
-        // what was printed — and otherwise what its chords suggest.
-        let symbols = read.pages.flatMap { $0.chords.map(\.original) }
+        applyKeys(&state, item)
+        state.isReady = true
+        states[item.id] = state
+        Self.cache[item.id] = state
+        if state.isRead { recordKey(item) }
+        // After 다시 읽기, read again now: that is what was asked.
+        if rereading.contains(item.id) { await ensureRead(item) }
+    }
+
+    /// The chart's key: what its name says, if it says one — that is what
+    /// was printed — and otherwise what its chords suggest; and the shift to
+    /// the 순서's key.
+    private func applyKeys(_ state: inout State, _ item: ScoreStandItem) {
+        let symbols = state.pages.flatMap { $0.chords.map(\.original) }
         let hint = ScoreChordText.keyHint(in: item.attachment.name) ?? ScoreChordText.keyHint(in: item.song)
         state.estimatedRoot = ScoreChordText.likelyRoot(of: symbols)
         state.writtenKey = hint?.written
         state.scoreRoot = hint?.root ?? state.estimatedRoot
         state.defaultShift = state.scoreRoot.flatMap { ScoreRecognition.shift(fromRoot: $0, toKey: item.teamKey) }
-        // A shift the reader chose on this device wins over the default.
-        state.shift = Self.savedShift(for: item.id) ?? state.defaultShift ?? 0
-        state.isReady = true
-        states[item.id] = state
-        Self.cache[item.id] = state
-        recordKey(item)
+        // A shift the reader chose on this device wins over the default —
+        // and nothing is shifted before there are chords to shift.
+        state.shift = state.isRead ? (Self.savedShift(for: item.id) ?? state.defaultShift ?? 0) : 0
+    }
+
+    private var readingTasks: [String: Task<Void, Never>] = [:]
+
+    /// The chords, read now if they have not been: the first key change,
+    /// 코드표 or 편집 on a chart asks for this, and waits for it — once,
+    /// however many ask.
+    func ensureRead(_ item: ScoreStandItem) async {
+        guard let state = states[item.id], state.isReady, !state.isRead else { return }
+        if let running = readingTasks[item.id] { await running.value; return }
+        let task = Task { @MainActor in
+            update(item) { $0.isReading = true }
+            var data = ScoreFileCache.load(item.attachment.fileId)
+            if data == nil {
+                data = try? await URLSession.shared.data(from: item.attachment.url.directDownload).0
+            }
+            guard let data, let read = await ScoreTransposer.read(data: data, only: item.pages),
+                  var state = states[item.id], read.pages.count == state.pages.count else {
+                update(item) { $0.isReading = false }
+                note = "코드를 읽지 못했습니다."
+                return
+            }
+            for index in state.pages.indices { state.pages[index].chords = read.pages[index].chords }
+            state.isRead = true
+            state.isReading = false
+            applyKeys(&state, item)
+            states[item.id] = state
+            Self.cache[item.id] = state
+            // After 다시 읽기, the shared corrections it set aside are
+            // remembered as seen, so they are not taken up again.
+            let remoteId = team?.attachment(fileId: item.attachment.fileId)?.editsFileId ?? item.attachment.editsFileId
+            ScoreEditStore.save(state.pages.map(\.chords), edited: false, for: item.id,
+                                sharedFrom: rereading.contains(item.id) ? remoteId : nil)
+            rereading.remove(item.id)
+            recordKey(item)
+        }
+        readingTasks[item.id] = task
+        await task.value
+        readingTasks[item.id] = nil
     }
 
     /// The key the chart is now in, for the 예배표 to show beside the song.
@@ -1058,6 +1120,16 @@ final class ScoreStandModel: ObservableObject {
         // The key it is played in, even while 원본 is being looked at.
         state.showsOriginal = false
         ScoreKeyStore.set(Self.keyName(state), for: item.attachment.fileId)
+    }
+
+    /// A key change asked of a chart: its chords read first if they have
+    /// not been. That first time, the 순서's key — when there is one — is
+    /// the answer, and the press goes no further.
+    func stepAsking(_ item: ScoreStandItem, _ delta: Int) async {
+        let wasRead = states[item.id]?.isRead == true
+        await ensureRead(item)
+        if !wasRead, (states[item.id]?.shift ?? 0) != 0 { return }
+        step(item, delta)
     }
 
     func step(_ item: ScoreStandItem, _ delta: Int) {

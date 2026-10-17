@@ -99,6 +99,9 @@ struct WatchScreen: View {
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var managingQueue = false
+    @EnvironmentObject private var team: TeamStore
+    /// A chart already up for a song, on the stand.
+    @State private var standChart: ScoreStandItem?
     @AppStorage("word.series.direction") private var seriesDirection = DailySeries.Direction.off.rawValue
     @State private var leadSheet: SavedSong?
     /// A channel whose page is open, from tapping its name.
@@ -233,6 +236,10 @@ struct WatchScreen: View {
         .fullScreenCover(item: $performanceSet) { set in
             PerformanceModeView(songs: set.songs)
         }
+        .fullScreenCover(item: $standChart) { item in
+            ScoreStandView(items: [item],
+                           versions: [item.song: charts(for: item.song, videoId: nil)])
+        }
         .onAppear {
             loadWorshipSet()
             hasExternalInput = AudioEngine.hasExternalInput
@@ -355,26 +362,22 @@ struct WatchScreen: View {
                             // and the chart you want is usually for the one
                             // you are about to rehearse rather than the one
                             // currently sounding.
+                            // A status, not a search: whether the song has a
+                            // chart up — and if so, one tap opens it on the
+                            // stand. Grey with none. Searching lives under
+                            // the song playing.
                             if isWorship(item) {
-                                SheetMusicMenu(title: item.title, channel: item.channelTitle, videoId: item.id) {
-                                    Image(systemName: "doc.text.magnifyingglass")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                                let chart = charts(for: item.title, videoId: item.id).first
+                                Button { standChart = chart } label: {
+                                    Image(systemName: "music.note.list")
+                                        .font(.footnote.weight(chart == nil ? .regular : .semibold))
+                                        .foregroundStyle(chart == nil ? Color.secondary.opacity(0.35) : Color.accentColor)
                                         .frame(width: 36, height: 40)
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-
-                                AudioSourceMenu(title: item.title,
-                                                seconds: item.durationSeconds,
-                                                artist: item.channelTitle) {
-                                    Image(systemName: "waveform.badge.magnifyingglass")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 36, height: 40)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
+                                .disabled(chart == nil)
+                                .accessibilityLabel(chart == nil ? "올린 악보 없음" : "악보 연주 모드")
                             }
                         }
                         .padding(.horizontal, 16)
@@ -883,7 +886,9 @@ struct WatchScreen: View {
                 ScripturePanel(passage: passage)
             }
 
-            if !sheetsForThisVideo.isEmpty {
+            // The team's charts for this song first, then any the app made
+            // by listening.
+            if let current, !sheetsForThisVideo.isEmpty || !charts(for: current.title, videoId: current.id).isEmpty {
                 savedSheetsList
             }
 
@@ -935,6 +940,12 @@ struct WatchScreen: View {
         return allSongs.filter { $0.videoId == id }
     }
 
+    /// Charts up for a song — attached on a 콘티, a 콘티 file's pages, or
+    /// kept in 작업실 (ChartLookup).
+    private func charts(for title: String, videoId: String?) -> [ScoreStandItem] {
+        ChartLookup.charts(videoId: videoId, title: title, team: team)
+    }
+
     private var savedSheetsList: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -942,12 +953,42 @@ struct WatchScreen: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button { performanceSet = PerformanceSet(songs: sheetsForThisVideo) } label: {
-                    Label("연주 모드", systemImage: "music.note.tv")
-                        .font(.caption)
+                if !sheetsForThisVideo.isEmpty {
+                    Button { performanceSet = PerformanceSet(songs: sheetsForThisVideo) } label: {
+                        Label("연주 모드", systemImage: "music.note.tv")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
+            }
+
+            // Uploaded: each opens on the stand, in the 순서's key.
+            ForEach(current.map { charts(for: $0.title, videoId: $0.id) } ?? []) { chart in
+                Button { standChart = chart } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "music.note.list")
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(chart.versionLabel ?? chart.attachment.name)
+                                .font(.footnote)
+                                .lineLimit(1)
+                                .foregroundStyle(Color.primary)
+                            Text([chart.teamKey.map { "연주 키 \($0)" },
+                                  chart.attachment.fileId.hasPrefix("local-") ? "작업실" : "팀 악보"]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Text("연주 모드").font(.caption2.weight(.semibold)).foregroundStyle(.tint)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
             ForEach(sheetsForThisVideo) { song in

@@ -1041,6 +1041,22 @@ struct ServicePrepView: View {
         }
     }
 
+    /// A song plays as the 콘티: every song of the service in order,
+    /// starting here — next and previous go through the set, as in a
+    /// playlist. Anything else plays alone.
+    private func play(_ item: PlanItem, in service: TeamService, videoId id: String) {
+        if item.kind == .song {
+            let songs = team.plan(for: service).filter { $0.kind == .song && $0.videoId != nil }
+            let queue = songs.compactMap { song in
+                song.videoId.map { PlayableVideo(id: $0, title: song.title) }
+            }
+            let start = songs.firstIndex { $0.id == item.id } ?? 0
+            host.play(queue: queue, startIndex: start, purpose: .worship, curated: true)
+        } else {
+            host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
+        }
+    }
+
     private func planRow(_ item: PlanItem, startsAt: Date?,
                          in service: TeamService) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1135,6 +1151,12 @@ struct ServicePrepView: View {
                     Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
+            // The song itself is the way to hear it: a tap on its title plays
+            // it, as the ▶ beside it does. The buttons inside keep their own.
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if item.kind == .song, let id = item.videoId { play(item, in: service, videoId: id) }
+            }
 
             Spacer(minLength: 0)
 
@@ -1189,19 +1211,7 @@ struct ServicePrepView: View {
 
             if let id = item.videoId {
                 Button {
-                    // A song plays as the 콘티: every song of the service in
-                    // order, starting here — next and previous go through
-                    // the set, as in a playlist. Anything else plays alone.
-                    if item.kind == .song {
-                        let songs = team.plan(for: service).filter { $0.kind == .song && $0.videoId != nil }
-                        let queue = songs.compactMap { song in
-                            song.videoId.map { PlayableVideo(id: $0, title: song.title) }
-                        }
-                        let start = songs.firstIndex { $0.id == item.id } ?? 0
-                        host.play(queue: queue, startIndex: start, purpose: .worship, curated: true)
-                    } else {
-                        host.play(queue: [PlayableVideo(id: id, title: item.title)], startIndex: 0)
-                    }
+                    play(item, in: service, videoId: id)
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
                         .frame(width: Self.playColumn)
