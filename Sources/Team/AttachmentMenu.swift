@@ -30,6 +30,14 @@ struct AttachmentMenu<Content: View>: View {
     /// Empty means the attachment belongs to the service rather than a song.
     let song: String
     let sheetId: String?
+    /// For finding a chart on the web from the list: the channel names the
+    /// song's team, and its upload's own links come first.
+    var channel: String? = nil
+    var published: [SheetMusicLink] = []
+    /// Where a chart found on the web goes. Nil hides 「웹에서 찾기」.
+    var finds: ScoreDestination? = nil
+    /// The 코드표 the app made by listening, when there is one.
+    var appChart: (() -> Void)? = nil
     @ViewBuilder var label: Content
 
     /// Several at once: a song often has a chart, a lead sheet and a
@@ -133,7 +141,31 @@ struct AttachmentMenu<Content: View>: View {
                         }
                     }
                 }
+                if let appChart {
+                    Section("앱이 소리로 만든 코드표") {
+                        Button {
+                            showsList = false
+                            later(appChart)
+                        } label: {
+                            Label("코드표 열기", systemImage: "music.quarternote.3")
+                        }
+                    }
+                }
                 Section {
+                    // Searching needs no account; what is found is kept in
+                    // 작업실 when it cannot be attached.
+                    if let finds {
+                        NavigationLink {
+                            List {
+                                SheetMusicLinks(title: song, channel: channel, published: published,
+                                                destination: finds)
+                            }
+                            .navigationTitle("웹에서 악보 찾기")
+                            .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            Label("웹에서 찾기", systemImage: "doc.text.magnifyingglass")
+                        }
+                    }
                     if team.canAttach {
                         Button {
                             showsList = false

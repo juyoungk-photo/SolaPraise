@@ -1027,25 +1027,66 @@ struct ServicePrepView: View {
         return f
     }()
 
-    /// This song's chart, alone on the stand: the one thing on the row
-    /// that says 악보 in words. 연주모드 below the 순서 opens the whole set.
+    /// This song's chart, one tap away and the only 악보 mark on the row:
+    /// the charts put up for it, on the stand — or, when nobody has put one
+    /// up, the 코드표 the app made by listening. 📎 beside it is where
+    /// charts are added, found and taken off; 연주모드 below the 순서 opens
+    /// the whole set.
+    ///
+    /// It used to be five marks — this button, 「악보 G」 under the title,
+    /// a green 「악보」 for the app's 코드표, 🔍 and a counted 📎 — which
+    /// read as five different things about one chart.
     @ViewBuilder
-    private func songChartButton(_ item: PlanItem, in service: TeamService) -> some View {
-        if songVersions(service)[item.title]?.isEmpty == false {
-            Button { standSong = SongStand(service: service, song: item.title) } label: {
+    private func chartButton(_ item: PlanItem, in service: TeamService) -> some View {
+        let uploaded = songVersions(service)[item.title]?.isEmpty == false
+        let made = uploaded ? nil : existingSheet(forTitle: item.title)
+        if uploaded || made != nil {
+            // The key the chart was last shown in, only when it is not the
+            // 순서's: a chart left in the wrong key is caught before Sunday.
+            let off = uploaded ? offKey(item, in: service) : nil
+            let tint = off == nil ? Color.accentColor : .orange
+            Button {
+                if uploaded { standSong = SongStand(service: service, song: item.title) } else { openChart = made }
+            } label: {
                 // Not a Label: in a list row it takes the row's icon column.
+                // The word on iPad; a phone gives the title the width.
                 HStack(spacing: 3) {
                     Image(systemName: "music.note.list")
-                    Text("악보")
+                    if isWide { Text("악보") }
+                    if let off { Text(off) }
                 }
                 .font(.caption.weight(.semibold))
                 .fixedSize()
-                .padding(.horizontal, 9).padding(.vertical, 5)
-                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                .padding(.horizontal, isWide ? 9 : 8).padding(.vertical, 5)
+                .background(Capsule().fill(tint.opacity(0.15)))
+                .frame(minHeight: Self.rowButtonHeight)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 보기")
+            .foregroundStyle(tint)
+            .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 보기"
+                                + (off.map { ", 악보는 \($0) 키" } ?? ""))
+        }
+    }
+
+    /// The key the song's chart was last shown in, when it differs from the
+    /// key the 순서 gives it.
+    private func offKey(_ item: PlanItem, in service: TeamService) -> String? {
+        guard let planned = item.key, let chartKey = chartKey(for: item, in: service) else { return nil }
+        let chartRoot = ScoreRecognition.keyRoot(chartKey.replacingOccurrences(of: "♭", with: "b")
+            .replacingOccurrences(of: "♯", with: "#"))
+        return ScoreRecognition.keyRoot(planned) == chartRoot ? nil : chartKey
+    }
+
+    /// Who leads the song, then which recording: one quiet line.
+    private func songDetails(person: String?, details: [String]) -> Text? {
+        let rest = details.joined(separator: " · ")
+        switch (person, rest.isEmpty) {
+        case (nil, true): return nil
+        case (let person?, true): return Text(person).foregroundStyle(.secondary)
+        case (nil, false): return Text(rest).foregroundStyle(.tertiary)
+        case (let person?, false):
+            return Text("\(Text(person).foregroundStyle(.secondary))  \(Text(rest).foregroundStyle(.tertiary))")
         }
     }
 
@@ -1088,71 +1129,38 @@ struct ServicePrepView: View {
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 3) {
-                // A song as the song: its title first, the hymn number
-                // beside it, and which recording — the team, the year —
-                // one quiet line under it (PlanSongTitle).
+                // A song as the song: its title and key first, then who
+                // leads it and which recording — the hymn number, the team,
+                // the year — one quiet line under it (PlanSongTitle).
                 if item.kind == .song {
                     let parts = PlanSongTitle.split(item.title, channel: channelTitle(forVideo: item.videoId))
-                    // One text, so the number wraps after the title on a
-                    // phone instead of squeezing it to 「…」.
-                    let number = parts.hymn.map {
-                        Text("  찬송가 \($0)장")
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    } ?? Text("")
-                    // The key it is played in, on the same line: what a
-                    // player looks for first.
+                    // The key it is played in, right after the title: what
+                    // a player looks for first. One text, so on a phone the
+                    // key wraps with the title rather than squeezing it.
                     let key = item.key.map {
                         Text("  \($0)").font(.subheadline.weight(.bold)).foregroundStyle(Color.accentColor)
                     } ?? Text("")
-                    Text("\(Text(parts.title).font(.subheadline.weight(.medium)))\(key)\(number)")
+                    Text("\(Text(parts.title).font(.subheadline.weight(.medium)))\(key)")
                         .fixedSize(horizontal: false, vertical: true)
-                    if !parts.meta.isEmpty {
-                        Text(parts.meta.joined(separator: " · "))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                    if let details = songDetails(person: item.person,
+                                                 details: (parts.hymn.map { ["찬송가 \($0)장"] } ?? []) + parts.meta) {
+                        details.font(.caption2).lineLimit(1)
                     }
                 } else {
                     Text(item.title).font(.subheadline)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 6) {
-                    if item.kind != .song {
+                if item.kind != .song {
+                    HStack(spacing: 6) {
                         Text(item.kind.label)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                    }
-                    if item.kind != .song, let key = item.key {
-                        Text(key).font(.caption.weight(.semibold)).foregroundStyle(.tint)
-                    }
-                    // The key the attached chart was last shown in on the
-                    // stand. Orange when it is not the 순서's key, so a chart
-                    // left in the wrong key is caught before Sunday.
-                    if item.kind == .song, let chartKey = chartKey(for: item, in: service) {
-                        let matches = item.key.flatMap(ScoreRecognition.keyRoot)
-                            == ScoreRecognition.keyRoot(chartKey.replacingOccurrences(of: "♭", with: "b")
-                                .replacingOccurrences(of: "♯", with: "#"))
-                        Label("악보 \(chartKey)", systemImage: "music.note.list")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(matches || item.key == nil ? Color.secondary : Color.orange)
-                            .accessibilityLabel("악보 키 \(chartKey)")
-                    }
-                    if let person = item.person {
-                        Text(person).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    if !isWide, item.kind == .song { songChartButton(item, in: service) }
-                    if item.kind == .song, let chart = existingSheet(forTitle: item.title) {
-                        // Tappable. It used to be a label that said a chart
-                        // existed and gave you no way to it — the one place
-                        // in the app that knew the team had already worked
-                        // this song out, and a dead end.
-                        Button { openChart = chart } label: {
-                            Label("악보", systemImage: "music.quarternote.3")
-                                .font(.caption2)
-                                .foregroundStyle(.green)
+                        if let key = item.key {
+                            Text(key).font(.caption.weight(.semibold)).foregroundStyle(.tint)
                         }
-                        .buttonStyle(.plain)
+                        if let person = item.person {
+                            Text(person).font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if let notes = item.notes {
@@ -1168,53 +1176,31 @@ struct ServicePrepView: View {
 
             Spacer(minLength: 0)
 
-            // On iPad beside the row's buttons; on a phone, where the title
-            // needs the width, under it — see songChartButton.
-            if isWide, item.kind == .song { songChartButton(item, in: service) }
-
-            if item.kind == .song {
-                // 악보 only. Analysing audio lives in 작업실 and the
-                // player; here it was one more item above what people came
-                // to the menu for.
-                Menu {
-                    SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId),
-                                    published: sheetLinks(forVideo: item.videoId),
-                                    destination: ScoreDestination(service: service, song: item.title, key: item.key))
-                } label: {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .menuOrder(.fixed)
-                .buttonStyle(.plain)
-            }
+            if item.kind == .song { chartButton(item, in: service) }
 
             // Songs only. 악보 belong to a song; a 대표기도 or a 광고 line
             // has nothing to attach, and a clip on every row turned the
             // 순서 into a column of identical icons.
+            //
+            // Plain whatever is attached: the 악보 button beside it says
+            // whether there is a chart. This is where one is added, found
+            // on the web, or taken off.
             if item.kind == .song {
-            AttachmentMenu(service: service, song: item.title, sheetId: sheetId) {
-                // Its own files, and its pages of a 콘티 file if any.
-                let fromConti = team.attachments(for: service).contains {
-                    $0.belongsToService && !ContiPages.isBuilt($0)
-                        && !ContiPages.pages(of: $0.fileId, for: item.title).isEmpty
+                let madeChart = existingSheet(forTitle: item.title)
+                AttachmentMenu(service: service, song: item.title, sheetId: sheetId,
+                               channel: channelTitle(forVideo: item.videoId),
+                               published: sheetLinks(forVideo: item.videoId),
+                               finds: ScoreDestination(service: service, song: item.title, key: item.key),
+                               appChart: madeChart.map { chart in { openChart = chart } }) {
+                    Image(systemName: "paperclip")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 30, minHeight: Self.rowButtonHeight)
+                        .contentShape(Rectangle())
                 }
-                let count = team.attachments(for: service, song: item.title).count + (fromConti ? 1 : 0)
-                HStack(spacing: 2) {
-                    Image(systemName: count > 0 ? "paperclip.circle.fill" : "paperclip")
-                    if count > 1 {
-                        Text("\(count)").font(.caption2.monospacedDigit())
-                    }
-                }
-                .font(.footnote)
-                .foregroundStyle(count > 0 ? Color.accentColor : .secondary)
-                .frame(minWidth: 30, minHeight: 40)
-                .contentShape(Rectangle())
-            }
-            .environmentObject(team)
-            .environmentObject(auth)
-            .environmentObject(planning)
+                .environmentObject(team)
+                .environmentObject(auth)
+                .environmentObject(planning)
             }
 
             if let id = item.videoId {
@@ -1222,7 +1208,7 @@ struct ServicePrepView: View {
                     play(item, in: service, videoId: id)
                 } label: {
                     Image(systemName: "play.circle.fill").font(.title3)
-                        .frame(width: Self.playColumn)
+                        .frame(width: Self.playColumn, height: Self.rowButtonHeight)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
@@ -1909,6 +1895,8 @@ struct ServicePrepView: View {
 
     /// The column the 순서's ▶ buttons stand in.
     private static let playColumn: CGFloat = 34
+    /// The 순서 row's buttons share one height, so they line up.
+    private static let rowButtonHeight: CGFloat = 32
 
     /// What a tapped chip was about: a part, a person, or both.
     struct AssignmentTarget: Identifiable {
