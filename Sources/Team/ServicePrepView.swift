@@ -915,10 +915,10 @@ struct ServicePrepView: View {
                 }
             }
 
-            // Right under the 순서: one button for adding, moving and
-            // removing lines — a line added at the end is usually moved
-            // next. Then the 콘티 and the stand, 콘티 first: it is what a
-            // leader puts in before anyone plays from it.
+            servicePDFRow(service)
+
+            // Then one button for adding, moving and removing lines — a
+            // line added at the end is usually moved next.
             if !team.isReadOnly {
                 Button {
                     reordering = service
@@ -927,8 +927,6 @@ struct ServicePrepView: View {
                 }
                 .buttonStyle(.borderless)
             }
-
-            servicePDFRow(service)
 
             if !songs.isEmpty {
 
@@ -1030,7 +1028,7 @@ struct ServicePrepView: View {
     /// This song's chart, one tap away and the only 악보 mark on the row:
     /// the charts put up for it, on the stand — or, when nobody has put one
     /// up, the 코드표 the app made by listening. 📎 beside it is where
-    /// charts are added, found and taken off; 연주모드 below the 순서 opens
+    /// charts are added, found and taken off; 전체 악보 under the 순서 opens
     /// the whole set.
     ///
     /// It used to be five marks — this button, 「악보 G」 under the title,
@@ -1050,15 +1048,8 @@ struct ServicePrepView: View {
             } label: {
                 // Not a Label: in a list row it takes the row's icon column.
                 // The word on iPad; a phone gives the title the width.
-                HStack(spacing: 3) {
-                    Image(systemName: "music.note.list")
-                    if isWide { Text("악보") }
-                    if let off { Text(off) }
-                }
-                .font(.caption.weight(.semibold))
-                .fixedSize()
-                .padding(.horizontal, isWide ? 9 : 8).padding(.vertical, 5)
-                .background(Capsule().fill(tint.opacity(0.15)))
+                ChartBadge(text: [isWide ? "악보" : nil, off].compactMap { $0 }.joined(separator: " "),
+                           systemImage: "music.note.list", tint: tint)
                 .frame(minHeight: Self.rowButtonHeight)
                 .contentShape(Rectangle())
             }
@@ -1253,37 +1244,36 @@ struct ServicePrepView: View {
         let contis = team.contis(for: service)
         let stand = standItems(service)
 
-        // Two choices: play from the charts, or the service's 콘티 — every
-        // version, the folder, and the ways to add or make one.
+        // Two choices, on the right under 찬양 이어 듣기 and drawn like
+        // each song's 악보: the service's 콘티 — every version, the folder,
+        // the ways to add or make one — and the whole set on the stand.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
-            VStack(alignment: .leading, spacing: 6) {
-                // 콘티 first, then the stand that plays from it — the order a
-                // leader goes in, and the first is the nearer thumb reach.
-                HStack(spacing: 22) {
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
                     contiMenu(service, contis: contis, built: built, pieces: pieces)
                     standButton(service, stand: stand)
-                    Spacer(minLength: 0)
                 }
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
-                .buttonStyle(.borderless)
 
-                if preparingStand {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("콘티 파일을 곡별로 나누는 중…")
+                Group {
+                    if preparingStand {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("콘티 파일을 곡별로 나누는 중…")
+                        }
+                    } else {
+                        Text(contis.isEmpty && pieces.isEmpty
+                             ? "콘티 폴더에 날짜로 시작하는 콘티 PDF를 두거나, 곡마다 📎로 악보를 올리세요."
+                             : [contis.first.map { "콘티 \(($0.name as NSString).deletingPathExtension)" },
+                                pieces.isEmpty ? nil : "곡별 악보 \(pieces.count)개"]
+                                .compactMap { $0 }.joined(separator: " · ") + " — 전체 악보는 순서의 키로 봅니다.")
+                            .multilineTextAlignment(.trailing)
                     }
-                    .font(.caption2).foregroundStyle(.secondary)
-                } else {
-                    Text(contis.isEmpty && pieces.isEmpty
-                         ? "콘티 폴더에 날짜로 시작하는 콘티 PDF를 두거나, 곡마다 📎로 악보를 올리세요."
-                         : [contis.first.map { "콘티 \(($0.name as NSString).deletingPathExtension)" },
-                            pieces.isEmpty ? nil : "곡별 악보 \(pieces.count)개"]
-                            .compactMap { $0 }.joined(separator: " · ") + " — 연주모드에서 순서의 키로 봅니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -1297,9 +1287,10 @@ struct ServicePrepView: View {
                 standService = service
             }
         } label: {
-            Label("악보 연주모드", systemImage: "music.note.list")
-                .fontWeight(.semibold)
+            ChartBadge(text: "전체 악보", systemImage: "music.note.list")
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(stand.isEmpty ? Color.secondary : Color.accentColor)
         .disabled(stand.isEmpty || preparingStand)
     }
 
@@ -1358,12 +1349,15 @@ struct ServicePrepView: View {
                 .disabled(pieces.isEmpty || buildingPDF)
             }
         } label: {
+            // Making one is what the button is for; the versions already
+            // made head its menu.
             HStack(spacing: 4) {
-                Label(contis.isEmpty ? "콘티" : "콘티 \(contis.count)",
-                      systemImage: contis.isEmpty ? "doc.badge.plus" : "doc.richtext")
                 if buildingPDF { ProgressView().controlSize(.small) }
+                ChartBadge(text: "콘티 생성", systemImage: "doc.badge.plus")
             }
         }
+        .menuOrder(.fixed)
+        .foregroundStyle(Color.accentColor)
     }
 
     /// The service's song charts in 순서 order, each with the key the 순서
@@ -2454,5 +2448,26 @@ struct ServicePrepView: View {
             name: auth.displayName ?? email,
             sheetId: sheetId
         )
+    }
+}
+
+/// The 순서's chart buttons — a song's 악보, 콘티 생성, 전체 악보 — drawn
+/// alike, so they read as one kind of thing. Not a Label: in a list row a
+/// Label takes the row's icon column and spreads apart.
+private struct ChartBadge: View {
+    let text: String
+    let systemImage: String
+    var tint: Color = .accentColor
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+            if !text.isEmpty { Text(text) }
+        }
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, text.isEmpty ? 8 : 9).padding(.vertical, 5)
+        .background(Capsule().fill(tint.opacity(0.15)))
     }
 }
