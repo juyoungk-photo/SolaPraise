@@ -1296,7 +1296,11 @@ struct ServicePrepView: View {
                     // week's overwrites this one: kept in the archive
                     // playlist, offered once the service is over, where
                     // "what we sang" is a fact rather than a plan.
-                    if hasHappened(service) { archiveBadge(service) }
+                    // Rechecked each minute: the badge comes when the
+                    // service ends, not on the next redraw after it.
+                    TimelineView(.everyMinute) { _ in
+                        if hasHappened(service) { archiveBadge(service) }
+                    }
                     contiMenu(service, contis: contis, built: built, pieces: pieces)
                     standButton(service, stand: stand)
                 }

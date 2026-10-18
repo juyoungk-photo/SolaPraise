@@ -13,11 +13,17 @@ import SwiftUI
 
 struct ChordEntrySheet: View {
     let title: String
+    /// The page as printed round the chord, its place outlined: the reading
+    /// is checked against it by eye.
+    var original: UIImage? = nil
     let message: String
     /// The chord being corrected, or empty when adding.
     let initial: String
     /// When adding: the key shown, so the wheels start on its chord.
     let startRoot: String?
+    /// iPad's popover: narrow, and taller wheels — more of each list shows
+    /// above and below the choice.
+    var compact = false
     let onSave: (String) -> Void
     let onCancel: () -> Void
 
@@ -28,6 +34,18 @@ struct ChordEntrySheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 14) {
+                if let original {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("원본").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        Image(uiImage: original)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: 150)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .accessibilityLabel("인쇄된 악보의 이 자리")
+                    }
+                }
                 TextField("예: G, D/F#, Em7", text: $text)
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .multilineTextAlignment(.center)
@@ -48,7 +66,7 @@ struct ChordEntrySheet: View {
                         $0.isEmpty ? "없음" : "/" + ChordParts.display($0)
                     }
                 }
-                .frame(height: 190)
+                .frame(height: compact ? 270 : 190)
 
                 Text(message)
                     .font(.footnote)
@@ -76,7 +94,8 @@ struct ChordEntrySheet: View {
                 if ChordParts(text) != turned { text = turned.text }
             }
         }
-        .presentationDetents([.medium, .large])
+        // Taller with the printed piece above, so the wheels still show.
+        .presentationDetents(original == nil ? [.medium, .large] : [.fraction(0.72), .large])
         .onAppear {
             if let read = ChordParts(initial) {
                 parts = read

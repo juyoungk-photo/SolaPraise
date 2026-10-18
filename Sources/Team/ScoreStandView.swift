@@ -129,6 +129,8 @@ struct ScoreStandView: View {
         let chord: UUID?
         let point: CGPoint
         var text: String
+        /// The page as printed round the chord, to check the reading by eye.
+        var original: UIImage? = nil
         let id = UUID()
     }
 
@@ -211,7 +213,10 @@ struct ScoreStandView: View {
                             titleVisibility: .hidden, presenting: chordAction) { action in
             Button("코드 고치기") {
                 let shown = item.map { model.displayed(action.chord, page: action.page, in: $0) } ?? ""
-                entry = ChordEntry(page: action.page, chord: action.chord, point: .zero, text: shown ?? "")
+                let place = item.flatMap { model.states[$0.id]?.pages[action.page].chords.first { $0.id == action.chord } }
+                    .map { CGPoint(x: $0.placed.midX, y: $0.placed.midY) } ?? .zero
+                entry = ChordEntry(page: action.page, chord: action.chord, point: place, text: shown ?? "",
+                                   original: item.flatMap { model.originalPatch($0, page: action.page, chord: action.chord) })
                 chordAction = nil
             }
             Button("이 코드 지우기", role: .destructive) {
@@ -237,28 +242,37 @@ struct ScoreStandView: View {
             Button("취소", role: .cancel) {}
         }
         // A sheet, not an alert: the chord typed, or turned to on wheels.
-        .sheet(isPresented: Binding(get: { entry != nil }, set: { if !$0 { entry = nil } })) {
-            if let current = entry {
-                ChordEntrySheet(
-                    title: current.chord == nil ? "코드 추가" : "코드 고치기",
-                    message: current.chord != nil
-                        ? "지금 화면에 보이는 키로 고르거나 적으세요."
-                        : current.point != Self.addPoint
-                            ? (probeFound ? "그 자리에서 읽은 코드입니다. 맞으면 저장하고, 아니면 고치세요."
-                                          : "그 자리에서 코드를 읽지 못했습니다. 고르거나 적으면 그 자리에 놓입니다.")
-                            : "지금 화면에 보이는 키로 고르거나 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요.",
-                    initial: current.text,
-                    startRoot: item.flatMap(shownKey),
-                    onSave: { text in
-                        if let item, let failure = model.write(text, item, page: current.page,
-                                                               chord: current.chord, at: current.point) {
-                            model.note = failure
-                        }
-                        entry = nil
-                    },
-                    onCancel: { entry = nil })
-            }
+        // On iPad a popover at the chord instead (ScorePageView), narrow,
+        // the page still in view beside it.
+        .sheet(isPresented: Binding(get: { entry != nil && sizeClass != .regular },
+                                    set: { if !$0 { entry = nil } })) {
+            if let current = entry { chordEntryView(current) }
         }
+    }
+
+    /// 코드 추가 / 코드 고치기 for an entry — as a sheet on a phone, a
+    /// popover on iPad.
+    private func chordEntryView(_ current: ChordEntry) -> some View {
+        ChordEntrySheet(
+            title: current.chord == nil ? "코드 추가" : "코드 고치기",
+            original: current.original,
+            message: current.chord != nil
+                ? "지금 화면에 보이는 키로 고르거나 적으세요."
+                : current.point != Self.addPoint
+                    ? (probeFound ? "그 자리에서 읽은 코드입니다. 맞으면 저장하고, 아니면 고치세요."
+                                  : "그 자리에서 코드를 읽지 못했습니다. 고르거나 적으면 그 자리에 놓입니다.")
+                    : "지금 화면에 보이는 키로 고르거나 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요.",
+            initial: current.text,
+            startRoot: item.flatMap(shownKey),
+            compact: sizeClass == .regular,
+            onSave: { text in
+                if let item, let failure = model.write(text, item, page: current.page,
+                                                       chord: current.chord, at: current.point) {
+                    model.note = failure
+                }
+                entry = nil
+            },
+            onCancel: { entry = nil })
     }
 
     private var stand: some View {
@@ -335,7 +349,8 @@ struct ScoreStandView: View {
             let found = await model.readChord(item, page: page, at: point)
             probing = false
             probeFound = found != nil
-            entry = ChordEntry(page: page, chord: nil, point: found?.center ?? point, text: found?.text ?? "")
+            entry = ChordEntry(page: page, chord: nil, point: found?.center ?? point, text: found?.text ?? "",
+                               original: model.originalPatch(item, page: page, around: found?.center ?? point))
         }
     }
 
@@ -648,7 +663,10 @@ struct ScoreStandView: View {
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
                             onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) },
                             onRestore: { id in model.restore(item, page: pageIndex, chord: id) },
-                            onTapPage: { point in probe(item, page: pageIndex, at: point) })
+                            onTapPage: { point in probe(item, page: pageIndex, at: point) },
+                            popoverAt: sizeClass == .regular && entry?.page == pageIndex ? entry?.point : nil,
+                            popover: { entry.map { AnyView(chordEntryView($0)) } ?? AnyView(EmptyView()) },
+                            onPopoverDismiss: { entry = nil })
                     }
                 }
                 .padding(.horizontal, 12)
@@ -1132,6 +1150,10 @@ private struct ScorePageView: View {
     var onRestore: (UUID) -> Void = { _ in }
     /// A tap on the page, off any chord, while editing — normalised.
     var onTapPage: (CGPoint) -> Void = { _ in }
+    /// On iPad, 코드 추가 / 고치기 as a popover pointing at this spot.
+    var popoverAt: CGPoint? = nil
+    var popover: () -> AnyView = { AnyView(EmptyView()) }
+    var onPopoverDismiss: () -> Void = {}
 
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
@@ -1148,6 +1170,22 @@ private struct ScorePageView: View {
                         chords: page.chords, chordHeight: page.chordHeight, shift: shift,
                         useFlats: useFlats, scale: scale, alwaysDraw: editing, in: size)
                     ZStack(alignment: .topLeading) {
+                        // The popover's anchor: the chord's spot on the page.
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .popover(isPresented: Binding(get: { popoverAt != nil },
+                                                          set: { if !$0 { onPopoverDismiss() } }),
+                                     attachmentAnchor: .rect(.rect(CGRect(
+                                        x: (popoverAt?.x ?? 0) * size.width - 14, y: (popoverAt?.y ?? 0) * size.height - 10,
+                                        width: 28, height: 20))),
+                                     // Below a chord in the top half of the
+                                     // page, above one lower down: up there,
+                                     // a popover above it ran off the screen.
+                                     arrowEdge: (popoverAt?.y ?? 1) < 0.5 ? .top : .bottom) {
+                                popover()
+                                    .frame(width: 340, height: 560)
+                                    .presentationCompactAdaptation(.popover)
+                            }
                         // Under everything: the page itself, pressed where a
                         // chord was missed.
                         if editing {
@@ -1722,6 +1760,53 @@ final class ScoreStandModel: ObservableObject {
             guard let (original, center) = nearest ?? lone else { return nil }
             return (ScoreTransposer.symbol(original, by: shift, useFlats: flats) ?? original, center)
         }.value
+    }
+
+    /// The page as printed round a chord: its line and a little of the staff
+    /// under it, the chord's place outlined — shown over 코드 고치기 and
+    /// over a chord read from a tap, so the reading is checked by eye
+    /// against what is printed, not trusted.
+    func originalPatch(_ item: ScoreStandItem, page: Int, chord: UUID) -> UIImage? {
+        guard let state = states[item.id], state.pages.indices.contains(page),
+              let found = state.pages[page].chords.first(where: { $0.id == chord }) else { return nil }
+        return Self.patch(state.pages[page], box: found.box)
+    }
+
+    func originalPatch(_ item: ScoreStandItem, page: Int, around point: CGPoint) -> UIImage? {
+        guard let state = states[item.id], state.pages.indices.contains(page) else { return nil }
+        let h = state.pages[page].chordHeight
+        return Self.patch(state.pages[page], box: CGRect(x: point.x - h, y: point.y - h / 2, width: h * 2, height: h))
+    }
+
+    private static func patch(_ page: ScoreTransposer.Page, box: CGRect) -> UIImage? {
+        guard let image = page.image.cgImage else { return nil }
+        let h = max(page.chordHeight, box.height)
+        // The chord and its neighbours, the top of the staff under it: big
+        // enough to read the printed symbol at a glance.
+        let area = CGRect(x: box.midX - 0.12, y: box.minY - h * 0.9, width: 0.24, height: h * 3.6)
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        let width = CGFloat(image.width), tall = CGFloat(image.height)
+        let pixels = CGRect(x: area.minX * width, y: area.minY * tall,
+                            width: area.width * width, height: area.height * tall).integral
+        guard !area.isNull, let crop = image.cropping(to: pixels) else { return nil }
+        let size = CGSize(width: crop.width, height: crop.height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIImage(cgImage: crop).draw(in: CGRect(origin: .zero, size: size))
+            // The chord's place, outlined.
+            let mark = CGRect(x: (box.minX - area.minX) / area.width * size.width,
+                              y: (box.minY - area.minY) / area.height * size.height,
+                              width: box.width / area.width * size.width,
+                              height: box.height / area.height * size.height)
+                .insetBy(dx: -size.height * 0.03, dy: -size.height * 0.03)
+            UIColor.systemOrange.setStroke()
+            let path = UIBezierPath(roundedRect: mark, cornerRadius: 3)
+            path.lineWidth = max(2, size.height * 0.015)
+            path.stroke()
+        }
     }
 
     /// The chord as the reader sees it now — the key on screen.
