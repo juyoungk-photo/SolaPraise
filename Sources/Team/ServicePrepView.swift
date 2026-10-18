@@ -313,13 +313,19 @@ struct ServicePrepView: View {
                                versions: songVersions(service),
                                setFileName: nextContiName(service),
                                exportOnOpen: makingConti,
-                               setCaptions: contiCaptions(service))
+                               setCaptions: contiCaptions(service),
+                               contiScope: ContiChoice.scope(service),
+                               removeVersion: removeVersion)
             }
             .fullScreenCover(item: $standSong) { entry in
                 let versions = songVersions(entry.service)
-                ScoreStandView(items: Array((versions[entry.song] ?? []).prefix(1)),
+                let scope = ContiChoice.scope(entry.service)
+                ScoreStandView(items: (versions[entry.song].flatMap { ContiChoice.pick($0, scope: scope, song: entry.song) })
+                                    .map { [$0] } ?? [],
                                setTitle: PlanSongTitle.split(entry.song).title,
-                               versions: versions.filter { $0.key == entry.song })
+                               versions: versions.filter { $0.key == entry.song },
+                               contiScope: scope,
+                               removeVersion: removeVersion)
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $reordering) { service in
@@ -1443,6 +1449,13 @@ struct ServicePrepView: View {
         return out
     }
 
+    /// A song's chart taken off it from the stand — its attachment row, and
+    /// its file when this account put it up.
+    private func removeVersion(_ version: ScoreStandItem) async -> String? {
+        guard let sheetId else { return "시트가 연결되어 있지 않습니다." }
+        return await team.removeAttachment(version.attachment, sheetId: sheetId)
+    }
+
     /// Each song's corner line on a 콘티 made here, by song as written:
     /// 「2026/10/18 주일2부 - 1. 곡」 — numbered among the songs, as sung.
     private func contiCaptions(_ service: TeamService) -> [String: String] {
@@ -1460,7 +1473,11 @@ struct ServicePrepView: View {
         let plan = team.plan(for: service)
         let attachments = team.attachments(for: service)
         let versions = songVersions(service)
-        var items = plan.filter { $0.kind == .song }.compactMap { versions[$0.title]?.first }
+        // Each song in the version chosen for the 콘티, else its newest.
+        let scope = ContiChoice.scope(service)
+        var items = plan.filter { $0.kind == .song }.compactMap { song in
+            versions[song.title].flatMap { ContiChoice.pick($0, scope: scope, song: song.title) }
+        }
         // Charts on songs no longer in the 순서, after it. The same song by
         // the way the rest of the app matches it: a chart attached under
         // 「곡」 and the 순서's 「[찬송가] 곡 | 팀」 are one song, and an

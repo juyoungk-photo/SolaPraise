@@ -43,7 +43,17 @@ struct ScoreStandView: View {
     /// The set as it stands: each song's chosen version.
     @State private var items: [ScoreStandItem]
     /// Every version of each song, newest first — chosen from in the header.
-    let versions: [String: [ScoreStandItem]]
+    /// State: a version taken off here leaves the chips at once.
+    @State private var versions: [String: [ScoreStandItem]]
+    /// The service whose 콘티 the versions are chosen for (ContiChoice).
+    /// Nil where there is no 콘티 to put a version in.
+    var contiScope: String?
+    /// Takes a version off the song — its attachment — returning an error
+    /// message, or nil. Nil where versions cannot be taken off here.
+    var removeVersion: ((ScoreStandItem) async -> String?)?
+    /// Redrawn when a version is chosen for the 콘티 (kept in defaults).
+    @State private var choiceTick = 0
+    @State private var removing: ScoreStandItem?
     /// The file name for the whole set made into one PDF: the next 콘티
     /// version's, 「20261018 주일예배 찬양 v3」.
     var setFileName: String?
@@ -115,9 +125,13 @@ struct ScoreStandView: View {
     init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
          versions: [String: [ScoreStandItem]] = [:], setFileName: String? = nil, exportOnOpen: Bool = false,
          setCaptions: [String: String] = [:],
+         contiScope: String? = nil,
+         removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
-        self.versions = versions
+        _versions = State(initialValue: versions)
+        self.contiScope = contiScope
+        self.removeVersion = removeVersion
         self.setFileName = setFileName
         self.exportOnOpen = exportOnOpen
         self.setCaptions = setCaptions
@@ -130,69 +144,24 @@ struct ScoreStandView: View {
         items.indices.contains(index) ? items[index] : nil
     }
 
+    // In two: the whole chain as one expression was more than the type
+    // checker would take.
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
+        editPresentations(stand)
+    }
 
-            if let item {
-                VStack(spacing: 0) {
-                    if showsChrome { header(item).transition(.move(edge: .top).combined(with: .opacity)) }
-                    songPager
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard !editing else { return }
-                            withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
-                        }
-                        .accessibilityAction(named: fullPage ? "메뉴 보이기" : "악보만 크게 보기") {
-                            fullPage.toggle()
-                        }
-                    if showsChrome { controls(item).transition(.move(edge: .bottom).combined(with: .opacity)) }
-                }
-                .foregroundStyle(.white)
-                .task(id: item.id) { await model.load(item) }
-                .task {
-                    // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
-                    if exportOnOpen { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
-                }
-                #if DEBUG
-                .task {
-                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
-                }
-                #endif
-            }
-
-            if showsChrome {
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(14)
-                }
-                .accessibilityLabel("닫기")
-            }
+    /// What editing presents over the stand: taking a version off, a 코드표
+    /// line's lyrics, a chord typed or turned to.
+    private func editPresentations<Content: View>(_ content: Content) -> some View {
+        content
+        .confirmationDialog("이 악보를 지울까요?", isPresented: Binding(get: { removing != nil },
+                                                                     set: { if !$0 { removing = nil } }),
+                            titleVisibility: .visible, presenting: removing) { version in
+            Button("지우기", role: .destructive) { Task { await remove(version) } }
+            Button("취소", role: .cancel) {}
+        } message: { _ in
+            Text("팀 시트의 첨부에서 빠지고, 이 계정이 올린 파일이면 드라이브에서도 지워집니다. 되돌릴 수 없습니다.")
         }
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .preferredColorScheme(.dark)
-        // Same rule as the chord stand: a set runs forty minutes and
-        // nobody touches the screen. It must not sleep mid-song.
-        .onAppear {
-            UIApplication.shared.isIdleTimerDisabled = true
-            model.team = team
-        }
-        .onDisappear {
-            UIApplication.shared.isIdleTimerDisabled = false
-            // Corrections waiting to be shared go now, not lost with the stand.
-            model.shareNow()
-        }
-        .focusable()
-        .onKeyPress(.rightArrow) { go(1); return .handled }
-        .onKeyPress(.leftArrow) { go(-1); return .handled }
-        #if DEBUG
-        .onChange(of: item.flatMap { model.charts[$0.id]?.isEmpty == false } ?? false) { _, ready in
-            if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
-        }
-        #endif
         .sheet(item: $editingLyrics) { line in
             if let systems = model.charts[line.item.id], systems.indices.contains(line.index) {
                 LyricEditSheet(line: systems[line.index], chord: line.chord,
@@ -277,6 +246,71 @@ struct ScoreStandView: View {
         }
     }
 
+    private var stand: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let item {
+                VStack(spacing: 0) {
+                    if showsChrome { header(item).transition(.move(edge: .top).combined(with: .opacity)) }
+                    songPager
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard !editing else { return }
+                            withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
+                        }
+                        .accessibilityAction(named: fullPage ? "메뉴 보이기" : "악보만 크게 보기") {
+                            fullPage.toggle()
+                        }
+                    if showsChrome { controls(item).transition(.move(edge: .bottom).combined(with: .opacity)) }
+                }
+                .foregroundStyle(.white)
+                .task(id: item.id) { await model.load(item) }
+                .task {
+                    // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
+                    if exportOnOpen { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                }
+                #if DEBUG
+                .task {
+                    if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                }
+                #endif
+            }
+
+            if showsChrome {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(14)
+                }
+                .accessibilityLabel("닫기")
+            }
+        }
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
+        .preferredColorScheme(.dark)
+        // Same rule as the chord stand: a set runs forty minutes and
+        // nobody touches the screen. It must not sleep mid-song.
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+            model.team = team
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            // Corrections waiting to be shared go now, not lost with the stand.
+            model.shareNow()
+        }
+        .focusable()
+        .onKeyPress(.rightArrow) { go(1); return .handled }
+        .onKeyPress(.leftArrow) { go(-1); return .handled }
+        #if DEBUG
+        .onChange(of: item.flatMap { model.charts[$0.id]?.isEmpty == false } ?? false) { _, ready in
+            if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
+        }
+        #endif
+    }
+
     /// The key the page is showing: the printed one under 원본, else the
     /// one it has been moved to.
     private func shownKey(_ item: ScoreStandItem) -> String? {
@@ -294,12 +328,14 @@ struct ScoreStandView: View {
     @ViewBuilder
     private func versionChips(_ item: ScoreStandItem) -> some View {
         if let options = versions[item.song], options.count > 1 {
+            let _ = choiceTick
             let names = VersionChips.names(options.map { option in
                 VersionChips.Version(label: option.versionLabel ?? option.attachment.name,
                                      key: model.chartKeyName(option),
                                      by: option.attachment.addedBy.isEmpty ? nil
                                         : team.rosterName(for: option.attachment.addedBy))
             }, songs: [item.song, PlanSongTitle.split(item.song).title])
+            let inConti = contiScope.flatMap { ContiChoice.pick(options, scope: $0, song: item.song)?.id }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(Array(options.enumerated()), id: \.element.id) { offset, option in
@@ -310,6 +346,11 @@ struct ScoreStandView: View {
                             Task { await model.load(option) }
                         } label: {
                             HStack(spacing: 4) {
+                                // The one the 콘티 takes, marked on its chip:
+                                // looking at another changes nothing.
+                                if option.id == inConti {
+                                    Image(systemName: "checkmark.circle.fill").font(.system(size: 12))
+                                }
                                 Text(names[offset])
                                 if offset == 0 {
                                     Text("최신").font(.system(size: 10, weight: .bold))
@@ -324,12 +365,85 @@ struct ScoreStandView: View {
                             .foregroundStyle(selected ? Color.black : Color.white)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel((option.versionLabel ?? option.attachment.name) + (offset == 0 ? ", 최신" : ""))
+                        .accessibilityLabel((option.versionLabel ?? option.attachment.name)
+                                            + (offset == 0 ? ", 최신" : "") + (option.id == inConti ? ", 콘티에 들어감" : ""))
                         .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+
+                    // For the version on screen: put it in the 콘티, or take
+                    // it off the song — compare, keep one, and that is it.
+                    if let contiScope {
+                        if item.id == inConti {
+                            Label("콘티에 들어감", systemImage: "checkmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.leading, 6)
+                        } else {
+                            Button {
+                                ContiChoice.choose(item.id, scope: contiScope, song: item.song)
+                                choiceTick += 1
+                            } label: {
+                                Label("콘티에 넣기", systemImage: "checkmark.circle")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .overlay(Capsule().stroke(Color.accentColor, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.leading, 6)
+                        }
+                    }
+                    // A song's own chart only: a 콘티's pages are the 콘티
+                    // file's, taken off from its own menu.
+                    if removeVersion != nil, item.pages == nil, !item.attachment.belongsToService {
+                        Button { removing = item } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 30, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .accessibilityLabel("이 버전 지우기")
                     }
                 }
             }
             .scrollClipDisabled()
+        }
+    }
+
+    /// The version on screen taken off its song; the stand moves to the
+    /// version the 콘티 now takes.
+    private func remove(_ version: ScoreStandItem) async {
+        guard let removeVersion else { return }
+        if let failure = await removeVersion(version) {
+            model.note = failure
+            return
+        }
+        var rest = versions[version.song] ?? []
+        rest.removeAll { $0.id == version.id }
+        versions[version.song] = rest
+        if let contiScope, ContiChoice.chosen(scope: contiScope, song: version.song) == version.id {
+            ContiChoice.choose(nil, scope: contiScope, song: version.song)
+        }
+        choiceTick += 1
+        guard let at = items.firstIndex(where: { $0.id == version.id }) else { return }
+        let next = contiScope.flatMap { ContiChoice.pick(rest, scope: $0, song: version.song) } ?? rest.first
+        if let next {
+            items[at] = next
+            await model.load(next)
+        } else {
+            items.remove(at: at)
+            if items.isEmpty { dismiss(); return }
+            index = min(index, items.count - 1)
+        }
+    }
+
+    /// The set as the 콘티 takes it: each song in its chosen version, not
+    /// whichever was last looked at.
+    private var contiItems: [ScoreStandItem] {
+        guard let contiScope else { return items }
+        return items.map { item in
+            versions[item.song].flatMap { ContiChoice.pick($0, scope: contiScope, song: item.song) } ?? item
         }
     }
 
@@ -815,7 +929,7 @@ struct ScoreStandView: View {
             .disabled(state?.isReady != true)
             if items.count > 1 {
                 Button {
-                    Task { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
                 } label: {
                     Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
                           systemImage: "doc.on.doc")

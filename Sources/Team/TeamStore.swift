@@ -1234,6 +1234,14 @@ final class TeamStore: ObservableObject {
 
     /// Removes an attachment from the sheet and from Drive.
     func removeAttachment(_ item: Attachment, sheetId: String) async -> String? {
+        #if DEBUG
+        // The sample team has no sheet: taken off here only, so the flow
+        // can be tried end to end.
+        if isSample {
+            attachments[Calendar.current.startOfDay(for: item.date)]?.removeAll { $0.fileId == item.fileId }
+            return nil
+        }
+        #endif
         guard let client else { return "시트에 연결되어 있지 않습니다." }
         guard let row = item.row, row >= 2 else { return "줄 번호를 알 수 없습니다." }
         guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [item.fileId],
