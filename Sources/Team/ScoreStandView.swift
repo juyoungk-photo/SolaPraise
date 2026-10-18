@@ -1400,7 +1400,9 @@ final class ScoreStandModel: ObservableObject {
         let shift = state.showsOriginal ? 0 : state.shift
         let original = ScoreChordText.transpose(text: typed, by: -shift) ?? typed
         if let chord {
-            edit(item, page: page, chord: chord) { $0.original = original }
+            // Marked, so it is drawn over the printed symbol in the printed
+            // key too — it showed only once the chart was transposed.
+            edit(item, page: page, chord: chord) { $0.original = original; $0.corrected = true }
         } else {
             remember(item)
             update(item) { state in

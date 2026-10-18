@@ -31,6 +31,10 @@ struct ScoreChord: Identifiable, Codable, Equatable {
     /// Placed by hand over a chord recognition missed. Its patch covers
     /// whatever is printed under it; there is no separate original to erase.
     var userAdded = false
+    /// Its text corrected by hand. Drawn even in the printed key: the
+    /// printed symbol under it is the one that was wrong. Optional, so
+    /// chords kept before it existed still read.
+    var corrected: Bool?
 
     /// Where it is drawn: the found box, moved by the reader's drag.
     var placed: CGRect { box.offsetBy(dx: offset.width, dy: offset.height) }
@@ -59,7 +63,7 @@ enum ScoreLayout {
     /// - chordHeight: the page's chord height, normalised (median of found).
     /// - scale: the reader's size setting, 1 = the printed size.
     /// - alwaysDraw: draw every chord even with no transposition — for edit
-    ///   mode, and for a chord the reader moved or added.
+    ///   mode. A chord moved, added or corrected by hand is drawn anyway.
     static func labels(chords: [ScoreChord], chordHeight: CGFloat, shift: Int, useFlats: Bool?,
                        scale: CGFloat, alwaysDraw: Bool = false, in size: CGSize) -> [Label] {
         let transposing = shift % 12 != 0
@@ -67,7 +71,9 @@ enum ScoreLayout {
         let gap = base * 0.3
 
         // Lines, by where each chord is drawn now, left to right.
-        let drawn = chords.filter { alwaysDraw || transposing || $0.userAdded || $0.offset != .zero }
+        let drawn = chords.filter {
+            alwaysDraw || transposing || $0.userAdded || $0.corrected == true || $0.offset != .zero
+        }
         let sorted = drawn.sorted { $0.placed.minX < $1.placed.minX }
 
         var out: [Label] = []
