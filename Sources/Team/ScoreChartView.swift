@@ -39,6 +39,8 @@ struct ScoreChartView: View {
     /// How much room the lyrics get, apart from their size: 1 as first
     /// drawn, more to space syllables, words and lines further apart.
     var spacing: CGFloat = 1
+    /// 가사 고치기 for a line, by its index; nil where lines cannot be edited.
+    var onEditLine: ((Int) -> Void)? = nil
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -61,9 +63,20 @@ struct ScoreChartView: View {
                     // bar marks; a line with chords starts a new group.
                     let chorded = Self.hasChords(system)
                     line(system, index: index, rowHeight: chorded ? chordRowHeight : chordRowHeight * 0.35)
+                        .contentShape(Rectangle())
+                        // Long-pressed, as text is everywhere else on iOS.
+                        .contextMenu {
+                            if let onEditLine {
+                                Button { onEditLine(index) } label: {
+                                    Label("이 줄 가사 고치기", systemImage: "pencil")
+                                }
+                            }
+                        }
                         .padding(.top, index == 0 ? 0 : (chorded ? 34 : 6) * spacing)
                 }
-                Text("악보에서 읽은 코드와 가사입니다. 틀린 글자가 있을 수 있으니 악보와 함께 확인하세요.")
+Text(onEditLine == nil
+                     ? "악보에서 읽은 코드와 가사입니다. 틀린 글자가 있을 수 있으니 악보와 함께 확인하세요."
+                     : "악보에서 읽은 코드와 가사입니다. 틀린 글자는 그 줄을 길게 눌러 고치세요.")
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.45))
                     .padding(.top, 8)

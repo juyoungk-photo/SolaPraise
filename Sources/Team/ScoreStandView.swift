@@ -82,6 +82,14 @@ struct ScoreStandView: View {
     @AppStorage("score.showsChart") private var showsChart = false
     @State private var chordAction: ChordAction?
     @State private var entry: ChordEntry?
+    /// A 코드표 line being corrected.
+    @State private var editingLyrics: LyricLine?
+    struct LyricLine: Identifiable {
+        let item: ScoreStandItem
+        let index: Int
+        let chord: (UUID) -> String?
+        let id = UUID()
+    }
     @State private var choosingPage = false
     /// 가사 확인 open, for the song on the stand.
     @State private var checkingLyrics: ScoreStandItem?
@@ -179,6 +187,16 @@ struct ScoreStandView: View {
             if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
         }
         #endif
+        .sheet(item: $editingLyrics) { line in
+            if let systems = model.charts[line.item.id], systems.indices.contains(line.index) {
+                LyricEditSheet(line: systems[line.index], chord: line.chord,
+                               onSave: { edited in
+                                   model.fixLyrics(line.item, line: line.index, edited: edited)
+                                   editingLyrics = nil
+                               },
+                               onCancel: { editingLyrics = nil })
+            }
+        }
         .sheet(item: $checkingLyrics) { item in
             LyricCheckSheet(systems: model.charts[item.id] ?? [], song: item.song)
         }
@@ -530,11 +548,16 @@ struct ScoreStandView: View {
                 let originals = Dictionary(state.pages.flatMap(\.chords).map { ($0.id, $0.original) },
                                            uniquingKeysWith: { first, _ in first })
                 let shift = state.showsOriginal ? 0 : state.shift
-                ScoreChartView(systems: systems, chord: { id in
+                let name: (UUID) -> String? = { id in
                     originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
-                }, scale: min(ScoreStandModel.chartScaleRange.upperBound,
-                              max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)),
-                   spacing: chartSpacing)
+                }
+                ScoreChartView(systems: systems, chord: name,
+                               scale: min(ScoreStandModel.chartScaleRange.upperBound,
+                                          max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)),
+                               spacing: chartSpacing,
+                               onEditLine: { index in
+                                   editingLyrics = LyricLine(item: item, index: index, chord: name)
+                               })
                 // Two fingers size the 코드표 as they move, and the size is
                 // kept when they lift — the A buttons step it, a pinch lands
                 // anywhere between.
@@ -1400,15 +1423,28 @@ final class ScoreStandModel: ObservableObject {
         // again. Kept against the chords it was read with — a chord moved
         // or added by hand reads the 코드표 again.
         let signature = ScoreChartStore.signature(pages.map(\.1))
+        // Lyrics corrected by hand, laid over every reading: kept apart from
+        // it, which a moved chord throws away.
+        let fixes = ScoreLyricFixStore.load(item.id)
         if let kept = ScoreChartStore.load(item.id, signature: signature) {
-            charts[item.id] = kept
+            charts[item.id] = LyricFixes.apply(fixes, to: kept)
             return
         }
         let systems = await Task.detached(priority: .userInitiated) {
             pages.flatMap { image, marks in image.map { ScoreChart.read($0, chords: marks) } ?? [] }
         }.value
-        charts[item.id] = systems
+        charts[item.id] = LyricFixes.apply(fixes, to: systems)
         ScoreChartStore.save(systems, for: item.id, signature: signature)
+    }
+
+    /// A 코드표 line's lyrics, corrected by hand. Kept on this device.
+    func fixLyrics(_ item: ScoreStandItem, line index: Int, edited: ScoreChart.System) {
+        guard var systems = charts[item.id], systems.indices.contains(index) else { return }
+        let fixes = LyricFixes.merge(ScoreLyricFixStore.load(item.id), system: index,
+                                     shown: systems[index], edited: edited)
+        ScoreLyricFixStore.save(fixes, for: item.id)
+        systems[index] = edited
+        charts[item.id] = systems
     }
 
     /// Forgets every hand edit and reads the chart again.
@@ -1682,6 +1718,27 @@ enum ScoreChartStore {
         guard let url = ScoreEditStore.file(id, in: folder),
               let data = try? JSONEncoder().encode(Saved(signature: signature, systems: systems)) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// 코드표 lyrics corrected by hand on this device (LyricFixes).
+enum ScoreLyricFixStore {
+    private static var folder: URL? {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let url = base?.appendingPathComponent("ScoreLyricFixes", isDirectory: true)
+        if let url { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    static func load(_ id: String) -> [LyricFix] {
+        guard let url = ScoreEditStore.file(id, in: folder), let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([LyricFix].self, from: data)) ?? []
+    }
+
+    static func save(_ fixes: [LyricFix], for id: String) {
+        guard let url = ScoreEditStore.file(id, in: folder) else { return }
+        if fixes.isEmpty { try? FileManager.default.removeItem(at: url); return }
+        if let data = try? JSONEncoder().encode(fixes) { try? data.write(to: url, options: .atomic) }
     }
 }
 
