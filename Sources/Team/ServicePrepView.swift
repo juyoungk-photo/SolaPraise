@@ -1249,7 +1249,7 @@ struct ServicePrepView: View {
         // the ways to add or make one — and the whole set on the stand.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
             VStack(alignment: .trailing, spacing: 6) {
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Spacer(minLength: 0)
                     contiMenu(service, contis: contis, built: built, pieces: pieces)
                     standButton(service, stand: stand)
@@ -1287,7 +1287,7 @@ struct ServicePrepView: View {
                 standService = service
             }
         } label: {
-            ChartBadge(text: "전체 악보", systemImage: "music.note.list")
+            ChartBadge(text: "전체 악보", systemImage: "music.note.list", large: true)
         }
         .buttonStyle(.plain)
         .foregroundStyle(stand.isEmpty ? Color.secondary : Color.accentColor)
@@ -1353,7 +1353,7 @@ struct ServicePrepView: View {
             // made head its menu.
             HStack(spacing: 4) {
                 if buildingPDF { ProgressView().controlSize(.small) }
-                ChartBadge(text: "콘티 생성", systemImage: "doc.badge.plus")
+                ChartBadge(text: "콘티 생성", systemImage: "doc.badge.plus", large: true)
             }
         }
         .menuOrder(.fixed)
@@ -2458,16 +2458,19 @@ private struct ChartBadge: View {
     let text: String
     let systemImage: String
     var tint: Color = .accentColor
+    /// The service's own — 콘티 생성, 전체 악보 — stand larger than a
+    /// song's: they act on the whole set, and are reached for first.
+    var large = false
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: large ? 5 : 3) {
             Image(systemName: systemImage)
             if !text.isEmpty { Text(text) }
         }
-        .font(.caption.weight(.semibold))
+        .font(large ? .subheadline.weight(.semibold) : .caption.weight(.semibold))
         .lineLimit(1)
         .fixedSize()
-        .padding(.horizontal, text.isEmpty ? 8 : 9).padding(.vertical, 5)
+        .padding(.horizontal, large ? 14 : (text.isEmpty ? 8 : 9)).padding(.vertical, large ? 9 : 5)
         .background(Capsule().fill(tint.opacity(0.15)))
     }
 }
