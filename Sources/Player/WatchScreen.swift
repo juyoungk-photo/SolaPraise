@@ -199,7 +199,7 @@ struct WatchScreen: View {
             guard DebugHarness.args.contains("-uiTestOpenSheetSearch") else { return }
             try? await Task.sleep(for: .seconds(10))
             guard let current,
-                  let url = SheetMusicSources.plan(title: current.title, channel: current.channelTitle).searchURL else { return }
+                  let url = SheetMusicSources.plan(title: searchTitle(current), channel: current.channelTitle).searchURL else { return }
             print("[FocusPlayer] opening 악보 검색, state \(player.state)")
             openKeepingSong(url)
         }
@@ -603,11 +603,23 @@ struct WatchScreen: View {
         }
     }
 
+    /// The song this video is, when a person has said: chosen in 곡 제목
+    /// 확인 on this device, else the team's 순서 title for it. Searches,
+    /// 악보, 음원 and 콘티에 추가 go by it; nil leaves them to the reading.
+    private func namedSong(_ video: PlayableVideo) -> String? {
+        SongTitleChoices.title(for: video.id) ?? team.songTitle(forVideo: video.id)
+    }
+
+    /// The title things are searched by: the named song, else the video's.
+    private func searchTitle(_ video: PlayableVideo) -> String {
+        namedSong(video) ?? video.title
+    }
+
     @ViewBuilder
     private func suggestionChips(for current: PlayableVideo) -> some View {
         let suggestions = SongSearchSuggestions.make(
             title: current.title, description: descriptionForSuggestions,
-            channel: current.channelTitle)
+            channel: current.channelTitle, song: namedSong(current))
         if !suggestions.isEmpty || showsChordButton || DevGate.isUnlocked(auth: auth, planning: planning) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -619,10 +631,10 @@ struct WatchScreen: View {
                     // worth more than any search result.
                     if showsChordButton {
                         let official = !sheetLinks.isEmpty
-                            || SheetMusicSources.publisher(channel: current.channelTitle, title: current.title) != nil
+                            || SheetMusicSources.publisher(channel: current.channelTitle, title: searchTitle(current)) != nil
                         // Searched in the app's finder: the song plays on
                         // underneath, and the chart found opens on the stand.
-                        SheetMusicMenu(title: current.title, channel: current.channelTitle, published: sheetLinks,
+                        SheetMusicMenu(title: searchTitle(current), channel: current.channelTitle, published: sheetLinks,
                                        videoId: current.id) {
                             HStack(spacing: 5) {
                                 Label("악보 검색", systemImage: "doc.text.magnifyingglass")
@@ -647,7 +659,7 @@ struct WatchScreen: View {
                     // 음원 찾기, as one chip at the head of the row rather
                     // than a full-width row of its own. Development only —
                     // AudioSourceMenu hides itself otherwise.
-                    AudioSourceMenu(title: current.title, seconds: current.durationSeconds,
+                    AudioSourceMenu(title: searchTitle(current), seconds: current.durationSeconds,
                                     artist: current.channelTitle) {
                         Label("음원", systemImage: "waveform.badge.magnifyingglass")
                             .labelStyle(.titleAndIcon)
@@ -864,7 +876,7 @@ struct WatchScreen: View {
             // to it, so the action lives next to the player.
             if showsChordButton, let current {
                 AddToServiceMenu(
-                    title: current.title,
+                    title: searchTitle(current),
                     videoId: current.id,
                     key: existingSheet(forVideo: current.id)?.keyLabel,
                     channel: current.channelTitle
@@ -924,7 +936,7 @@ struct WatchScreen: View {
 
             // The team's charts for this song first, then any the app made
             // by listening.
-            if let current, !sheetsForThisVideo.isEmpty || !charts(for: current.title, videoId: current.id).isEmpty {
+            if let current, !sheetsForThisVideo.isEmpty || !charts(for: searchTitle(current), videoId: current.id).isEmpty {
                 savedSheetsList
             }
 
@@ -1230,7 +1242,7 @@ struct WatchScreen: View {
 
         // Strip bracketed prefixes and channel suffixes so the query is the
         // song, not the uploader's decoration.
-        var query = current.title
+        var query = searchTitle(current)
         query = query.replacingOccurrences(
             of: "\\[[^\\]]*\\]", with: " ", options: .regularExpression
         )

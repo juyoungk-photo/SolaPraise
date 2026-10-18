@@ -52,8 +52,10 @@ struct SongSearchSuggestion: Identifiable, Equatable {
 
 enum SongSearchSuggestions {
 
+    /// - song: the song as a person named it (SongTitleChoices, a 순서's
+    ///   title) — searched for instead of what the title reads as.
     static func make(title: String, description: String?,
-                     channel: String? = nil) -> [SongSearchSuggestion] {
+                     channel: String? = nil, song: String? = nil) -> [SongSearchSuggestion] {
         var out: [SongSearchSuggestion] = []
         var seen = Set<String>()
 
@@ -70,9 +72,14 @@ enum SongSearchSuggestions {
             out.append(SongSearchSuggestion(kind: kind, label: query, query: query))
         }
 
-        // A medley names two songs; both are worth searching.
-        for song in songTitles(title: title, description: description ?? "", channel: channel) {
+        // A medley names two songs; both are worth searching. A song named
+        // by a person stands in for the reading — which is what was wrong.
+        if let song, !song.trimmingCharacters(in: .whitespaces).isEmpty {
             add(.title, song)
+        } else {
+            for song in songTitles(title: title, description: description ?? "", channel: channel) {
+                add(.title, song)
+            }
         }
 
         let corpus = title + "\n" + (description ?? "")

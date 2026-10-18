@@ -232,6 +232,17 @@ struct CheckSongSuggestions {
             description: "Album Name | 어느 워십\n새 노래 [NEW SONG]", channel: "어느 워십")
         check("the album opening a description is not the song", albumFirst.first == "새 노래", "got \(albumFirst)")
 
+        // A song a person named (곡 제목 확인, a 순서's title) is searched
+        // for in place of the reading — which took the series for the song.
+        // Made-up titles.
+        let named = SongSearchSuggestions.make(title: "새벽 기도회 시리즈 | 빛의 노래 | 하늘팀",
+                                               description: nil, song: "빛의 노래")
+        let namedTitles = named.filter { $0.kind == .title }.map(\.query)
+        check("a named song is the title suggestion, alone", namedTitles == ["빛의 노래"], "\(namedTitles)")
+        let unnamed = SongSearchSuggestions.make(title: "빛의 노래 | 하늘팀", description: nil, song: "  ")
+        check("a blank name leaves the reading", unnamed.contains { $0.kind == .title && $0.query == "빛의 노래" },
+              "\(unnamed.map(\.query))")
+
         print(failures == 0 ? "\nall suggestion checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

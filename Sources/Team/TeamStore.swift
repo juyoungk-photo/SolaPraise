@@ -478,6 +478,22 @@ final class TeamStore: ObservableObject {
     /// A sheet without a Plan tab still has songs, and a list of songs is a
     /// perfectly good order of service for a team that only plans music — so
     /// it is shown as one rather than showing nothing.
+    /// The song a video is, as the team's 순서 names it — the nearest
+    /// service that has it, its title without the hymn number's suffix.
+    /// What a person tidied or chose on the sheet beats a fresh reading of
+    /// the video's title, and it is the same on every teammate's device.
+    func songTitle(forVideo id: String) -> String? {
+        let today = Calendar.current.startOfDay(for: Date())
+        let nearest = services.sorted { abs($0.date.timeIntervalSince(today)) < abs($1.date.timeIntervalSince(today)) }
+        for service in nearest {
+            if let item = plan(for: service).first(where: { $0.kind == .song && $0.videoId == id }) {
+                let title = PlanSongTitle.split(item.title).title
+                return title.isEmpty ? nil : title
+            }
+        }
+        return nil
+    }
+
     func plan(for service: TeamService) -> [PlanItem] {
         let day = Calendar.current.startOfDay(for: service.date)
         if let items = plans[day], !items.isEmpty {
