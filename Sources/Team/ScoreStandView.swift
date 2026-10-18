@@ -1142,8 +1142,12 @@ final class ScoreStandModel: ObservableObject {
         if let remoteId, saved?.sharedFrom != remoteId, saved?.dirty != true, !rereading.contains(item.id),
            let file = await SharedEdits.fetch(remoteId),
            let pages = file.charts[SharedEdits.key(pages: item.pages)] {
+            // Marked when the sender's app marks corrections: any chord
+            // carrying the field at all.
+            let marked = pages.joined().contains { $0.corrected != nil }
             let shared = ScoreEditStore.Saved(pages: pages, edited: true, version: ScoreRecognition.version,
-                                              sharedFrom: remoteId, dirty: false)
+                                              sharedFrom: remoteId, dirty: false,
+                                              marksCorrections: marked ? true : nil)
             ScoreEditStore.write(shared, for: item.id)
             saved = shared
             shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
@@ -1181,6 +1185,54 @@ final class ScoreStandModel: ObservableObject {
         if state.isRead { recordKey(item) }
         // After 다시 읽기, read again now: that is what was asked.
         if rereading.contains(item.id) { await ensureRead(item) }
+        // Corrections kept before they were marked: found by reading the
+        // page again, in the background — the page is already showing.
+        if let saved, saved.edited, saved.marksCorrections != true, state.isRead {
+            Task { await markCorrections(item, data: data) }
+        }
+    }
+
+    /// Marks the chords corrected by hand in edits kept before corrections
+    /// were marked. Untransposed, the page draws only chords that differ
+    /// from the print, and a correction without its mark stayed hidden
+    /// under the printed — wrong — symbol. A kept chord is a correction
+    /// when the page, read again, has another chord at its place.
+    private func markCorrections(_ item: ScoreStandItem, data: Data) async {
+        guard let fresh = await ScoreTransposer.read(data: data, only: item.pages),
+              let state = states[item.id], fresh.pages.count == state.pages.count else { return }
+        var corrected = Set<UUID>()
+        for (page, kept) in state.pages.enumerated() {
+            let found = fresh.pages[page].chords
+            for chord in kept.chords where !chord.userAdded && chord.corrected != true {
+                guard let match = found.max(by: { Self.overlap($0.box, chord.box) < Self.overlap($1.box, chord.box) }),
+                      Self.overlap(match.box, chord.box) > 0.3 else { continue }
+                if Self.spelling(match.original) != Self.spelling(chord.original) { corrected.insert(chord.id) }
+            }
+        }
+        update(item) { state in
+            for page in state.pages.indices {
+                for index in state.pages[page].chords.indices where corrected.contains(state.pages[page].chords[index].id) {
+                    state.pages[page].chords[index].corrected = true
+                }
+            }
+        }
+        // Kept marked, as it was otherwise: not made dirty, so nothing is
+        // shared again for it.
+        guard let now = states[item.id], let before = ScoreEditStore.load(item.id) else { return }
+        ScoreEditStore.save(now.pages.map(\.chords), edited: true, for: item.id,
+                            sharedFrom: before.sharedFrom, dirty: before.dirty == true)
+    }
+
+    /// How much of the smaller box the two share.
+    private static func overlap(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let shared = a.intersection(b)
+        guard !shared.isNull, shared.width > 0, shared.height > 0 else { return 0 }
+        return shared.width * shared.height / max(1e-9, min(a.width * a.height, b.width * b.height))
+    }
+
+    private static func spelling(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "♯", with: "#").replacingOccurrences(of: "♭", with: "b")
     }
 
     /// The chart's key: what its name says, if it says one — that is what
@@ -1796,6 +1848,10 @@ enum ScoreEditStore {
         var sharedFrom: String? = nil
         /// Changed here and not yet shared with the team.
         var dirty: Bool? = nil
+        /// Its corrected chords carry ScoreChord.corrected. Nil for edits
+        /// kept before the mark existed, or received from a teammate's
+        /// older app — marked once, by reading the page again.
+        var marksCorrections: Bool? = nil
     }
 
     private static var folder: URL? {
@@ -1820,7 +1876,7 @@ enum ScoreEditStore {
     static func save(_ pages: [[ScoreChord]], edited: Bool, for id: String,
                      sharedFrom: String? = nil, dirty: Bool = false) {
         write(Saved(pages: pages, edited: edited, version: ScoreRecognition.version,
-                    sharedFrom: sharedFrom, dirty: dirty), for: id)
+                    sharedFrom: sharedFrom, dirty: dirty, marksCorrections: true), for: id)
     }
 
     static func write(_ saved: Saved, for id: String) {
