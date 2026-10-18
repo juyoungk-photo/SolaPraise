@@ -215,29 +215,34 @@ struct ScoreStandView: View {
             }
             Button("취소", role: .cancel) {}
         }
-        .alert(entry?.chord == nil ? "코드 추가" : "코드 고치기",
-               isPresented: .constant(entry != nil)) {
-            TextField("예: G, D/F#, Em7", text: Binding(
-                get: { entry?.text ?? "" }, set: { entry?.text = $0 }))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                // Latin letters: on a Korean keyboard 「B」 types 「ㅠ」.
-                .keyboardType(.asciiCapable)
-            Button("저장") {
-                if let entry, let item {
-                    if let failure = model.write(entry.text, item, page: entry.page,
-                                                 chord: entry.chord, at: entry.point) {
-                        model.note = failure
-                    }
-                }
-                entry = nil
+        // A sheet, not an alert: the chord typed, or turned to on wheels.
+        .sheet(isPresented: Binding(get: { entry != nil }, set: { if !$0 { entry = nil } })) {
+            if let current = entry {
+                ChordEntrySheet(
+                    title: current.chord == nil ? "코드 추가" : "코드 고치기",
+                    message: current.chord == nil
+                        ? "지금 화면에 보이는 키로 고르거나 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요."
+                        : "지금 화면에 보이는 키로 고르거나 적으세요.",
+                    initial: current.text,
+                    startRoot: item.flatMap(shownKey),
+                    onSave: { text in
+                        if let item, let failure = model.write(text, item, page: current.page,
+                                                               chord: current.chord, at: current.point) {
+                            model.note = failure
+                        }
+                        entry = nil
+                    },
+                    onCancel: { entry = nil })
             }
-            Button("취소", role: .cancel) { entry = nil }
-        } message: {
-            Text(entry?.chord == nil
-                 ? "지금 화면에 보이는 키로 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요."
-                 : "지금 화면에 보이는 키로 적으세요.")
         }
+    }
+
+    /// The key the page is showing: the printed one under 원본, else the
+    /// one it has been moved to.
+    private func shownKey(_ item: ScoreStandItem) -> String? {
+        guard let state = model.states[item.id],
+              let root = state.showsOriginal ? state.scoreRoot : state.targetRoot else { return nil }
+        return ScoreStandModel.name(root, flats: state.useFlats)
     }
 
     // MARK: - Header
@@ -674,6 +679,13 @@ struct ScoreStandView: View {
         // Size, for what is on screen: the chords on the page — for charts
         // printed small; applies to the export too — or the 코드표, each
         // its own setting, remembered on this device.
+        if editing {
+            Button { model.undo(item) } label: {
+                pill(Image(systemName: "arrow.uturn.backward").font(.system(size: 16, weight: .semibold)))
+            }
+            .disabled(!model.canUndo(item))
+            .accessibilityLabel("되돌리기")
+        }
         let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale <= 0.71
         let larger = showsChart ? model.chartScale >= 2.39 : model.chordScale >= 2.49
         Button {
@@ -1180,11 +1192,41 @@ final class ScoreStandModel: ObservableObject {
 
     // MARK: Editing by hand
 
+    /// Each hand edit's chords as they were before it, newest last, so a
+    /// chord taken off by mistake — when it was meant to be corrected —
+    /// comes back as it was. Per chart, for as long as the stand is open.
+    @Published private(set) var history: [String: [[[ScoreChord]]]] = [:]
+    private static let historyLimit = 50
+
+    func canUndo(_ item: ScoreStandItem) -> Bool { history[item.id]?.isEmpty == false }
+
+    /// The chords as they are, kept before an edit changes them.
+    private func remember(_ item: ScoreStandItem) {
+        guard let state = states[item.id] else { return }
+        var past = history[item.id] ?? []
+        past.append(state.pages.map(\.chords))
+        if past.count > Self.historyLimit { past.removeFirst(past.count - Self.historyLimit) }
+        history[item.id] = past
+    }
+
+    /// The last hand edit, taken back.
+    func undo(_ item: ScoreStandItem) {
+        guard var past = history[item.id], let previous = past.popLast() else { return }
+        history[item.id] = past
+        update(item) { state in
+            for page in state.pages.indices where previous.indices.contains(page) {
+                state.pages[page].chords = previous[page]
+            }
+        }
+        saveEdits(item)
+    }
+
     func move(_ item: ScoreStandItem, page: Int, chord: UUID, to offset: CGSize) {
         edit(item, page: page, chord: chord) { $0.offset.width += offset.width; $0.offset.height += offset.height }
     }
 
     func remove(_ item: ScoreStandItem, page: Int, chord: UUID) {
+        remember(item)
         update(item) { state in
             guard state.pages.indices.contains(page) else { return }
             state.pages[page].chords.removeAll { $0.id == chord }
@@ -1216,6 +1258,7 @@ final class ScoreStandModel: ObservableObject {
         if let chord {
             edit(item, page: page, chord: chord) { $0.original = original }
         } else {
+            remember(item)
             update(item) { state in
                 guard state.pages.indices.contains(page) else { return }
                 let h = state.pages[page].chordHeight
@@ -1264,6 +1307,8 @@ final class ScoreStandModel: ObservableObject {
 
     /// Forgets every hand edit and reads the chart again.
     func resetEdits(_ item: ScoreStandItem) async {
+        // A fresh reading: the edits being undone no longer exist.
+        history[item.id] = nil
         charts[item.id] = nil
         rereading.insert(item.id)
         ScoreEditStore.remove(item.id)
@@ -1273,6 +1318,7 @@ final class ScoreStandModel: ObservableObject {
     }
 
     private func edit(_ item: ScoreStandItem, page: Int, chord: UUID, _ change: (inout ScoreChord) -> Void) {
+        remember(item)
         update(item) { state in
             guard state.pages.indices.contains(page),
                   let index = state.pages[page].chords.firstIndex(where: { $0.id == chord }) else { return }
