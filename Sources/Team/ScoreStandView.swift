@@ -199,7 +199,7 @@ struct ScoreStandView: View {
             }
             Button("취소", role: .cancel) { chordAction = nil }
         } message: { _ in
-            Text("코드가 아닌 글자를 잘못 읽었다면 지우세요. 지우면 원래 인쇄된 글자가 그대로 보입니다.")
+            Text("코드가 아닌 글자를 잘못 읽었다면 지우세요. 지우면 원래 인쇄된 글자가 그대로 보이고, 편집 중에는 점선 상자로 남아 누르면 되살아납니다.")
         }
         .confirmationDialog("코드를 다시 읽을까요?", isPresented: $confirmingReread, titleVisibility: .visible) {
             Button("다시 읽기 — 손으로 고친 것은 지워집니다", role: .destructive) {
@@ -317,7 +317,7 @@ struct ScoreStandView: View {
                 }
             }
             if editing {
-                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요. 페이지는 두 손가락으로 넘깁니다.")
+                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요. 지운 코드는 점선 상자를 누르면 되살아납니다. 페이지는 두 손가락으로 넘깁니다.")
                     .font(.footnote)
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
@@ -405,8 +405,10 @@ struct ScoreStandView: View {
                             scale: model.chordScale,
                             original: state.showsOriginal && !editing,
                             editing: editing,
+                            removed: editing ? model.removedChords(item, page: pageIndex) : [],
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
-                            onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) })
+                            onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) },
+                            onRestore: { id in model.restore(item, page: pageIndex, chord: id) })
                     }
                 }
                 .padding(.horizontal, 12)
@@ -849,8 +851,11 @@ private struct ScorePageView: View {
     /// "not transposed", and a chord added by hand still showed there.
     let original: Bool
     let editing: Bool
+    /// Chords taken off by hand, shown faint while editing to put back.
+    var removed: [ScoreChord] = []
     let onMove: (UUID, CGSize) -> Void
     let onTapChord: (UUID) -> Void
+    var onRestore: (UUID) -> Void = { _ in }
 
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
@@ -867,6 +872,9 @@ private struct ScorePageView: View {
                         chords: page.chords, chordHeight: page.chordHeight, shift: shift,
                         useFlats: useFlats, scale: scale, alwaysDraw: editing, in: size)
                     ZStack(alignment: .topLeading) {
+                        ForEach(ghosts(in: size)) { chord in
+                            ghostView(chord, size: size)
+                        }
                         ForEach(labels.compactMap(\.cover).indices, id: \.self) { i in
                             let cover = labels.compactMap(\.cover)[i]
                             Rectangle().fill(.white)
@@ -882,6 +890,41 @@ private struct ScorePageView: View {
             }
             .background(Color.white)
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    /// The chords taken off, less any a chord now on the page covers — one
+    /// put back by 「+ 코드」 there needs no ghost beside it.
+    private func ghosts(in size: CGSize) -> [ScoreChord] {
+        removed.filter { gone in
+            !page.chords.contains { chord in
+                let overlap = chord.placed.intersection(gone.placed)
+                return !overlap.isNull && overlap.width * overlap.height > gone.placed.width * gone.placed.height * 0.4
+            }
+        }
+    }
+
+    /// A chord taken off: a dashed box round where it was, with the
+    /// printed chord showing through it — no text of its own, which would
+    /// sit over the printed one, in another key once transposed. A tap
+    /// puts it back.
+    private func ghostView(_ chord: ScoreChord, size: CGSize) -> some View {
+        let rect = CGRect(x: chord.placed.minX * size.width, y: chord.placed.minY * size.height,
+                          width: chord.placed.width * size.width, height: chord.placed.height * size.height)
+            .insetBy(dx: -2, dy: -2)
+        return RoundedRectangle(cornerRadius: 3)
+            .stroke(Color.gray, style: StrokeStyle(lineWidth: 1.2, dash: [3, 2]))
+            .background(RoundedRectangle(cornerRadius: 3).fill(Color.gray.opacity(0.08)))
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: "arrow.uturn.backward.circle.fill")
+                    .font(.system(size: max(9, min(14, rect.height * 0.7))))
+                    .foregroundStyle(.white, .gray)
+                    .offset(x: 6, y: -6)
+            }
+            .frame(width: rect.width, height: rect.height)
+            .contentShape(Rectangle().inset(by: -max(0, (36 - rect.height) / 2)))
+            .position(x: rect.midX, y: rect.midY)
+            .onTapGesture { onRestore(chord.id) }
+            .accessibilityLabel("지운 코드 \(ScoreTransposer.symbol(chord.original, by: shift, useFlats: useFlats) ?? chord.original) 되살리기")
     }
 
     private func chordView(_ label: ScoreLayout.Label, size: CGSize) -> some View {
@@ -1037,6 +1080,7 @@ final class ScoreStandModel: ObservableObject {
         // A reading by an older recogniser is dropped unless someone fixed
         // it by hand — then their corrections win over any new reading.
         var saved = ScoreEditStore.load(item.id)
+        removed[item.id] = ScoreRemovedStore.load(item.id)
         // The team's corrections, when someone has shared newer ones than
         // this copy holds and this device has none of its own unshared.
         // Not after 다시 읽기, which asked for the chart as read.
@@ -1195,8 +1239,13 @@ final class ScoreStandModel: ObservableObject {
     /// Each hand edit's chords as they were before it, newest last, so a
     /// chord taken off by mistake — when it was meant to be corrected —
     /// comes back as it was. Per chart, for as long as the stand is open.
-    @Published private(set) var history: [String: [[[ScoreChord]]]] = [:]
+    @Published private(set) var history: [String: [Snapshot]] = [:]
     private static let historyLimit = 50
+
+    struct Snapshot {
+        let chords: [[ScoreChord]]
+        let removed: [[ScoreChord]]
+    }
 
     func canUndo(_ item: ScoreStandItem) -> Bool { history[item.id]?.isEmpty == false }
 
@@ -1204,7 +1253,7 @@ final class ScoreStandModel: ObservableObject {
     private func remember(_ item: ScoreStandItem) {
         guard let state = states[item.id] else { return }
         var past = history[item.id] ?? []
-        past.append(state.pages.map(\.chords))
+        past.append(Snapshot(chords: state.pages.map(\.chords), removed: removed[item.id] ?? []))
         if past.count > Self.historyLimit { past.removeFirst(past.count - Self.historyLimit) }
         history[item.id] = past
     }
@@ -1214,10 +1263,43 @@ final class ScoreStandModel: ObservableObject {
         guard var past = history[item.id], let previous = past.popLast() else { return }
         history[item.id] = past
         update(item) { state in
-            for page in state.pages.indices where previous.indices.contains(page) {
-                state.pages[page].chords = previous[page]
+            for page in state.pages.indices where previous.chords.indices.contains(page) {
+                state.pages[page].chords = previous.chords[page]
             }
         }
+        setRemoved(previous.removed, for: item)
+        saveEdits(item)
+    }
+
+    /// Chords taken off by hand, per page: shown while editing as faint
+    /// boxes, and put back by a tap — after the stand was closed and opened
+    /// again, which ↩ cannot reach. Kept on this device only; the team's
+    /// shared corrections carry the chords, not what was taken off them.
+    @Published private(set) var removed: [String: [[ScoreChord]]] = [:]
+
+    func removedChords(_ item: ScoreStandItem, page: Int) -> [ScoreChord] {
+        let pages = removed[item.id] ?? []
+        return pages.indices.contains(page) ? pages[page] : []
+    }
+
+    private func setRemoved(_ pages: [[ScoreChord]], for item: ScoreStandItem) {
+        removed[item.id] = pages
+        ScoreRemovedStore.save(pages, for: item.id)
+    }
+
+    /// A chord taken off, back where it was.
+    func restore(_ item: ScoreStandItem, page: Int, chord: UUID) {
+        var pages = removed[item.id] ?? []
+        guard pages.indices.contains(page),
+              let index = pages[page].firstIndex(where: { $0.id == chord }) else { return }
+        remember(item)
+        let back = pages[page].remove(at: index)
+        update(item) { state in
+            guard state.pages.indices.contains(page) else { return }
+            state.pages[page].chords.append(back)
+            state.isEdited = true
+        }
+        setRemoved(pages, for: item)
         saveEdits(item)
     }
 
@@ -1227,10 +1309,18 @@ final class ScoreStandModel: ObservableObject {
 
     func remove(_ item: ScoreStandItem, page: Int, chord: UUID) {
         remember(item)
+        var taken: ScoreChord?
         update(item) { state in
             guard state.pages.indices.contains(page) else { return }
+            taken = state.pages[page].chords.first { $0.id == chord }
             state.pages[page].chords.removeAll { $0.id == chord }
             state.isEdited = true
+        }
+        if let taken {
+            var pages = removed[item.id] ?? []
+            while pages.count <= page { pages.append([]) }
+            pages[page].append(taken)
+            setRemoved(pages, for: item)
         }
         saveEdits(item)
     }
@@ -1307,8 +1397,11 @@ final class ScoreStandModel: ObservableObject {
 
     /// Forgets every hand edit and reads the chart again.
     func resetEdits(_ item: ScoreStandItem) async {
-        // A fresh reading: the edits being undone no longer exist.
+        // A fresh reading: the edits being undone, and the chords taken
+        // off, no longer exist.
         history[item.id] = nil
+        removed[item.id] = nil
+        ScoreRemovedStore.remove(item.id)
         charts[item.id] = nil
         rereading.insert(item.id)
         ScoreEditStore.remove(item.id)
@@ -1573,6 +1666,31 @@ enum ScoreChartStore {
         guard let url = ScoreEditStore.file(id, in: folder),
               let data = try? JSONEncoder().encode(Saved(signature: signature, systems: systems)) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+/// Chords taken off a chart by hand on this device, to put back later.
+enum ScoreRemovedStore {
+    private static var folder: URL? {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let url = base?.appendingPathComponent("ScoreRemoved", isDirectory: true)
+        if let url { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        return url
+    }
+
+    static func load(_ id: String) -> [[ScoreChord]] {
+        guard let url = ScoreEditStore.file(id, in: folder), let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([[ScoreChord]].self, from: data)) ?? []
+    }
+
+    static func save(_ pages: [[ScoreChord]], for id: String) {
+        guard let url = ScoreEditStore.file(id, in: folder) else { return }
+        if pages.allSatisfy(\.isEmpty) { try? FileManager.default.removeItem(at: url); return }
+        if let data = try? JSONEncoder().encode(pages) { try? data.write(to: url, options: .atomic) }
+    }
+
+    static func remove(_ id: String) {
+        if let url = ScoreEditStore.file(id, in: folder) { try? FileManager.default.removeItem(at: url) }
     }
 }
 
