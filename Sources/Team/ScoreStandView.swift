@@ -17,6 +17,7 @@
 //
 
 import SwiftUI
+import Photos
 import UIKit
 import PDFKit
 
@@ -48,6 +49,9 @@ struct ScoreStandView: View {
     var setFileName: String?
     /// Make that file as soon as the stand opens — from 「새 콘티 버전 만들기」.
     var exportOnOpen = false
+    /// Each song's corner line on the whole-set PDF, by song as written:
+    /// 「2026/10/18 주일2부 - 1. 곡」 (ContiCaption).
+    var setCaptions: [String: String] = [:]
     /// Uploads a transposed PDF as a new attachment on the song, when the
     /// caller can (Drive granted, a sheet configured). Returns an error
     /// message, or nil on success.
@@ -110,11 +114,13 @@ struct ScoreStandView: View {
 
     init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
          versions: [String: [ScoreStandItem]] = [:], setFileName: String? = nil, exportOnOpen: Bool = false,
+         setCaptions: [String: String] = [:],
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
         self.versions = versions
         self.setFileName = setFileName
         self.exportOnOpen = exportOnOpen
+        self.setCaptions = setCaptions
         self.setTitle = setTitle
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
@@ -146,11 +152,11 @@ struct ScoreStandView: View {
                 .task(id: item.id) { await model.load(item) }
                 .task {
                     // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
-                    if exportOnOpen { await model.exportSet(items, title: setTitle, fileName: setFileName) }
+                    if exportOnOpen { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
                 }
                 #if DEBUG
                 .task {
-                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle, fileName: setFileName) }
+                    if DebugHarness.exportScoreSet { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
                 }
                 #endif
             }
@@ -288,8 +294,12 @@ struct ScoreStandView: View {
     @ViewBuilder
     private func versionChips(_ item: ScoreStandItem) -> some View {
         if let options = versions[item.song], options.count > 1 {
-            let names = VersionChips.names(options.map { $0.versionLabel ?? $0.attachment.name },
-                                           songs: [item.song, PlanSongTitle.split(item.song).title])
+            let names = VersionChips.names(options.map { option in
+                VersionChips.Version(label: option.versionLabel ?? option.attachment.name,
+                                     key: model.chartKeyName(option),
+                                     by: option.attachment.addedBy.isEmpty ? nil
+                                        : team.rosterName(for: option.attachment.addedBy))
+            }, songs: [item.song, PlanSongTitle.split(item.song).title])
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(Array(options.enumerated()), id: \.element.id) { offset, option in
@@ -787,26 +797,34 @@ struct ScoreStandView: View {
         // Files: the share sheet offers both.
         let shareLabel = pill(model.isExporting ? AnyView(ProgressView().tint(.white))
                                                 : AnyView(Image(systemName: "square.and.arrow.up")))
-        if items.count > 1 {
-            Menu {
+        // As it is on the stand — the key, every correction — kept where
+        // the person wants it: Photos a page an image, Files a PDF.
+        Menu {
+            Section(item.song.isEmpty ? "현재 악보" : PlanSongTitle.split(item.song).title) {
+                Button { Task { await model.saveToPhotos(item) } } label: {
+                    Label("사진에 저장", systemImage: "photo.on.rectangle")
+                }
+                Button { Task { await model.saveToFiles(item) } } label: {
+                    Label("파일에 저장", systemImage: "folder")
+                }
+                Button { Task { await model.exportPDF(item) } } label: {
+                    Label("공유…", systemImage: "square.and.arrow.up")
+                }
+            }
+            // The page as it is will do: unread, it is the chart as printed.
+            .disabled(state?.isReady != true)
+            if items.count > 1 {
                 Button {
-                    Task { await model.exportPDF(item) }
-                } label: { Label("이 곡만 (\(item.song.isEmpty ? "현재 악보" : item.song))", systemImage: "doc") }
-                .disabled(!ready)
-                Button {
-                    Task { await model.exportSet(items, title: setTitle, fileName: setFileName) }
+                    Task { await model.exportSet(items, title: setTitle, fileName: setFileName, captions: setCaptions) }
                 } label: {
                     Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
                           systemImage: "doc.on.doc")
                 }
-            } label: { shareLabel }
-            .disabled(model.isExporting)
-            .accessibilityLabel("PDF로 공유·저장")
-        } else {
-            Button { Task { await model.exportPDF(item) } } label: { shareLabel }
-                .disabled(!ready || model.isExporting)
-                .accessibilityLabel("PDF로 공유·저장")
-        }
+            }
+        } label: { shareLabel }
+        .menuOrder(.fixed)
+        .disabled(model.isExporting)
+        .accessibilityLabel("저장·공유")
 
         if let uploadTransposed {
             Button {
@@ -1289,6 +1307,22 @@ final class ScoreStandModel: ObservableObject {
         readingTasks[item.id] = nil
     }
 
+    /// The key a chart is printed in, when this device has read it — from
+    /// the stand's reading, else the reading kept from an earlier visit.
+    /// For the version chips; nil until read, never a guess.
+    func chartKeyName(_ item: ScoreStandItem) -> String? {
+        if let state = states[item.id], state.isRead, let root = state.writtenKey == nil ? state.estimatedRoot : state.scoreRoot {
+            return Self.name(root, flats: [5, 10, 3, 8, 1, 6].contains(root))
+        }
+        if let known = keptKeys[item.id] { return known }
+        let symbols = ScoreEditStore.load(item.id)?.pages.joined().map(\.original) ?? []
+        let name = ScoreChordText.likelyRoot(of: symbols).map { Self.name($0, flats: [5, 10, 3, 8, 1, 6].contains($0)) }
+        keptKeys[item.id] = .some(name)
+        return name
+    }
+    /// Read once from disk per chart; nil inside means "looked, none".
+    private var keptKeys: [String: String?] = [:]
+
     /// The key the chart is now in, for the 예배표 to show beside the song.
     private func recordKey(_ item: ScoreStandItem) {
         guard var state = states[item.id], state.scoreRoot != nil else { return }
@@ -1620,22 +1654,72 @@ final class ScoreStandModel: ObservableObject {
     /// "주님 뜻대로 (A).pdf" — named for the key it is now in.
     func fileName(_ item: ScoreStandItem) -> String {
         let state = states[item.id]
-        let base = (item.song.isEmpty ? item.attachment.name : item.song)
+        // The song as sung — not the upload's 「[새찬송가 546장] … | 팀」 —
+        // and a file's name without its own extension.
+        let base = (item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension
+                                      : PlanSongTitle.split(item.song).title)
             .replacingOccurrences(of: "/", with: "-")
         guard let state, let root = state.targetRoot else { return "\(base).pdf" }
         let key = Self.name(root, flats: state.useFlats)
         return "\(base) (\(key)).pdf"
     }
 
-    private func pdf(_ item: ScoreStandItem) async -> Data? {
+    private func pdf(_ item: ScoreStandItem, caption: String? = nil) async -> Data? {
         guard let state = states[item.id] else { return nil }
         let pages = state.pages
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
         let scale = chordScale
         return await Task.detached(priority: .userInitiated) {
-            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale)
+            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale, caption: caption)
         }.value
+    }
+
+    /// The chart as it is on the stand — key, corrections — into Photos,
+    /// a page an image.
+    func saveToPhotos(_ item: ScoreStandItem) async {
+        guard let state = states[item.id] else { return }
+        isExporting = true
+        defer { isExporting = false }
+        let pages = state.pages
+        let shift = state.showsOriginal ? 0 : state.shift
+        let flats: Bool? = state.useFlats
+        let scale = chordScale
+        let images = await Task.detached(priority: .userInitiated) {
+            ScoreTransposer.images(pages: pages, by: shift, useFlats: flats, scale: scale)
+        }.value
+        switch await PHPhotoLibrary.requestAuthorization(for: .addOnly) {
+        case .authorized, .limited: break
+        default:
+            note = "사진에 저장하려면 설정 > SolaPraise > 사진에서 「사진 추가」를 허용하세요."
+            return
+        }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+            }
+            note = images.count == 1 ? "사진에 저장했습니다." : "사진에 \(images.count)장 저장했습니다."
+        } catch {
+            note = "사진에 저장하지 못했습니다."
+        }
+    }
+
+    /// The chart as it is on the stand, as a PDF into Files — where to, the
+    /// person chooses.
+    func saveToFiles(_ item: ScoreStandItem) async {
+        isExporting = true
+        defer { isExporting = false }
+        guard let data = await pdf(item) else {
+            note = "PDF를 만들지 못했습니다."
+            return
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName(item))
+        do {
+            try data.write(to: url, options: .atomic)
+            SharePresenter.exportToFiles(url)
+        } catch {
+            note = "PDF를 저장하지 못했습니다."
+        }
     }
 
     func exportPDF(_ item: ScoreStandItem) async {
@@ -1660,7 +1744,8 @@ final class ScoreStandModel: ObservableObject {
     /// A song not opened yet is read first, so this can take a few seconds
     /// a song on a set nobody has paged through. A song whose file cannot
     /// be read is left out and named, rather than failing the whole file.
-    func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil) async {
+    func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil,
+                   captions: [String: String] = [:]) async {
         isExporting = true
         defer { isExporting = false }
         let combined = PDFDocument()
@@ -1674,7 +1759,8 @@ final class ScoreStandModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
             }
-            guard let data = await pdf(item), let document = PDFDocument(data: data) else {
+            guard let data = await pdf(item, caption: captions[item.song]),
+                  let document = PDFDocument(data: data) else {
                 skipped.append(item.song.isEmpty ? item.attachment.name : item.song)
                 continue
             }

@@ -132,7 +132,14 @@ struct ServicePrepView: View {
     @State private var exportingTo: TeamService?
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
-    @State private var standService: TeamService?
+    /// 전체 악보 open: the service, and the song it opens at — the one
+    /// whose title was tapped. One value, so the start cannot lag the open.
+    @State private var standOpen: StandOpen?
+    struct StandOpen: Identifiable {
+        let service: TeamService
+        var startSong: String? = nil
+        let id = UUID()
+    }
     /// One song's chart on the stand — its 악보 button.
     @State private var standSong: SongStand?
 
@@ -222,7 +229,7 @@ struct ServicePrepView: View {
                     // Give the folder a moment to be read, then open as a tap would.
                     try? await Task.sleep(for: .seconds(3))
                     await placeContiPages(first)
-                    standService = first
+                    standOpen = StandOpen(service: first)
                 }
                 if DebugHarness.seedTeam { return }
                 #endif
@@ -281,12 +288,16 @@ struct ServicePrepView: View {
                         .environmentObject(team)
                 }
             }
-            .fullScreenCover(item: $standService) { service in
-                ScoreStandView(items: standItems(service),
+            .fullScreenCover(item: $standOpen) { open in
+                let service = open.service
+                let items = standItems(service)
+                ScoreStandView(items: items,
+                               startAt: open.startSong.flatMap { song in items.firstIndex { $0.song == song } } ?? 0,
                                setTitle: service.date.formatted(.dateTime.month().day()) + " " + service.title,
                                versions: songVersions(service),
                                setFileName: nextContiName(service),
-                               exportOnOpen: makingConti)
+                               exportOnOpen: makingConti,
+                               setCaptions: contiCaptions(service))
             }
             .fullScreenCover(item: $standSong) { entry in
                 let versions = songVersions(entry.service)
@@ -1158,11 +1169,18 @@ struct ServicePrepView: View {
                     Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
-            // The song itself is the way to hear it: a tap on its title plays
-            // it, as the ▶ beside it does. The buttons inside keep their own.
+            // A song's title opens 전체 악보 at its chart, the rest of the
+            // set a swipe away — what a player reaches for on the day. A song
+            // with no chart yet plays instead, as ▶ does.
             .contentShape(Rectangle())
             .onTapGesture {
-                if item.kind == .song, let id = item.videoId { play(item, in: service, videoId: id) }
+                guard item.kind == .song else { return }
+                if songVersions(service)[item.title]?.isEmpty == false {
+                    makingConti = false
+                    standOpen = StandOpen(service: service, startSong: item.title)
+                } else if let id = item.videoId {
+                    play(item, in: service, videoId: id)
+                }
             }
 
             Spacer(minLength: 0)
@@ -1284,7 +1302,7 @@ struct ServicePrepView: View {
                 await placeContiPages(service)
                 preparingStand = false
                 makingConti = false
-                standService = service
+                standOpen = StandOpen(service: service)
             }
         } label: {
             ChartBadge(text: "전체 악보", systemImage: "music.note.list", large: true)
@@ -1324,7 +1342,7 @@ struct ServicePrepView: View {
                     await placeContiPages(service)
                     preparingStand = false
                     makingConti = true
-                    standService = service
+                    standOpen = StandOpen(service: service)
                 }
             } label: {
                 Label("새 콘티 만들기 — \(nextContiName(service))", systemImage: "doc.badge.plus")
@@ -1409,15 +1427,32 @@ struct ServicePrepView: View {
         return out
     }
 
+    /// Each song's corner line on a 콘티 made here, by song as written:
+    /// 「2026/10/18 주일2부 - 1. 곡」 — numbered among the songs, as sung.
+    private func contiCaptions(_ service: TeamService) -> [String: String] {
+        let songs = team.plan(for: service).filter { $0.kind == .song }
+        var out: [String: String] = [:]
+        for (index, song) in songs.enumerated() where out[song.title] == nil {
+            out[song.title] = ContiCaption.text(date: service.date, service: service.title,
+                                                order: index + 1, song: PlanSongTitle.split(song.title).title)
+        }
+        return out
+    }
+
     /// The stand's set: each song's newest version, then the rest.
     private func standItems(_ service: TeamService) -> [ScoreStandItem] {
         let plan = team.plan(for: service)
         let attachments = team.attachments(for: service)
         let versions = songVersions(service)
         var items = plan.filter { $0.kind == .song }.compactMap { versions[$0.title]?.first }
-        // Charts on songs no longer in the 순서, after it.
-        let inPlan = Set(plan.map(\.title))
-        items += attachments.filter { !$0.belongsToService && !inPlan.contains($0.song) }
+        // Charts on songs no longer in the 순서, after it. The same song by
+        // the way the rest of the app matches it: a chart attached under
+        // 「곡」 and the 순서's 「[찬송가] 곡 | 팀」 are one song, and an
+        // exact match put every chart in the set twice.
+        let songs = plan.filter { $0.kind == .song }.map(\.title)
+        items += attachments.filter { chart in
+            !chart.belongsToService && !songs.contains { PlanSongTitle.sameSong($0, chart.song) }
+        }
             .map { ScoreStandItem(attachment: $0, song: $0.song, teamKey: nil) }
         // What of the newest 콘티 is no song of the 순서, or all of it when
         // its pages could not be placed.

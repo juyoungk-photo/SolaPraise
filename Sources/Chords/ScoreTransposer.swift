@@ -140,19 +140,59 @@ enum ScoreTransposer {
 
     /// The same pages with every chord rewritten, as a PDF — laid out by
     /// ScoreLayout exactly as the stand showed them.
+    /// - caption: a line for the top-left corner of every page — a 콘티's
+    ///   「2026/10/18 주일2부 - 1. 곡」 (ContiCaption). It goes on a strip
+    ///   added above the page rather than over it: a chart's own corner
+    ///   holds its title, its key or a chord, and a line over them hid both.
     static func transposed(pages: [Page], by semitones: Int, useFlats: Bool? = nil,
-                           scale: CGFloat = 1) -> Data? {
+                           scale: CGFloat = 1, caption: String? = nil) -> Data? {
         guard !pages.isEmpty else { return nil }
         let renderer = UIGraphicsPDFRenderer(
             bounds: CGRect(origin: .zero, size: pages[0].pointSize))
         return renderer.pdfData { context in
             for page in pages {
-                let bounds = CGRect(origin: .zero, size: page.pointSize)
-                context.beginPage(withBounds: bounds, pageInfo: [:])
+                let size = page.pointSize
+                let fontSize = max(9, size.width * 0.017)
+                let strip = caption == nil ? 0 : (fontSize * 2).rounded()
+                context.beginPage(withBounds: CGRect(x: 0, y: 0, width: size.width, height: size.height + strip),
+                                  pageInfo: [:])
+                let cg = context.cgContext
+                if let caption {
+                    cg.setFillColor(UIColor.white.cgColor)
+                    cg.fill(CGRect(x: 0, y: 0, width: size.width, height: strip))
+                    (caption as NSString).draw(
+                        at: CGPoint(x: size.width * 0.03, y: (strip - fontSize * 1.2) / 2),
+                        withAttributes: [.font: UIFont.systemFont(ofSize: fontSize, weight: .semibold),
+                                         .foregroundColor: UIColor.darkGray])
+                }
+                cg.saveGState()
+                cg.translateBy(x: 0, y: strip)
+                let bounds = CGRect(origin: .zero, size: size)
                 page.image.draw(in: bounds)
                 let labels = ScoreLayout.labels(
                     chords: page.chords, chordHeight: page.chordHeight, shift: semitones,
                     useFlats: useFlats, scale: scale, in: bounds.size)
+                ScoreLayout.draw(labels, in: cg)
+                cg.restoreGState()
+            }
+        }
+    }
+
+    /// Each page as an image, chords drawn as on the stand — for Photos.
+    /// At the page image's own resolution, so nothing is lost to saving.
+    static func images(pages: [Page], by semitones: Int, useFlats: Bool? = nil,
+                       scale: CGFloat = 1) -> [UIImage] {
+        pages.map { page in
+            let size = page.pointSize
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = max(1, page.image.size.width * page.image.scale / max(1, size.width))
+            return UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                page.image.draw(in: CGRect(origin: .zero, size: size))
+                let labels = ScoreLayout.labels(
+                    chords: page.chords, chordHeight: page.chordHeight, shift: semitones,
+                    useFlats: useFlats, scale: scale, in: size)
                 ScoreLayout.draw(labels, in: context.cgContext)
             }
         }

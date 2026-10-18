@@ -60,6 +60,8 @@
 	</dict>
 	<key>NSAlarmKitUsageDescription</key>
 	<string>아침 알람이 정한 시간에 울리고, 「예배 틀기」를 누르면 모닝워십이나 찬양을 틉니다.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>연주 모드의 악보를 지금 키 그대로 사진에 저장합니다.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SolaPraise listens to the song playing to detect its musical key and chords.</string>
 	<key>TeamSheetId</key>

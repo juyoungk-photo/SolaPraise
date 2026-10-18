@@ -3,59 +3,94 @@
 //  SolaPraise
 //
 //  Short names for a song's chart versions, for the stand's chips: 「콘티
-//  v2」, 「악보 10/12」.
+//  v2」, 「악보 A · 주영」.
 //
 //  WHY: the versions were behind a menu whose entries read 「콘티 20261018
 //  주일 2부예배 찬양 v2 · 3쪽」 — right, and too long to sit side by side.
-//  A chip names only what tells versions apart: which 콘티, or the day a
-//  chart went up. Two that would read the same are numbered, so no two
-//  chips look alike (Tools/check-version-chips.swift).
+//  A chip names only what tells versions apart: which 콘티; for a chart,
+//  the key it is in and who put it up. The day it went up says little —
+//  most of a song's charts go up the same week — so it is used only when
+//  nothing else separates two chips, and then a number. No two chips look
+//  alike (Tools/check-version-chips.swift).
 //
 
 import Foundation
 
 enum VersionChips {
 
-    /// One short name per version label, in the same order. `songs`: the
-    /// song's title as written, so a chart named after its song is not
-    /// named by it again.
-    static func names(_ labels: [String], songs: [String] = []) -> [String] {
-        let short = labels.map { shortName($0, songs: songs) }
+    struct Version {
+        /// As ServicePrepView.songVersions writes it, or the file's name.
+        var label: String
+        /// The key the chart is in, when known: from its name, or from its
+        /// chords as read on this device.
+        var key: String? = nil
+        /// Who put it up, as the roster names them.
+        var by: String? = nil
+    }
+
+    /// One short name per version, in the same order. `songs`: the song's
+    /// title as written, so a chart named after its song is not named by
+    /// it again.
+    static func names(_ versions: [Version], songs: [String] = []) -> [String] {
+        var names = versions.map { shortName($0, songs: songs) }
+        // Alike: the day it went up, where that differs.
+        for name in Set(names) where names.filter({ $0 == name }).count > 1 {
+            let indices = names.indices.filter { names[$0] == name }
+            let days = indices.map { day(in: versions[$0].label) }
+            if Set(days.compactMap { $0 }).count > 1 {
+                for (k, index) in indices.enumerated() {
+                    if let day = days[k] { names[index] += " · " + day }
+                }
+            }
+        }
+        // Still alike: numbered.
         var seen: [String: Int] = [:]
-        return short.map { name in
+        return names.map { name in
             let count = (seen[name] ?? 0) + 1
             seen[name] = count
             return count == 1 ? name : "\(name) (\(count))"
         }
     }
 
-    static func shortName(_ label: String, songs: [String] = []) -> String {
-        let trimmed = label.trimmingCharacters(in: .whitespaces)
+    static func shortName(_ version: Version, songs: [String] = []) -> String {
+        let trimmed = version.label.trimmingCharacters(in: .whitespaces)
         let head = trimmed.components(separatedBy: " · ").first ?? trimmed
         if trimmed.hasPrefix("콘티") {
             let stem = String(head.dropFirst("콘티".count)).trimmingCharacters(in: .whitespaces)
-            return version(in: stem).map { "콘티 v\($0)" } ?? "콘티"
+            return self.version(in: stem).map { "콘티 v\($0)" } ?? "콘티"
         }
         let isChart = trimmed.hasPrefix("악보")
         let file = isChart ? String(head.dropFirst("악보".count)).trimmingCharacters(in: .whitespaces) : head
         let stem = (file as NSString).deletingPathExtension
-        // The key a chart is named in — 「… (A)」 — tells versions apart best.
-        let key = keyInName(stem).map { " (\($0))" } ?? ""
-        // 「악보 name · 10/12 올림」: the day it went up.
-        if isChart, let range = trimmed.range(of: #"(\d{1,2}/\d{1,2}) 올림"#, options: .regularExpression) {
-            return "악보 " + trimmed[range].replacingOccurrences(of: " 올림", with: "") + key
-        }
-        // Named after the song: what is left once the title is taken off.
+        let key = keyInName(stem) ?? version.key
+
+        // What else the name says, once the song's title and the key are
+        // taken off — 「리드시트」 — and nothing when it is only an upload's
+        // generated name.
         var rest = stem
         for song in songs.sorted(by: { $0.count > $1.count }) where !song.isEmpty && rest.hasPrefix(song) {
             rest = String(rest.dropFirst(song.count))
             break
         }
-        guard rest != stem else { return (isChart ? "악보 " : "") + clipped(stem) }
-        // What else the name says, less the key, which is shown on its own.
         if let named = keyInName(rest) { rest = rest.replacingOccurrences(of: "(\(named))", with: "") }
         rest = rest.trimmingCharacters(in: CharacterSet(charactersIn: " -_·"))
-        return (isChart ? "악보" : "파일") + (rest.isEmpty ? "" : " " + clipped(rest)) + key
+        if isGenerated(rest) { rest = "" }
+
+        let parts = [key, rest.isEmpty ? nil : clipped(rest), version.by].compactMap { $0 }
+        let prefix = isChart ? "악보" : "파일"
+        return parts.isEmpty ? prefix : prefix + " " + parts.joined(separator: " · ")
+    }
+
+    /// 「10/12」 from 「… · 10/12 올림」.
+    private static func day(in label: String) -> String? {
+        guard let range = label.range(of: #"\d{1,2}/\d{1,2}(?= 올림)"#, options: .regularExpression) else { return nil }
+        return String(label[range])
+    }
+
+    /// The name AttachmentMenu gives an upload — 「20261018-곡-1760000000-AB12」 —
+    /// says nothing a chip needs.
+    private static func isGenerated(_ text: String) -> Bool {
+        text.range(of: #"(^\d{8}-)|(-\d{9,}(-[0-9A-Fa-f]{4})?$)"#, options: .regularExpression) != nil
     }
 
     /// 「(A)」, 「(F#m)」, 「(B♭)」 in a file's name.

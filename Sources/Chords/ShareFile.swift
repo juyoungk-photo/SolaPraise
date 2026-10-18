@@ -34,6 +34,18 @@ struct ActivityView: UIViewControllerRepresentable {
 /// on iPad anchors its popover, which a bare UIActivityViewController
 /// presented there must have.
 enum SharePresenter {
+    /// 「파일에 저장」: Files' own picker, to choose the folder.
+    @MainActor
+    static func exportToFiles(_ url: URL) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
+              let root = scene.keyWindow?.rootViewController ?? scene.windows.first?.rootViewController
+        else { return }
+        var top = root
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        top.present(UIDocumentPickerViewController(forExporting: [url], asCopy: true), animated: true)
+    }
+
     @MainActor
     static func present(_ url: URL, completion: @escaping () -> Void = {}) {
         present(items: [url], completion: completion)
