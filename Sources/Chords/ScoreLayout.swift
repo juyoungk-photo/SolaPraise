@@ -66,6 +66,10 @@ enum ScoreLayout {
     ///   mode. A chord moved, added or corrected by hand is drawn anyway.
     static func labels(chords: [ScoreChord], chordHeight: CGFloat, shift: Int, useFlats: Bool?,
                        scale: CGFloat, alwaysDraw: Bool = false, in size: CGSize) -> [Label] {
+        // A size chosen for the chords redraws them all, in the printed key
+        // too: the clean, larger symbols are what a reader wanted from it —
+        // on the stand, and printed. At the printed size, the page as printed.
+        let alwaysDraw = alwaysDraw || resized(scale)
         let transposing = shift % 12 != 0
         let base = max(6, chordHeight * size.height / 0.96) * scale
         let gap = base * 0.3
@@ -120,6 +124,9 @@ enum ScoreLayout {
         }
         return out
     }
+
+    /// The chord size changed from the printed one (the stand's A buttons).
+    static func resized(_ scale: CGFloat) -> Bool { abs(scale - 1) > 0.001 }
 
     static func measure(_ text: String, size: CGFloat) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: UIFont.boldSystemFont(ofSize: size)]).width

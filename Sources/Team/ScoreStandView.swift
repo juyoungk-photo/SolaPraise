@@ -58,6 +58,9 @@ struct ScoreStandView: View {
     /// Redrawn when a version is chosen for the 콘티 (kept in defaults).
     @State private var choiceTick = 0
     @State private var removing: ScoreStandItem?
+    /// A spot on the page being read for a chord, and whether it found one.
+    @State private var probing = false
+    @State private var probeFound = false
     /// The file name for the whole set made into one PDF: the next 콘티
     /// version's, 「20261018 주일예배 찬양 v3」.
     var setFileName: String?
@@ -238,9 +241,12 @@ struct ScoreStandView: View {
             if let current = entry {
                 ChordEntrySheet(
                     title: current.chord == nil ? "코드 추가" : "코드 고치기",
-                    message: current.chord == nil
-                        ? "지금 화면에 보이는 키로 고르거나 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요."
-                        : "지금 화면에 보이는 키로 고르거나 적으세요.",
+                    message: current.chord != nil
+                        ? "지금 화면에 보이는 키로 고르거나 적으세요."
+                        : current.point != Self.addPoint
+                            ? (probeFound ? "그 자리에서 읽은 코드입니다. 맞으면 저장하고, 아니면 고치세요."
+                                          : "그 자리에서 코드를 읽지 못했습니다. 고르거나 적으면 그 자리에 놓입니다.")
+                            : "지금 화면에 보이는 키로 고르거나 적으세요. 페이지 위쪽에 놓이니, 끌어서 제자리로 옮기세요.",
                     initial: current.text,
                     startRoot: item.flatMap(shownKey),
                     onSave: { text in
@@ -318,6 +324,19 @@ struct ScoreStandView: View {
             if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
         }
         #endif
+    }
+
+    /// A spot pressed while editing: read for a chord, and offered to add
+    /// there — as read, or empty to type when nothing could be made out.
+    private func probe(_ item: ScoreStandItem, page: Int, at point: CGPoint) {
+        guard !probing else { return }
+        probing = true
+        Task {
+            let found = await model.readChord(item, page: page, at: point)
+            probing = false
+            probeFound = found != nil
+            entry = ChordEntry(page: page, chord: nil, point: found?.center ?? point, text: found?.text ?? "")
+        }
     }
 
     /// A notice for the song — its first line the heading — on the stand
@@ -521,10 +540,11 @@ struct ScoreStandView: View {
                 }
             }
             if editing {
-                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 「+ 코드」로 넣고 제자리로 끌어다 놓으세요. 지운 코드는 점선 상자를 누르면 되살아납니다. 페이지는 두 손가락으로 넘깁니다.")
+                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 그 자리를 누르면 읽어 봅니다 — 「+ 코드」로 넣어도 됩니다. 지운 코드는 점선 상자를 누르면 되살아납니다. 페이지는 두 손가락으로 넘깁니다.")
                     .font(.footnote)
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
+                rereadButton(item)
             } else {
                 // Shown from the start, before the page has loaded: which
                 // version to look at is the first choice, not the last.
@@ -627,7 +647,8 @@ struct ScoreStandView: View {
                             removed: editing ? model.removedChords(item, page: pageIndex) : [],
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
                             onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) },
-                            onRestore: { id in model.restore(item, page: pageIndex, chord: id) })
+                            onRestore: { id in model.restore(item, page: pageIndex, chord: id) },
+                            onTapPage: { point in probe(item, page: pageIndex, at: point) })
                     }
                 }
                 .padding(.horizontal, 12)
@@ -642,7 +663,7 @@ struct ScoreStandView: View {
             // Reading the chords takes seconds a page: said over the page,
             // where the eye is, not in a line at the top.
             .overlay {
-                if state.isReading {
+                if state.isReading || probing {
                     HStack(spacing: 10) {
                         ProgressView().tint(.white)
                         Text("코드를 읽는 중…").font(.callout.weight(.semibold))
@@ -654,7 +675,7 @@ struct ScoreStandView: View {
                     .transition(.opacity)
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: state.isReading)
+            .animation(.easeInOut(duration: 0.2), value: state.isReading || probing)
         } else if let failure = state?.failure {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -901,16 +922,28 @@ struct ScoreStandView: View {
             pill(Text("+ 코드").font(.system(size: 14, weight: .semibold)), wide: true)
         }
         .accessibilityLabel("빠진 코드 넣기")
-        // Always offered while editing, not only after a hand edit: the
-        // reader improves, and a chart read by an older one can be read
-        // again on request. A chart corrected by hand asks first, since
-        // the corrections go.
+        Button { model.undo(item) } label: {
+            pill(Image(systemName: "arrow.uturn.backward").font(.system(size: 16, weight: .semibold)))
+        }
+        .disabled(!model.canUndo(item))
+        .accessibilityLabel("되돌리기")
+    }
+
+    /// 다시 읽기, beside the editing hint: always offered while editing,
+    /// not only after a hand edit — the reader improves, and a chart read by
+    /// an older one can be read again — but rarely, so not in the row of
+    /// buttons, which it pushed onto a second line on iPad, over the
+    /// bottom staff. A chart corrected by hand asks first.
+    private func rereadButton(_ item: ScoreStandItem) -> some View {
         Button {
-            if state?.isEdited == true { confirmingReread = true }
+            if model.states[item.id]?.isEdited == true { confirmingReread = true }
             else { Task { await model.resetEdits(item) } }
         } label: {
-            pill(Text("다시 읽기").font(.system(size: 13, weight: .semibold)), wide: true)
+            Label("코드 다시 읽기", systemImage: "arrow.clockwise")
+                .font(.footnote.weight(.semibold))
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.8))
         .accessibilityLabel("코드를 처음부터 다시 인식")
     }
 
@@ -921,13 +954,6 @@ struct ScoreStandView: View {
         // Size, for what is on screen: the chords on the page — for charts
         // printed small; applies to the export too — or the 코드표, each
         // its own setting, remembered on this device.
-        if editing {
-            Button { model.undo(item) } label: {
-                pill(Image(systemName: "arrow.uturn.backward").font(.system(size: 16, weight: .semibold)))
-            }
-            .disabled(!model.canUndo(item))
-            .accessibilityLabel("되돌리기")
-        }
         let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale <= 0.71
         let larger = showsChart ? model.chartScale >= 2.39 : model.chordScale >= 2.49
         Button {
@@ -1104,6 +1130,8 @@ private struct ScorePageView: View {
     let onMove: (UUID, CGSize) -> Void
     let onTapChord: (UUID) -> Void
     var onRestore: (UUID) -> Void = { _ in }
+    /// A tap on the page, off any chord, while editing — normalised.
+    var onTapPage: (CGPoint) -> Void = { _ in }
 
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
@@ -1120,6 +1148,16 @@ private struct ScorePageView: View {
                         chords: page.chords, chordHeight: page.chordHeight, shift: shift,
                         useFlats: useFlats, scale: scale, alwaysDraw: editing, in: size)
                     ZStack(alignment: .topLeading) {
+                        // Under everything: the page itself, pressed where a
+                        // chord was missed.
+                        if editing {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .frame(width: size.width, height: size.height)
+                                .onTapGesture(coordinateSpace: .local) { location in
+                                    onTapPage(CGPoint(x: location.x / size.width, y: location.y / size.height))
+                                }
+                        }
                         ForEach(ghosts(in: size)) { chord in
                             ghostView(chord, size: size)
                         }
@@ -1639,6 +1677,51 @@ final class ScoreStandModel: ObservableObject {
             setRemoved(pages, for: item)
         }
         saveEdits(item)
+    }
+
+    /// The chord printed where a finger pressed, if the reader can make one
+    /// out there: a strip around the spot, enlarged, read as a page is — and,
+    /// failing that, as a lone capital (ScoreRecognition.readRepeated). In
+    /// the key on screen, centred where it was found.
+    ///
+    /// WHY: the page reading misses a chord here and there — a lone letter,
+    /// one crowded by a slur. Typing it was the only way to put it back; a
+    /// tap on it now reads that spot alone, which is what finds most of them.
+    func readChord(_ item: ScoreStandItem, page: Int, at point: CGPoint) async -> (text: String, center: CGPoint)? {
+        guard let state = states[item.id], state.pages.indices.contains(page),
+              let image = state.pages[page].image.cgImage else { return nil }
+        let height = state.pages[page].chordHeight
+        let shift = state.showsOriginal ? 0 : state.shift
+        let flats: Bool? = state.useFlats
+        return await Task.detached(priority: .userInitiated) { () -> (text: String, center: CGPoint)? in
+            let width = CGFloat(image.width), tall = CGFloat(image.height)
+            let spanY = max(height * 3, 0.035)
+            let area = CGRect(x: point.x - 0.13, y: point.y - spanY / 2, width: 0.26, height: spanY)
+                .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            guard !area.isNull,
+                  let crop = image.cropping(to: CGRect(x: area.minX * width, y: area.minY * tall,
+                                                       width: area.width * width, height: area.height * tall).integral)
+            else { return nil }
+            let read = ScoreRecognition.chords(in: ScoreRecognition.enlarged(crop, by: 3) ?? crop)
+            let nearest = read.map { found -> (String, CGPoint) in
+                (found.original, CGPoint(x: area.minX + found.box.midX * area.width,
+                                         y: area.minY + found.box.midY * area.height))
+            }
+            .min { hypot($0.1.x - point.x, $0.1.y - point.y) < hypot($1.1.x - point.x, $1.1.y - point.y) }
+            // A lone capital, read from a tighter piece round the finger.
+            let lone: (String, CGPoint)? = nearest == nil ? {
+                let piece = CGRect(x: point.x - height * 1.2, y: point.y - height * 0.8,
+                                   width: height * 2.4, height: height * 1.6)
+                    .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+                guard !piece.isNull,
+                      let cut = image.cropping(to: CGRect(x: piece.minX * width, y: piece.minY * tall,
+                                                          width: piece.width * width, height: piece.height * tall).integral),
+                      let found = ScoreRecognition.readRepeated(cut) else { return nil }
+                return (found.original, point)
+            }() : nil
+            guard let (original, center) = nearest ?? lone else { return nil }
+            return (ScoreTransposer.symbol(original, by: shift, useFlats: flats) ?? original, center)
+        }.value
     }
 
     /// The chord as the reader sees it now — the key on screen.

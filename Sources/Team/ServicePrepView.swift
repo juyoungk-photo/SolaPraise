@@ -985,45 +985,6 @@ struct ServicePrepView: View {
                 .buttonStyle(.borderless)
             }
 
-            if !songs.isEmpty {
-
-                // After the service, the songs outlive the 콘티 — next
-                // week's overwrites this one. Offered from the day of the
-                // service onwards, which is when "what we sang" becomes a
-                // fact rather than a plan. Not `isPast`, which excludes
-                // today: the moment this is wanted is Sunday afternoon.
-                if hasHappened(service) {
-                let archived = archiveStore.hasArchived(service)
-                Button {
-                    Task { await archive(service, songs: songs) }
-                } label: {
-                    HStack {
-                        Label(archived
-                              ? "CCC_예배찬양곡_모음에 보관됨"
-                              : "CCC_예배찬양곡_모음에 보관",
-                              systemImage: archived
-                              ? "checkmark.circle.fill" : "tray.and.arrow.down")
-                        .foregroundStyle(archived ? Color.green : Color.accentColor)
-                        Spacer()
-                        if archiveStore.isWorking {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                }
-                // Once filed, the button stops being a button. Pressing
-                // it again could only add duplicates or discover there
-                // are none, and neither is worth a round trip or the
-                // doubt about which one just happened.
-                .disabled(archived || archiveStore.isWorking || !auth.isSignedIn)
-
-                if let note = archiveStore.note {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                }
-            }
-
             // A sheet rather than a menu. The menu could only list the
             // playlists pinned in the 찬양 tab — two, on most devices — and
             // the one a leader wants is usually the one they just built and
@@ -1331,10 +1292,18 @@ struct ServicePrepView: View {
             VStack(alignment: .trailing, spacing: 6) {
                 HStack(spacing: 10) {
                     Spacer(minLength: 0)
+                    // After the service, the songs outlive the 콘티 — next
+                    // week's overwrites this one: kept in the archive
+                    // playlist, offered once the service is over, where
+                    // "what we sang" is a fact rather than a plan.
+                    if hasHappened(service) { archiveBadge(service) }
                     contiMenu(service, contis: contis, built: built, pieces: pieces)
                     standButton(service, stand: stand)
                 }
 
+                if let note = archiveStore.note, hasHappened(service) {
+                    Text(note).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                }
                 Group {
                     if preparingStand {
                         HStack(spacing: 6) {
@@ -1358,6 +1327,30 @@ struct ServicePrepView: View {
                 .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    /// 보관 — into CCC_예배찬양곡_모음 — drawn as the badges beside it. Once
+    /// filed it stops being a button: again could only add duplicates.
+    @ViewBuilder
+    private func archiveBadge(_ service: TeamService) -> some View {
+        let songs = team.plan(for: service).filter { $0.kind == .song && $0.videoId != nil }
+        if !songs.isEmpty {
+            let archived = archiveStore.hasArchived(service)
+            Button {
+                Task { await archive(service, songs: songs) }
+            } label: {
+                HStack(spacing: 4) {
+                    if archiveStore.isWorking { ProgressView().controlSize(.small) }
+                    ChartBadge(text: archived ? "보관됨" : "보관",
+                               systemImage: archived ? "checkmark.circle.fill" : "tray.and.arrow.down",
+                               tint: archived ? .green : .accentColor, large: true)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(archived ? Color.green : Color.accentColor)
+            .disabled(archived || archiveStore.isWorking || !auth.isSignedIn)
+            .accessibilityLabel(archived ? "CCC_예배찬양곡_모음에 보관됨" : "CCC_예배찬양곡_모음에 보관")
         }
     }
 
@@ -1974,10 +1967,11 @@ struct ServicePrepView: View {
 
     /// Today counts. A service is archivable from its own morning, because
     /// the tap that files the set list happens on the way home.
+    /// Over: an hour and a half after it starts, which is about how long a
+    /// service runs. Offered from the day itself, it appeared at midnight —
+    /// eleven hours before anyone had sung anything.
     private func hasHappened(_ service: TeamService) -> Bool {
-        let calendar = Calendar.current
-        return calendar.startOfDay(for: service.date)
-            <= calendar.startOfDay(for: Date())
+        Date() >= serviceStart(service).addingTimeInterval(90 * 60)
     }
 
     /// What to call somebody: the roster's name first.
