@@ -540,54 +540,74 @@ struct ScoreStandView: View {
                     .foregroundStyle(.white)
                     .accessibilityLabel("원본 파일 열기")
                 }
-                // Not while editing: 편집 works on 악보 only.
-                if !editing {
-                    Picker("보기", selection: $showsChart) {
-                        Text("악보").tag(false)
-                        Text("코드표").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    // The stand is dark on every device; a segmented control
-                    // takes its look from the environment, and on iPad it
-                    // came out light with 「악보」 unreadable.
-                    .environment(\.colorScheme, .dark)
+                // Not while editing: 편집 works on 악보 only. Hidden, not
+                // removed, so the line keeps its height and the page its place.
+                Picker("보기", selection: $showsChart) {
+                    Text("악보").tag(false)
+                    Text("코드표").tag(true)
                 }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                // The stand is dark on every device; a segmented control
+                // takes its look from the environment, and on iPad it
+                // came out light with 「악보」 unreadable.
+                .environment(\.colorScheme, .dark)
+                .opacity(editing ? 0 : 1)
+                .allowsHitTesting(!editing)
             }
-            if editing {
-                Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 그 자리를 누르면 읽어 봅니다 — 「+ 코드」로 넣어도 됩니다. 지운 코드는 점선 상자를 누르면 되살아납니다. 페이지는 두 손가락으로 넘깁니다.")
-                    .font(.footnote)
-                    .foregroundStyle(Color.accentColor)
-                    .lineLimit(2)
-                rereadButton(item)
-            } else {
-                // Shown from the start, before the page has loaded: which
-                // version to look at is the first choice, not the last.
-                versionChips(item)
-                // Borrowed from an earlier service: said, so nobody takes it
-                // for a chart put up this week.
-                if let day = item.earlierDay {
-                    Label("지난 \(day.formatted(.dateTime.month(.defaultDigits).day())) 예배에서 쓴 악보 — 이번 예배에는 아직 올린 악보가 없습니다",
-                          systemImage: "clock.arrow.circlepath")
-                        .font(.caption)
-                        .foregroundStyle(Color.accentColor)
-                        .lineLimit(2)
-                }
-            }
-            if !editing, let state, state.isReady {
-                // What was read off the page, against what is sung.
-                if showsChart, let systems = model.charts[item.id], !systems.isEmpty {
-                    Button { checkingLyrics = item } label: {
-                        Label("가사 확인", systemImage: "text.badge.checkmark")
-                            .font(.footnote.weight(.semibold))
+            // Both states laid over each other, in the same space: entering
+            // 편집 must not move the page — a chord is checked against the
+            // page as it was, at the same place. The taller sets the height.
+            ZStack(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    // Shown from the start, before the page has loaded: which
+                    // version to look at is the first choice, not the last.
+                    versionChips(item)
+                    // Borrowed from an earlier service: said, so nobody takes it
+                    // for a chart put up this week.
+                    if let day = item.earlierDay {
+                        Label("지난 \(day.formatted(.dateTime.month(.defaultDigits).day())) 예배에서 쓴 악보 — 이번 예배에는 아직 올린 악보가 없습니다",
+                              systemImage: "clock.arrow.circlepath")
+                            .font(.caption)
+                            .foregroundStyle(Color.accentColor)
+                            .lineLimit(2)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
+                    if let state, state.isReady {
+                        // What was read off the page, against what is sung.
+                        if showsChart, let systems = model.charts[item.id], !systems.isEmpty {
+                            Button { checkingLyrics = item } label: {
+                                Label("가사 확인", systemImage: "text.badge.checkmark")
+                                    .font(.footnote.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                        }
+                        Text(keyLine(item, state))
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(2, reservesSpace: true)
+                    }
                 }
-                Text(keyLine(item, state))
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(2)
+                .opacity(editing ? 0 : 1)
+                .allowsHitTesting(!editing)
+                .accessibilityHidden(editing)
+
+                if editing {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if state?.showsOriginal == true {
+                            Text("원본을 보는 중 — 편집은 멈춥니다. 「원본」을 다시 누르면 이어서 편집합니다.")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .lineLimit(2)
+                        } else {
+                            Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 그 자리를 누르면 읽어 봅니다 — 「+ 코드」로 넣어도 됩니다. 지운 코드는 점선 상자를 누르면 되살아납니다. 「원본」으로 인쇄된 악보와 비교하세요. 페이지는 두 손가락으로 넘깁니다.")
+                                .font(.footnote)
+                                .foregroundStyle(Color.accentColor)
+                                .lineLimit(2)
+                        }
+                        rereadButton(item)
+                    }
+                }
             }
             if let status = model.shareStatus[item.id] {
                 Label(status, systemImage: status.contains("이 기기에만") || status.contains("못했")
@@ -657,7 +677,9 @@ struct ScoreStandView: View {
                             shift: state.showsOriginal ? 0 : state.shift,
                             useFlats: state.useFlats,
                             scale: model.chordScale,
-                            original: state.showsOriginal && !editing,
+                            // 원본 while editing is a check: the page as
+                            // printed, nothing drawn or editable on it.
+                            original: state.showsOriginal,
                             editing: editing,
                             removed: editing ? model.removedChords(item, page: pageIndex) : [],
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
@@ -840,7 +862,10 @@ struct ScoreStandView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 keyGroup(item)
-                if editing { editGroup(item) }
+                if editing {
+                    // Paused while the page is shown as printed.
+                    editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
+                }
                 Spacer(minLength: 12)
                 if !editing { originalButton(item) }
                 Spacer(minLength: 12)
@@ -852,7 +877,10 @@ struct ScoreStandView: View {
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
                     keyGroup(item)
-                    if editing { editGroup(item) }
+                    if editing {
+                    // Paused while the page is shown as printed.
+                    editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
+                }
                     Spacer(minLength: 8)
                     if !editing { originalButton(item) }
                 }
@@ -1060,6 +1088,11 @@ struct ScoreStandView: View {
         .opacity(editing ? 0 : 1)
         .allowsHitTesting(!editing)
         .accessibilityHidden(editing)
+        // While editing, 원본 takes the place 공유 leaves: beside 완료, a
+        // check to make often, and the row stays one line on iPad.
+        .overlay(alignment: .leading) {
+            if editing { originalButton(item) }
+        }
 
     }
 
