@@ -14,7 +14,7 @@
 //
 //  Run:
 //      swiftc -O -o /tmp/lyricfixes \
-//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift Sources/Chords/ScoreChart.swift \
+//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift Sources/Chords/ChordGlyphs.swift Sources/Chords/ScoreChart.swift \
 //          Sources/Chords/LyricFixes.swift Tools/check-lyric-fixes.swift
 //      /tmp/lyricfixes
 //

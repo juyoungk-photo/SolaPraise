@@ -44,12 +44,15 @@ enum ScoreChordText {
     /// Suffixes a chord symbol may carry. Longest first, so "maj7" is tried
     /// before "m" would ever match the "m" inside it.
     private static let suffixes: [String] = [
-        "maj7", "maj9", "maj13", "maj", "M7", "M9",
-        "m7b5", "m7", "m9", "m11", "m13", "m6", "min", "m",
+        "maj7#11", "maj7", "maj9", "maj13", "maj", "M7", "M9", "Maj7", "M",
+        "m(maj7)", "mmaj7", "mM7", "m7(b5)", "m7b5", "m7", "m9", "m11", "m13", "m6/9", "m6", "min", "m",
         "sus2", "sus4", "sus",
-        "add9", "add2", "add11",
+        "add9", "add2", "add4", "add11",
         "dim7", "dim", "aug",
-        "7sus4", "7sus", "13", "11", "9", "7", "6", "5",
+        "7sus4", "7sus2", "7sus", "9sus4", "7(b9)", "7(#9)", "7b9", "7#9", "7b5", "7#5",
+        "6/9", "69", "13", "11", "9", "7", "6", "5",
+        // 「A2」, 「D4」: how worship charts write add2 and sus4.
+        "2", "4",
         "°", "ø", "+", ""
     ]
 
@@ -124,11 +127,16 @@ enum ScoreChordText {
 
     /// Unicode accidentals and the stray spaces OCR leaves behind.
     private static func normalise(_ raw: String) -> String {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "♯", with: "#")
             .replacingOccurrences(of: "♭", with: "b")
             .replacingOccurrences(of: "∕", with: "/")
             .replacingOccurrences(of: " ", with: "")
+        // 「(E7)」: an optional chord, in parentheses as a whole.
+        if text.hasPrefix("("), text.hasSuffix(")"), text.count > 2 {
+            text = String(text.dropFirst().dropLast())
+        }
+        return text
     }
 
     // MARK: - Transposing

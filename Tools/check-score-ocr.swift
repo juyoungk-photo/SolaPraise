@@ -15,7 +15,7 @@
 //
 //  Run:
 //      swiftc -O -o /tmp/scoreocr \
-//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift Sources/Chords/ScoreChart.swift \
+//          Sources/Chords/ScoreChordText.swift Sources/Chords/ScoreRecognition.swift Sources/Chords/ChordGlyphs.swift Sources/Chords/ScoreChart.swift \
 //          Tools/check-score-ocr.swift
 //      /tmp/scoreocr
 //

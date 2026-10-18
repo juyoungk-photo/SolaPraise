@@ -20,7 +20,7 @@ enum ScoreRecognition {
     /// Raised whenever recognition changes what it finds. A chart read by
     /// an older version and never corrected by hand is read again, so an
     /// improvement reaches charts already opened — not only new ones.
-    static let version = 8
+    static let version = 9
 
     /// One chord found on a page.
     struct Found: Identifiable, Equatable {
@@ -49,6 +49,15 @@ enum ScoreRecognition {
     ///
     /// Results are merged by position, so a chord found twice is kept once.
     static func chords(in image: CGImage) -> [Found] {
+        // A page whose staves are small — a photo, a thumbnail-sized
+        // upload — is read at twice the size: glyphs of ten pixels are
+        // shapes neither the text engine nor the shape rules can tell
+        // apart, and every measure below is in staff spacings. Boxes are
+        // normalised, so nothing else knows.
+        if let spacing = staves(in: image).first.map({ $0.staff.height * CGFloat(image.height) / 4 }),
+           spacing < 12, image.width < 2400, let larger = enlarged(image, by: 2) {
+            return chords(in: larger)
+        }
         var found: [Found] = []
         var lyricLines: [CGRect] = []
         var koreanWords: [CGRect] = []
@@ -86,69 +95,81 @@ enum ScoreRecognition {
         // line of text. So each staff is found by its lines, and the strip
         // above it is read on its own, enlarged.
         let staves = staves(in: image)
-        for band in staves.map(\.band) {
-            // First the strip whole, enlarged — which finds most chords and,
-            // as importantly, WHERE the chord text sits in the strip.
-            let pixels = CGRect(x: 0, y: band.minY * CGFloat(image.height),
-                                width: CGFloat(image.width),
-                                height: band.height * CGFloat(image.height)).integral
-            if let crop = image.cropping(to: pixels), let strip = enlarged(crop, by: 2) {
-                let mapped = recognise(strip, languages: ["en-US", "ko-KR"]).chords.map { item in
-                    Found(original: item.original,
-                          box: CGRect(x: item.box.minX,
-                                      y: band.minY + item.box.minY * band.height,
-                                      width: item.box.width,
-                                      height: item.box.height * band.height),
+        // STAFF NOTATION: chords sit above each five-line staff. The strip
+        // above each staff is read glyph by glyph (ChordGlyphs): its ink
+        // cut into symbols, a ♯, a ♭ and a raised digit told by their
+        // shape, the letters alone given to the text engine. What it reads
+        // replaces anything the page-wide passes read in that strip —
+        // those saw 「F♯m」 as 「Fm」 and 「C9」 as 「C°」, and a row between
+        // staves often not at all.
+        // What the glyph reader read, by id: it saw the strip's ink itself,
+        // so the page-wide guesses below about lyrics and key signatures
+        // do not apply to it.
+        var glyphRead = Set<UUID>()
+        if !staves.isEmpty, let gray = grayscale(image) {
+            let ink = ChordGlyphs.threshold(gray)
+            for (band, staff) in staves {
+                let pixels = CGRect(x: 0, y: band.minY * CGFloat(image.height),
+                                    width: CGFloat(image.width),
+                                    height: band.height * CGFloat(image.height)).integral
+                guard pixels.height >= 4, let strip = image.cropping(to: pixels) else { continue }
+                let unit = staff.height * CGFloat(image.height) / 4
+                let read = ChordGlyphs.read(strip: strip, unit: unit, threshold: ink).map { item in
+                    Found(original: item.text,
+                          box: CGRect(x: item.box.minX / CGFloat(image.width),
+                                      y: band.minY + item.box.minY / CGFloat(image.height),
+                                      width: item.box.width / CGFloat(image.width),
+                                      height: item.box.height / CGFloat(image.height)),
                           confidence: item.confidence)
                 }
-                merge(mapped, into: &found)
+                let trace = ProcessInfo.processInfo.environment["CHORDGLYPHS_DEBUG"] != nil
+                found.removeAll { item in
+                    let gone = read.contains { $0.box.minX < item.box.maxX && item.box.minX < $0.box.maxX
+                                               && abs($0.box.midY - item.box.midY) < band.height }
+                    if gone, trace { print("  replaced \(item.original)@\(String(format: "%.2f,%.2f", item.box.minX, item.box.midY))") }
+                    return gone
+                }
+                let before = found.count
+                merge(read, into: &found)
+                for item in read { glyphRead.insert(item.id) }
+                if trace {
+                    print("  band \(String(format: "%.2f", band.midY)): read " + read.map { "\($0.original)@\(String(format: "%.2f", $0.box.minX))" }.joined(separator: " ")
+                          + " — \(found.count - before) of \(read.count) new")
+                }
             }
-
-            // Then each word on its own, cut to the height of the chord
-            // text. Note stems and beams reach up into the strip; cut at
-            // the strip's full height they stuck to the letters, and a lone
-            // 「C」 read as 「lu-」. Alone, on a white margin, a chord reads
-            // as itself, and replaces whatever was read in its place.
-            let inBand = found.filter { band.contains(CGPoint(x: 0.5, y: $0.box.midY)) }
-            var textBand = band
-            if !inBand.isEmpty {
-                let tops = inBand.map(\.box.minY).sorted(), bottoms = inBand.map(\.box.maxY).sorted()
-                let top = tops[tops.count / 2], bottom = bottoms[bottoms.count / 2]
-                let margin = (bottom - top) * 0.3
-                textBand = CGRect(x: 0, y: top - margin, width: 1, height: bottom - top + margin * 2)
-                    .intersection(band.insetBy(dx: 0, dy: -band.height * 0.2))
-            }
-            // A cut that spans two chords already read is two words run
-            // together — 「3.G D/E」 came back as 「D/E」 alone and took the
-            // G with it. Such a cut is dropped; it replaces nothing.
-            let alone = readWordsAlone(in: image, band: textBand).filter { cut in
-                found.filter { item in
-                    cut.box.minX < item.box.midX && item.box.midX < cut.box.maxX
-                        && abs(cut.box.midY - item.box.midY) < band.height
-                }.count <= 1
-            }
-            found.removeAll { item in
-                alone.contains { $0.box.minX < item.box.maxX && item.box.minX < $0.box.maxX
-                                  && abs($0.box.midY - item.box.midY) < band.height }
-            }
-            merge(alone, into: &found)
         }
 
+        let trace = ProcessInfo.processInfo.environment["CHORDGLYPHS_DEBUG"] != nil
+        func dropping(_ reason: String, _ gone: (Found) -> Bool) {
+            found.removeAll { item in
+                let out = gone(item)
+                if out, trace { print("  dropped \(item.original)@\(String(format: "%.2f,%.2f", item.box.minX, item.box.midY)): \(reason)") }
+                return out
+            }
+        }
+        // On a staff page a chord stands above a staff, nowhere else: what
+        // the page-wide passes read in a lyric line or a title — 「C#」 for
+        // a syllable — goes.
+        if !staves.isEmpty {
+            dropping("outside every band") { item in
+                !glyphRead.contains(item.id) && !staves.contains { $0.band.minY <= item.box.midY && item.box.midY <= $0.band.maxY }
+            }
+        }
         // A rehearsal mark is a letter in a box — 「A」 — and a letter is a
         // chord. Anything boxed is dropped.
-        found.removeAll { isBoxed($0.box, in: image) }
+        dropping("boxed") { isBoxed($0.box, in: image) }
         // Last: ink on a chord line that no pass read. Each unread blob is
         // cut out on its own, with white around it, enlarged and read
         // alone. A lone capital at the start of a line — 「C」 — went
         // unread by every whole-line pass, in either language order and
         // at twice the size; by itself it reads at once.
-        merge(unreadBlobs(in: image, around: found), into: &found)
+        if staves.isEmpty { merge(unreadBlobs(in: image, around: found), into: &found) }
 
         // On a staff page nothing left of the clef is a chord: the margin
         // holds segno marks and system brackets, and the unread-ink pass
         // read one as 「A」. Checked last, after every pass has added.
         if !staves.isEmpty {
-            found.removeAll { $0.box.minX < 0.07 }
+            dropping("left margin") { $0.box.minX < 0.045 }
             // Nothing whose ink is all Korean lyrics. Printed in a serif
             // face, 「사랑」 was read as 「A6」 and 「살아」 as 「A」 by a pass
             // that saw only Latin there, while another pass read the same
@@ -168,10 +189,11 @@ enum ScoreRecognition {
                 // for a box's height below it, so a beam the box only
                 // grazes is followed down to its staff.
                 let staffRows = staves.map { $0.staff.insetBy(dx: 0, dy: -$0.staff.height / 8) }
-                found.removeAll { item in
+                dropping("lyric ink") { item in
                     // What a syllable is misread as is short and plain —
                     // 「A」, 「A6」 — never a slash chord or a 「sus4」.
-                    guard item.original.count <= 3, !item.original.contains("/") else { return false }
+                    guard !glyphRead.contains(item.id),
+                          item.original.count <= 3, !item.original.contains("/") else { return false }
                     let probe = CGRect(x: item.box.minX, y: item.box.minY,
                                        width: item.box.width, height: item.box.height * 2)
                     let lines = inkLines(probe, in: image).filter { run in
@@ -231,15 +253,16 @@ enum ScoreRecognition {
                 guard let start = staffStart(staff, in: image) else { continue }
                 let gap = staff.height / 4
                 let gapX = gap * CGFloat(image.height) / CGFloat(image.width)
-                found.removeAll { item in
-                    item.box.midY > staff.minY - gap * 7 && item.box.midY < staff.minY + gap
+                dropping("over the clef") { item in
+                    item.original.count == 1
+                        && item.box.midY > staff.minY - gap * 7 && item.box.midY < staff.minY + gap
                         && item.box.minX < start + gapX * 2
                 }
             }
             // Chords sit ABOVE a staff. Anything centred between its lines
             // is notation: on the iPhone the key signature's ♯, on the top
             // line, was read as 「F」 and became a chord at every staff.
-            found.removeAll { item in
+            dropping("inside a staff") { item in
                 staves.contains { $0.staff.minY < item.box.midY && item.box.midY < $0.staff.maxY }
             }
             // The same sharp, read with its box cut off at the top line: by
@@ -248,8 +271,8 @@ enum ScoreRecognition {
             // chord of a row, and testing that alone removed real chords.
             // What only a key signature does is repeat: the same columns
             // run through the top line of nearly EVERY staff on the page.
-            found.removeAll { item in
-                guard item.box.minX < 0.13 else { return false }
+            dropping("key signature") { item in
+                guard !glyphRead.contains(item.id), item.box.minX < 0.13 else { return false }
                 // Probed where the letters are — the inked columns of the
                 // box's upper part, middle half. A chord printed just right
                 // of the signature can come back in one box with the ♯'s
@@ -331,58 +354,139 @@ enum ScoreRecognition {
 
     /// Each five-line staff on the page — its lines, top to bottom — and
     /// the strip above it where its chords sit. Normalised.
+    ///
+    /// A staff line is a row inked across the page: at least half of
+    /// sixteen windows across it 40% inked, or three windows solid (the
+    /// short last staff of a hymn). Judged window by window so a scan's
+    /// slight skew, which leaves no single row half inked, still shows
+    /// every line; at a light threshold, for lines printed thin and grey.
+    /// Rows are grouped into lines, a run longer than a line is a block
+    /// of text and dropped, and a run with a dip in it is two lines a
+    /// beam joined. The page's line spacing is the commonest gap, and a
+    /// staff is four or five lines at that spacing — four, because one
+    /// line of a faint scan often falls short. This replaced a detector
+    /// that needed all five lines half inked across the whole width,
+    /// which found four of the eight staves on a team's scanned chart.
     static func staves(in image: CGImage) -> [(band: CGRect, staff: CGRect)] {
         guard let gray = grayscale(image) else { return [] }
         let width = image.width, height = image.height
+        guard width >= 32, height >= 32 else { return [] }
 
-        // Rows that are mostly ink across the page: staff lines. Counted
-        // at a light threshold — staff lines are drawn thin and grey, and
-        // anti-aliasing spreads one over two pixel rows at half strength.
-        var lineRows: [Int] = []
+        let windows = 16
+        let left = width * 3 / 100, right = width * 97 / 100
+        let step = max(1, (right - left) / windows)
+        // Per row, how many windows are 40% inked and how many 70%.
+        var candidate = [Bool](repeating: false, count: height)
+        var score = [Double](repeating: 0, count: height)
+        var inked = [Int](repeating: 0, count: windows)
         for y in 0..<height {
-            var inked = 0
             let row = y * width
-            for x in 0..<width where gray[row + x] < 200 { inked += 1 }
-            if inked > width / 2 { lineRows.append(y) }
-        }
-        // Consecutive rows are one line.
-        var lines: [CGFloat] = []
-        var run: [Int] = []
-        for y in lineRows {
-            if let last = run.last, y - last > 1 {
-                lines.append(CGFloat(run.reduce(0, +)) / CGFloat(run.count)); run = []
+            for w in 0..<windows { inked[w] = 0 }
+            for w in 0..<windows {
+                let x0 = left + w * step, x1 = min(right, x0 + step)
+                var n = 0
+                for x in x0..<x1 where gray[row + x] < 225 { n += 1 }
+                inked[w] = n
             }
-            run.append(y)
+            var wide = 0, solid = 0, total = 0
+            for w in 0..<windows {
+                let fraction = Double(inked[w]) / Double(step)
+                if fraction >= 0.4 { wide += 1 }
+                if fraction >= 0.7 { solid += 1 }
+                total += inked[w]
+            }
+            if wide >= windows / 2 || solid >= 3 {
+                candidate[y] = true
+                score[y] = Double(total) / Double(step * windows)
+            }
         }
-        if !run.isEmpty { lines.append(CGFloat(run.reduce(0, +)) / CGFloat(run.count)) }
 
-        // Five evenly spaced lines are a staff.
-        var bands: [(band: CGRect, staff: CGRect)] = []
-        var i = 0
-        var previousBottom: CGFloat = 0
-        while i + 4 < lines.count {
-            let gaps = (0..<4).map { lines[i + $0 + 1] - lines[i + $0] }
-            let mean = gaps.reduce(0, +) / 4
-            if mean > 2, gaps.allSatisfy({ abs($0 - mean) < mean * 0.3 }) {
-                let top = lines[i]
-                // From well above the staff down to just above it; never
-                // above the previous staff, whose notes would come along.
-                // Four line-gaps: where chords sit, and short of the
-                // previous staff's lyrics — which, read as Latin, turned
-                // into 「A ä - d -」 and put an A on the page.
-                let upper = max(previousBottom + mean, top - mean * 4)
-                let lower = top - mean * 0.2
-                if lower > upper {
-                    let staff = CGRect(x: 0, y: top / CGFloat(height),
-                                       width: 1, height: (lines[i + 4] - top) / CGFloat(height))
-                    bands.append((CGRect(x: 0, y: upper / CGFloat(height),
-                                         width: 1, height: (lower - upper) / CGFloat(height)), staff))
+        // Candidate rows into lines.
+        // A line is a few rows thick; at twice the size, a few more.
+        let maxThick = max(4, width / 300)
+        var lines: [CGFloat] = []
+        func centre(_ a: Int, _ b: Int) -> CGFloat {
+            var num = 0.0, den = 0.0
+            for y in a...b { num += Double(y) * (score[y] + 1e-6); den += score[y] + 1e-6 }
+            return CGFloat(num / den)
+        }
+        var y = 0
+        while y < height {
+            guard candidate[y] else { y += 1; continue }
+            var end = y
+            while end + 1 < height, candidate[end + 1] { end += 1 }
+            let n = end - y + 1
+            if n <= maxThick * 2 {
+                // Two lines a beam joined read as one run with a dip in it.
+                var cut = -1
+                if n >= 4 {
+                    var low = Double.infinity
+                    for k in (y + 1)..<end where score[k] < low { low = score[k]; cut = k }
+                    let leftPeak = (y..<cut).map { score[$0] }.max() ?? 0
+                    let rightPeak = ((cut + 1)...end).map { score[$0] }.max() ?? 0
+                    if !(n > maxThick && low < 0.7 * min(leftPeak, rightPeak)) { cut = -1 }
                 }
-                previousBottom = lines[i + 4]
-                i += 5
-            } else {
-                i += 1
+                if cut > 0 {
+                    if cut - 1 >= y { lines.append(centre(y, cut - 1)) }
+                    if end >= cut + 1 { lines.append(centre(cut + 1, end)) }
+                } else {
+                    lines.append(centre(y, end))
+                }
             }
+            y = end + 1
+        }
+        guard lines.count >= 4 else { return [] }
+
+        // The spacing: the commonest gap between lines, refined.
+        var gaps: [CGFloat] = []
+        for i in 1..<lines.count {
+            let g = lines[i] - lines[i - 1]
+            if g >= 3, g <= 80 { gaps.append(g) }
+        }
+        guard !gaps.isEmpty else { return [] }
+        var histogram: [Int: Int] = [:]
+        for g in gaps { histogram[Int(g.rounded()), default: 0] += 1 }
+        let mode = CGFloat(histogram.max { $0.value < $1.value }!.key)
+        let near = gaps.filter { abs($0 - mode) <= mode * 0.25 }
+        let spacing = near.reduce(0, +) / CGFloat(near.count)
+        let tolerance = max(1.5, spacing * 0.3)
+
+        // Four or five lines at the spacing make a staff.
+        var used = [Bool](repeating: false, count: lines.count)
+        var found: [(top: CGFloat, bottom: CGFloat)] = []
+        for (i, top) in lines.enumerated() where !used[i] {
+            var members = [i]
+            for k in 1...4 {
+                let want = top + CGFloat(k) * spacing
+                if let j = lines.indices.first(where: { !used[$0] && abs(lines[$0] - want) < tolerance }) {
+                    members.append(j)
+                }
+            }
+            guard members.count >= 4 else { continue }
+            for m in members { used[m] = true }
+            if let last = found.last, top < last.bottom + spacing * 0.5 { continue }
+            found.append((top, top + 4 * spacing))
+        }
+
+        var bands: [(band: CGRect, staff: CGRect)] = []
+        var previousBottom: CGFloat = 0
+        for staff in found {
+            // From well above the staff down to just above it; never
+            // above the previous staff, whose notes and lyrics would
+            // come along. Five line-gaps: where chords sit.
+            // From well above the staff down to just above it — and below
+            // the previous staff's lyrics, which hang two to four spacings
+            // under it. When the staves are closer than that, halfway.
+            let gap = staff.top - previousBottom
+            let upper = previousBottom == 0 ? max(0, staff.top - spacing * 5)
+                : gap >= spacing * 8.5 ? max(previousBottom + spacing * 4, staff.top - spacing * 4.5)
+                : previousBottom + gap / 2
+            let lower = staff.top - spacing * 0.2
+            if lower > upper {
+                bands.append((CGRect(x: 0, y: upper / CGFloat(height), width: 1, height: (lower - upper) / CGFloat(height)),
+                              CGRect(x: 0, y: staff.top / CGFloat(height), width: 1, height: (staff.bottom - staff.top) / CGFloat(height))))
+            }
+            previousBottom = staff.bottom
         }
         return bands
     }
@@ -862,6 +966,12 @@ enum ScoreRecognition {
         if let match = word.range(of: #"^(?:[|Il1]*\d*\.|[-–|])+(?=[A-G])"#, options: .regularExpression) {
             word.removeSubrange(match)
         }
+        // The volta's number with its dot lost — 「11Am」 for 「1.Am」 —
+        // when what follows is a chord on its own.
+        if let match = word.range(of: #"^(?:[|Il1]{1,3}\d?|\d)\.?(?=[A-G])"#, options: .regularExpression),
+           ScoreChordText.parse(String(word[match.upperBound...])) != nil {
+            word.removeSubrange(match)
+        }
         if word.range(of: #"^[A-G][#b]?(?:m|maj|sus|add|dim|aug|\d)*[Il|][A-G][#b]?$"#,
                       options: .regularExpression) != nil,
            let bar = word.lastIndex(where: { "Il|".contains($0) }) {
@@ -873,6 +983,32 @@ enum ScoreRecognition {
         word = word.replacingOccurrences(of: #"^([A-G])[t‡†＃♯](?=$|m|7|/|sus|maj|dim|aug|add|\d)"#,
                                          with: "$1#", options: .regularExpression)
         word = word.replacingOccurrences(of: "E#", with: "F#").replacingOccurrences(of: "B#", with: "C#")
+        // 「AM」: the engine's capital for 「Am」 — no chart writes A major
+        // that way; 「M7」, major seventh, is left alone.
+        word = word.replacingOccurrences(of: #"^([A-G][#b]?)M(?=$|/)"#, with: "$1m", options: .regularExpression)
+        // A ♯ the engine named as some other letter — 「Fim」, 「E/GF」,
+        // 「CF7/F」: one character right after a root that leaves nothing
+        // a chord could be, where a ♯ makes one. The grammar decides.
+        if ScoreChordText.parse(word) == nil {
+            let chars = Array(word)
+            // The letters the engine gives a ♯ — an F, an H, a t — and
+            // marks that are no letter; never another chord letter.
+            for i in chars.indices where i > 0 && "ABCDEFG".contains(chars[i - 1]) && (i == 1 || chars[i - 2] == "/")
+                && (!chars[i].isLetter || "FHTtfil".contains(chars[i])) && !"#b/0123456789".contains(chars[i]) {
+                var repaired = chars
+                repaired[i] = "#"
+                if ScoreChordText.parse(String(repaired)) != nil { return String(repaired) }
+            }
+            // Elsewhere — 「G/B_」, 「ma]7」 — a character no chord holds:
+            // a stray mark, else the j, the slash or the ♯ that was printed.
+            for i in chars.indices where i > 0 && !chars[i].isLetter && !chars[i].isNumber && !"#b/".contains(chars[i]) {
+                for guess in ["", "j", "/", "#"] {
+                    var repaired = chars
+                    repaired.replaceSubrange(i...i, with: Array(guess))
+                    if ScoreChordText.parse(String(repaired)) != nil { return String(repaired) }
+                }
+            }
+        }
         return word
     }
 
