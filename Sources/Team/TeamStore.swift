@@ -478,6 +478,63 @@ final class TeamStore: ObservableObject {
     /// A sheet without a Plan tab still has songs, and a list of songs is a
     /// perfectly good order of service for a team that only plans music — so
     /// it is shown as one rather than showing nothing.
+    // MARK: - What the team said about a song before
+    //
+    // PRINCIPLE: whatever a person tells the app about a song — its title,
+    // its key, its charts — is found again the next time the song comes
+    // round, from whichever door it comes in by. These are the lookups;
+    // the playlist fill, 콘티에 추가 and a service's 악보 use them.
+
+    /// A song's 순서 entries on services before `day`, most recent first —
+    /// by its video, else by its title.
+    private func earlierEntries(videoId: String?, title: String, before day: Date) -> [(TeamService, PlanItem)] {
+        let start = Calendar.current.startOfDay(for: day)
+        var out: [(TeamService, PlanItem)] = []
+        for service in services.filter({ $0.date < start }).sorted(by: { $0.date > $1.date }) {
+            if let item = plan(for: service).first(where: { song in
+                song.kind == .song && ((videoId != nil && song.videoId == videoId) || PlanSongTitle.sameSong(song.title, title))
+            }) {
+                out.append((service, item))
+            }
+        }
+        return out
+    }
+
+    /// The key the team last played a song in, from its most recent earlier
+    /// 순서 that gave one. A song coming round again came in keyless.
+    func lastKey(videoId: String?, title: String, before day: Date) -> String? {
+        earlierEntries(videoId: videoId, title: title, before: day)
+            .lazy.compactMap { $0.1.key?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
+    /// The song's title as the team last wrote it for this video, as the
+    /// Songs tab carries it. A title fixed by hand once is the title.
+    func sheetTitle(forVideo id: String) -> String? {
+        let today = Calendar.current.startOfDay(for: Date())
+        for service in services.sorted(by: { abs($0.date.timeIntervalSince(today)) < abs($1.date.timeIntervalSince(today)) }) {
+            if let item = plan(for: service).first(where: { $0.kind == .song && $0.videoId == id }) {
+                let title = PlanSongTitle.forSheet(item.title).title
+                return title.isEmpty ? nil : title
+            }
+        }
+        return nil
+    }
+
+    /// The charts the team attached to a song on the most recent earlier
+    /// service that had any, newest first: the chart it last played from.
+    func earlierCharts(videoId: String?, title: String, before day: Date) -> [Attachment] {
+        let start = Calendar.current.startOfDay(for: day)
+        let songs = Set([title] + earlierEntries(videoId: videoId, title: title, before: day).map(\.1.title))
+        let charts = attachments.filter { $0.key < start }.values.joined().filter { chart in
+            !chart.belongsToService && ScoreArchive.isScore(chart.name)
+                && songs.contains { PlanSongTitle.sameSong($0, chart.song) }
+        }
+        guard let last = charts.map(\.date).max() else { return [] }
+        return charts.filter { Calendar.current.isDate($0.date, inSameDayAs: last) }
+            .sorted { ($0.addedAt ?? $0.date) > ($1.addedAt ?? $1.date) }
+    }
+
     /// The song a video is, as the team's 순서 names it — the nearest
     /// service that has it, its title without the hymn number's suffix.
     /// What a person tidied or chose on the sheet beats a fresh reading of
@@ -1861,6 +1918,8 @@ final class TeamStore: ObservableObject {
         to service: TeamService,
         sheetId: String
     ) async -> AppendResult {
+        // The key the team last played it in, when nothing else gives one.
+        let key = key ?? lastKey(videoId: videoId, title: title, before: service.date)
         #if DEBUG
         // In memory, so the add, its bubble and the duplicate guard can be
         // driven in a simulator without a sheet.

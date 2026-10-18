@@ -18,6 +18,9 @@ import SwiftUI
 struct SongTitleReviewSheet: View {
     let playlistTitle: String
     let songs: [TeamSong]
+    /// The title said for a song's video before — chosen here, or on the
+    /// team's sheet. It is where the title starts.
+    var remembered: (TeamSong) -> String? = { _ in nil }
     /// The songs to write, with any title chosen here.
     let onSend: ([TeamSong]) -> Void
     let onCancel: () -> Void
@@ -63,7 +66,7 @@ struct SongTitleReviewSheet: View {
         .onAppear {
             guard !started else { return }
             started = true
-            titles = songs.map { PlanSongTitle.forSheet($0.title, channel: $0.channel).title }
+            titles = songs.map { remembered($0) ?? PlanSongTitle.forSheet($0.title, channel: $0.channel).title }
             taken = Set(songs.indices)
         }
     }
@@ -104,6 +107,14 @@ struct SongTitleReviewSheet: View {
                         .menuOrder(.fixed)
                         .buttonStyle(.borderless)
                     }
+                }
+                // Said before for this video, so not a fresh guess.
+                if let before = remembered(song), before == titles[index],
+                   before != PlanSongTitle.forSheet(song.title, channel: song.channel).title {
+                    Label("지난번에 정한 이름", systemImage: "clock.arrow.circlepath")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.leading, 36)
                 }
                 // The video's title as it came, to judge the reading by.
                 Text(song.title)

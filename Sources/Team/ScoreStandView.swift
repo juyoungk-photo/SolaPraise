@@ -31,6 +31,10 @@ struct ScoreStandItem: Identifiable, Hashable {
     var pages: [Int]? = nil
     /// How this version is named in the stand's version menu.
     var versionLabel: String? = nil
+    /// From an earlier service — the chart the song was last played from,
+    /// offered when this service has none. Shown as such, and never taken
+    /// off from here: it belongs to that service.
+    var earlierDay: Date? = nil
 
     /// The file and the pages: one 콘티 file is several songs on the stand,
     /// each read, transposed and corrected on its own.
@@ -333,7 +337,8 @@ struct ScoreStandView: View {
                 VersionChips.Version(label: option.versionLabel ?? option.attachment.name,
                                      key: model.chartKeyName(option),
                                      by: option.attachment.addedBy.isEmpty ? nil
-                                        : team.rosterName(for: option.attachment.addedBy))
+                                        : team.rosterName(for: option.attachment.addedBy),
+                                     note: option.earlierDay.map { "지난 " + $0.formatted(.dateTime.month(.defaultDigits).day()) })
             }, songs: [item.song, PlanSongTitle.split(item.song).title])
             let inConti = contiScope.flatMap { ContiChoice.pick(options, scope: $0, song: item.song)?.id }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -395,7 +400,7 @@ struct ScoreStandView: View {
                     }
                     // A song's own chart only: a 콘티's pages are the 콘티
                     // file's, taken off from its own menu.
-                    if removeVersion != nil, item.pages == nil, !item.attachment.belongsToService {
+                    if removeVersion != nil, item.pages == nil, !item.attachment.belongsToService, item.earlierDay == nil {
                         Button { removing = item } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 13, weight: .semibold))
@@ -496,6 +501,15 @@ struct ScoreStandView: View {
                 // Shown from the start, before the page has loaded: which
                 // version to look at is the first choice, not the last.
                 versionChips(item)
+                // Borrowed from an earlier service: said, so nobody takes it
+                // for a chart put up this week.
+                if let day = item.earlierDay {
+                    Label("지난 \(day.formatted(.dateTime.month(.defaultDigits).day())) 예배에서 쓴 악보 — 이번 예배에는 아직 올린 악보가 없습니다",
+                          systemImage: "clock.arrow.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(2)
+                }
             }
             if !editing, let state, state.isReady {
                 // What was read off the page, against what is sung.

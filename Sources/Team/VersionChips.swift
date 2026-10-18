@@ -26,6 +26,8 @@ enum VersionChips {
         var key: String? = nil
         /// Who put it up, as the roster names them.
         var by: String? = nil
+        /// Said last, always: 「지난 10/4」 for a chart from an earlier service.
+        var note: String? = nil
     }
 
     /// One short name per version, in the same order. `songs`: the song's
@@ -76,7 +78,7 @@ enum VersionChips {
         rest = rest.trimmingCharacters(in: CharacterSet(charactersIn: " -_·"))
         if isGenerated(rest) { rest = "" }
 
-        let parts = [key, rest.isEmpty ? nil : clipped(rest), version.by].compactMap { $0 }
+        let parts = [key, rest.isEmpty ? nil : clipped(rest), version.by, version.note].compactMap { $0 }
         let prefix = isChart ? "악보" : "파일"
         return parts.isEmpty ? prefix : prefix + " " + parts.joined(separator: " · ")
     }

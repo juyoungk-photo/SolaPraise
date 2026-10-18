@@ -61,6 +61,10 @@ struct CheckVersionChips {
             V(label: "악보 x.pdf · 10/12 올림"),
         ]), ["악보 x", "악보 x (2)"], "numbered when nothing else separates")
 
+        // A chart from an earlier service says so, last.
+        expect(VersionChips.names([V(label: "악보 x.pdf", key: "G", by: "주영", note: "지난 10/4")]),
+               ["악보 G · x · 주영 · 지난 10/4"], "an earlier service's chart")
+
         // Nothing known: just 악보.
         expect(VersionChips.names([V(label: "악보 20261018-곡-1760000000-AB12.jpg")]), ["악보"], "nothing known")
 

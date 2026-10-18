@@ -254,6 +254,9 @@ struct ServicePrepView: View {
             }
             .sheet(item: $reviewing) { review in
                 SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs,
+                                     remembered: { song in
+                                         song.videoId.flatMap { SongTitleChoices.title(for: $0) ?? team.sheetTitle(forVideo: $0) }
+                                     },
                                      onSend: { songs in
                                          reviewing = nil
                                          Task { await write(songs, to: review.service) }
@@ -1302,10 +1305,14 @@ struct ServicePrepView: View {
                             Text("콘티 파일을 곡별로 나누는 중…")
                         }
                     } else {
-                        Text(contis.isEmpty && pieces.isEmpty
+                        // Charts borrowed from an earlier service count: they
+                        // are what 전체 악보 and the 콘티 will use.
+                        let borrowed = stand.filter { $0.earlierDay != nil }.count
+                        Text(contis.isEmpty && pieces.isEmpty && borrowed == 0
                              ? "콘티 폴더에 날짜로 시작하는 콘티 PDF를 두거나, 곡마다 📎로 악보를 올리세요."
                              : [contis.first.map { "콘티 \(($0.name as NSString).deletingPathExtension)" },
-                                pieces.isEmpty ? nil : "곡별 악보 \(pieces.count)개"]
+                                pieces.isEmpty ? nil : "곡별 악보 \(pieces.count)개",
+                                borrowed == 0 ? nil : "지난 예배 악보 \(borrowed)곡"]
                                 .compactMap { $0 }.joined(separator: " · ") + " — 전체 악보는 순서의 키로 봅니다.")
                             .multilineTextAlignment(.trailing)
                     }
@@ -1442,6 +1449,16 @@ struct ServicePrepView: View {
                 case (_?, nil): return true
                 case (nil, _?): return false
                 default: return a.rank < b.rank
+                }
+            }
+            // Nothing for it on this service: the charts it was last played
+            // from, on an earlier one — a song coming round again should not
+            // look as if the team had never had a chart for it.
+            if sources.isEmpty {
+                for chart in team.earlierCharts(videoId: song.videoId, title: song.title, before: service.date) {
+                    sources.append((ScoreStandItem(attachment: chart, song: song.title, teamKey: song.key,
+                                                   versionLabel: "악보 \(chart.name)", earlierDay: chart.date),
+                                    chart.addedAt, 0))
                 }
             }
             if !sources.isEmpty { out[song.title] = sources.map(\.item) }
@@ -1612,9 +1629,9 @@ struct ServicePrepView: View {
                 order: index + 1,
                 title: item.title,
                 url: YouTubeID.watchURL(id),
-                // The team's own key if a chart has one, otherwise what
-                // detection guessed, otherwise blank for the leader to fill.
-                key: chart?.keyLabel,
+                // The key the team last played it in; else a chart the app
+                // made of it; else blank for the leader to fill.
+                key: team.lastKey(videoId: id, title: item.title, before: service.date) ?? chart?.keyLabel,
                 transpose: chart?.semitoneShift ?? 0,
                 notes: nil,
                 channel: item.channelTitle

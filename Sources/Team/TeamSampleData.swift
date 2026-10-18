@@ -209,7 +209,11 @@ enum TeamSampleData {
                                                url: URL(fileURLWithPath: path), addedBy: "", addedAt: Date())]
             }
         } else if let path = DebugHarness.sampleScorePath {
-            for service in services where !service.isRehearsal {
+            // The nearest Sunday only, as a team puts charts up: the next
+            // one has the same songs and none yet — what a song coming
+            // round again looks like (TeamStore.earlierCharts).
+            let today = calendar.startOfDay(for: Date())
+            for service in services.filter({ !$0.isRehearsal && $0.date >= today }).prefix(1) {
                 let day = calendar.startOfDay(for: service.date)
                 attachments[day] = ["주의 약속하신 말씀 위에 서", "주님 뜻대로 살기로 했네"]
                     .enumerated().map { index, song in
