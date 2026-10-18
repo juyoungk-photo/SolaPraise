@@ -64,6 +64,12 @@ struct ScoreStandView: View {
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
+    /// The page alone: header, buttons and ✕ out of the way. A one-page
+    /// chart on iPad lost its last staff and lyrics under the buttons. A tap
+    /// on the page toggles it; editing brings everything back, since a tap
+    /// there belongs to the chords.
+    @State private var fullPage = false
+    private var showsChrome: Bool { !fullPage || editing }
     /// How far apart the 코드표's lyrics sit, apart from their size.
     @AppStorage("score.chartSpacing") private var chartSpacing: Double = 1.35
     static let spacings: [(title: String, value: Double)] = [
@@ -116,9 +122,17 @@ struct ScoreStandView: View {
 
             if let item {
                 VStack(spacing: 0) {
-                    header(item)
+                    if showsChrome { header(item).transition(.move(edge: .top).combined(with: .opacity)) }
                     songPager
-                    controls(item)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard !editing else { return }
+                            withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
+                        }
+                        .accessibilityAction(named: fullPage ? "메뉴 보이기" : "악보만 크게 보기") {
+                            fullPage.toggle()
+                        }
+                    if showsChrome { controls(item).transition(.move(edge: .bottom).combined(with: .opacity)) }
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
@@ -133,13 +147,15 @@ struct ScoreStandView: View {
                 #endif
             }
 
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .padding(14)
+            if showsChrome {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(14)
+                }
+                .accessibilityLabel("닫기")
             }
-            .accessibilityLabel("닫기")
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
