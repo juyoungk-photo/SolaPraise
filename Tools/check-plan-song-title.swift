@@ -52,6 +52,30 @@ struct CheckPlanSongTitle {
               PlanSongTitle.split("찬송가 384장 나의 갈 길 다 가도록"),
               title: "나의 갈 길 다 가도록", hymn: 384, meta: [])
 
+        // Readings to choose from when the split took a series or an
+        // album for the song (made-up titles).
+        func candidates(_ name: String, _ got: [String], first: String, includes: [String], excludes: [String]) {
+            let ok = got.first == first && includes.allSatisfy(got.contains) && !excludes.contains(where: got.contains)
+                && Set(got).count == got.count
+            print("\(ok ? "ok  " : "FAIL") \(name)")
+            if !ok { print("       got \(got)"); failures += 1 }
+        }
+        let series = "새벽 기도회 시리즈 | 빛의 노래 | 하늘팀 2024"
+        candidates("a series first: the song is another part, and the title as it came is last",
+                   PlanSongTitle.candidates(series, channel: "하늘팀"),
+                   first: PlanSongTitle.split(series, channel: "하늘팀").title,
+                   includes: ["새벽 기도회 시리즈", "빛의 노래", series], excludes: ["하늘팀", "2024"])
+        candidates("an album in brackets is offered too",
+                   PlanSongTitle.candidates("[봄의 앨범] 빛의 노래 (Official MV)"),
+                   first: PlanSongTitle.split("[봄의 앨범] 빛의 노래 (Official MV)").title,
+                   includes: ["봄의 앨범", "빛의 노래"], excludes: ["Official MV"])
+        candidates("a writer's credit is not offered as a song",
+                   PlanSongTitle.candidates("빛의 노래 (홍길동 사,곡) - 하늘팀 #3 \"작은 고백\""),
+                   first: PlanSongTitle.split("빛의 노래 (홍길동 사,곡) - 하늘팀 #3 \"작은 고백\"").title,
+                   includes: ["빛의 노래"], excludes: ["홍길동 사,곡"])
+        candidates("a title already tidy: itself, once",
+                   PlanSongTitle.candidates("빛의 노래"), first: "빛의 노래", includes: [], excludes: [])
+
         print(failures == 0 ? "\nall plan song title checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }

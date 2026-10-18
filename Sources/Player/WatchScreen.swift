@@ -142,6 +142,8 @@ struct WatchScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+                // Videos queued with a title alone get the upload's own.
+                .task(id: host.queue.map(\.id).joined(separator: ",")) { await fillQueueDetails() }
             // What is playing stays under the player, where it belongs. It
             // used to scroll away with everything else, so reading the psalm
             // meant losing sight of which upload you were hearing — exactly
@@ -712,6 +714,40 @@ struct WatchScreen: View {
         var components = URLComponents(string: "https://www.google.com/search")
         components?.queryItems = [URLQueryItem(name: "q", value: query)]
         return components?.url
+    }
+
+    /// The clip's own title, channel, date, length and views for queued
+    /// videos that came with a title alone: from the cache when it has
+    /// them, else one request for all of them (a unit per 50).
+    private func fillQueueDetails() async {
+        let missing = host.queue.filter { $0.publishedAt == nil }.map(\.id)
+        guard !missing.isEmpty else { return }
+        var found: [PlayableVideo] = []
+        var unknown: [String] = []
+        for id in missing {
+            if let cached = try? context.fetch(FetchDescriptor<CachedVideo>(
+                predicate: #Predicate { $0.videoId == id })).first, cached.publishedAt != nil {
+                found.append(PlayableVideo(cached: cached))
+            } else {
+                unknown.append(id)
+            }
+        }
+        if !unknown.isEmpty {
+            let client = AppServices.client(auth: auth, quota: quota)
+            for start in stride(from: 0, to: unknown.count, by: 50) {
+                let ids = Array(unknown[start..<min(start + 50, unknown.count)])
+                guard let videos = try? await client.videos(ids: ids) else { continue }
+                found += videos.map { video in
+                    PlayableVideo(id: video.id, title: video.snippet?.title ?? "",
+                                  channelTitle: video.snippet?.channelTitle,
+                                  durationSeconds: video.durationSeconds,
+                                  publishedAt: video.snippet?.publishedAt,
+                                  viewCount: video.viewCount,
+                                  channelId: video.snippet?.channelId)
+                }
+            }
+        }
+        host.fillDetails(found.filter { !$0.title.isEmpty })
     }
 
     private func loadDescriptionIfNeeded() async {

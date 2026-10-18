@@ -76,6 +76,9 @@ struct TeamSong: Identifiable, Hashable {
     /// The channel of the video it came from, when known: it tells the
     /// team from the song in the video's title (PlanSongTitle).
     var channel: String? = nil
+    /// A title chosen or typed when the song came in (SongTitleReviewSheet)
+    /// — written in place of the one read out of the video's title.
+    var chosenTitle: String? = nil
     var id: String { "\(order)-\(title)" }
 
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
@@ -1760,16 +1763,19 @@ final class TeamStore: ObservableObject {
 
         func cells(_ song: TeamSong, over existing: [String]? = nil) -> [String] {
             // The song, not the video's title; the recording in 참고버전.
+            // A title chosen by hand is written as chosen, and the video's
+            // own title goes to 참고버전 whole: what the reading made of it
+            // is what was set aside.
             let tidy = PlanSongTitle.forSheet(song.title, channel: song.channel)
             return layout.row(
                 date: day,
                 order: String(song.order),
-                title: tidy.title,
+                title: song.chosenTitle ?? tidy.title,
                 url: song.url?.absoluteString ?? "",
                 key: song.key ?? "",
                 transpose: song.transpose == 0 ? "" : String(song.transpose),
                 notes: song.notes ?? "",
-                reference: tidy.reference,
+                reference: song.chosenTitle == nil ? tidy.reference : song.title,
                 // Columns the app does not own are left exactly as they
                 // were. This passed nil for every row, and a push blanked the
                 // Service column of each row it rewrote.

@@ -129,6 +129,14 @@ struct ServicePrepView: View {
     @State private var assigning: AssignmentTarget?
     /// The service whose 찬양 are being filled from a playlist.
     @State private var fillingFrom: TeamService?
+    /// A playlist's songs read and waiting for their titles to be checked.
+    @State private var reviewing: PushReview?
+    struct PushReview: Identifiable {
+        let service: TeamService
+        let playlistTitle: String
+        let songs: [TeamSong]
+        let id = UUID()
+    }
     @State private var exportingTo: TeamService?
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
@@ -243,6 +251,14 @@ struct ServicePrepView: View {
             .sheet(item: $exportingTo) { service in
                 ExportToPlaylistSheet(service: service)
                     .environmentObject(team)
+            }
+            .sheet(item: $reviewing) { review in
+                SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs,
+                                     onSend: { songs in
+                                         reviewing = nil
+                                         Task { await write(songs, to: review.service) }
+                                     },
+                                     onCancel: { reviewing = nil })
             }
             .sheet(item: $fillingFrom) { service in
                 FillFromPlaylistSheet(
@@ -1591,7 +1607,19 @@ struct ServicePrepView: View {
             pushNote = "재생할 수 있는 곡이 없습니다."
             return
         }
+        // Not written yet: the titles, read out of the videos', are checked
+        // first — an album or a series is sometimes read as the song.
+        // The picker sheet is still closing; the next one waits for it.
+        try? await Task.sleep(for: .milliseconds(450))
+        reviewing = PushReview(service: service, playlistTitle: title, songs: songs)
+    }
 
+    /// The checked songs, onto the Songs tab for this service.
+    private func write(_ songs: [TeamSong], to service: TeamService) async {
+        guard let sheetId else { return }
+        isPushing = true
+        pushNote = nil
+        defer { isPushing = false }
         do {
             let existing = try await team.rawSongRows(sheetId: sheetId)
             let result = try await team.pushSongs(

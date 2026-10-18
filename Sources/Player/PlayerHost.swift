@@ -273,6 +273,25 @@ final class PlayerHost: ObservableObject {
         mode = .full
     }
 
+    /// The upload's own details for videos queued with a title alone — a
+    /// 콘티's song by its tidied title, a home card, a 작업실 song. The
+    /// player showed that short title and 「게시일 정보 없음」 where a
+    /// video from the feed shows the clip's title, channel, date and views.
+    /// Filled in place: the same video, so nothing reloads or restarts.
+    func fillDetails(_ found: [PlayableVideo]) {
+        let byId = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var changed = false
+        let filled = queue.map { video -> PlayableVideo in
+            guard video.publishedAt == nil, var better = byId[video.id] else { return video }
+            better.purpose = video.purpose
+            changed = true
+            return better
+        }
+        guard changed else { return }
+        queue = filled
+        for video in filled { played[video.id] = video }
+    }
+
     /// A feed's 「next」 as 설정 › 피드·찬양 검색 says (FeedFilter): notices
     /// and trailers out, a Short as its full-length original when the feed
     /// has it — never just dropped. The video actually chosen plays as it

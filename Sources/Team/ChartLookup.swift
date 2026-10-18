@@ -3,7 +3,8 @@
 //  SolaPraise
 //
 //  The charts already up for a song, wherever it is being played from:
-//  attached to it on a 콘티, its pages of a 콘티 file, or kept in 작업실.
+//  attached to it on a 콘티, its pages of a 콘티 file, or kept in 작업실 —
+//  from the nearest service that has any.
 //
 //  WHY: the player's 「이 영상의 악보」 showed only charts the app had made
 //  by listening, and a chart the team had uploaded for the very song
@@ -37,10 +38,14 @@ enum ChartLookup {
             if aUp != bUp { return aUp }
             return aUp ? a.date < b.date : a.date > b.date
         }
+        // The nearest service with charts for the song, and only it: a song
+        // sung on four Sundays has its chart attached four times, and the
+        // list showed every copy — the same chart, over and over.
         for service in services {
             let songs = team.plan(for: service).filter { $0.kind == .song }
             guard let song = songs.first(where: { videoId != nil && $0.videoId == videoId })
                     ?? songs.first(where: { PlanSongTitle.sameSong($0.title, title) }) else { continue }
+            let before = out.count
             for file in team.attachments(for: service, song: song.title).reversed() {
                 add(ScoreStandItem(attachment: file, song: song.title, teamKey: song.key))
             }
@@ -51,6 +56,7 @@ enum ChartLookup {
                                        versionLabel: "콘티 " + (latest.name as NSString).deletingPathExtension))
                 }
             }
+            if out.count > before { break }
         }
         for item in local.items where PlanSongTitle.sameSong(item.title, title) {
             add(local.standItem(for: item))

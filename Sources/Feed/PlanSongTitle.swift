@@ -98,6 +98,51 @@ enum PlanSongTitle {
         return Parts(title: songs.joined(separator: " + "), hymn: hymn, meta: meta)
     }
 
+    /// Every reading of a video's title as a song, the split's own first:
+    /// for when it took an album or a worship series for the song. Each
+    /// part of the title between its separators and brackets, less the
+    /// team, packaging and years — and the title as it came, last.
+    static func candidates(_ raw: String, channel: String? = nil) -> [String] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var out: [String] = []
+        var seen = Set<String>()
+        func add(_ piece: String) {
+            let text = tidy(piece)
+            let key = SongSearchSuggestions.normalised(text)
+            guard text.count >= 2, !key.isEmpty, !seen.contains(key) else { return }
+            seen.insert(key)
+            out.append(text)
+        }
+        add(split(trimmed, channel: channel).title)
+
+        let team = SongSearchSuggestions.teamWords(channel: channel)
+        let yearPattern = #"(?<![0-9])(?:19|20)\d{2}(?![0-9])"#
+        let text = trimmed.replacingOccurrences(of: yearPattern, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)찬송가\s*\d+\s*장|\d+\s*장"#, with: " ", options: .regularExpression)
+        func song(_ piece: String) -> Bool {
+            let text = tidy(piece)
+            return text.range(of: #"[\p{Hangul}A-Za-z]"#, options: .regularExpression) != nil
+                && !SongSearchSuggestions.isPackaging(text, team: team)
+                && !SongSearchSuggestions.mentionsTeam(text, team)
+                // Who wrote it — 「이름 사,곡」, 「작사 이름」 — is no song.
+                && text.range(of: #"(작사|작곡|편곡|사\s*[,/·]\s*곡|\s(사|곡)$)"#, options: .regularExpression) == nil
+        }
+        for part in SongSearchSuggestions.parts(of: text) {
+            var rest = part
+            for pattern in [#"\[([^\]]*)\]"#, #"【([^】]*)】"#, #"\(([^)]*)\)"#] {
+                guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+                let range = NSRange(rest.startIndex..., in: rest)
+                for match in regex.matches(in: rest, range: range) {
+                    if let inner = Range(match.range(at: 1), in: rest), song(String(rest[inner])) { add(String(rest[inner])) }
+                }
+                rest = regex.stringByReplacingMatches(in: rest, range: range, withTemplate: " ")
+            }
+            if song(rest) { add(rest) }
+        }
+        add(trimmed)
+        return out
+    }
+
     /// Latin words only, naming no team and no packaging: a song's English
     /// title — 「YOU ARE HOLY」, 「Living Hope」.
     private static func isEnglishTitle(_ piece: String, team: [String]) -> Bool {
