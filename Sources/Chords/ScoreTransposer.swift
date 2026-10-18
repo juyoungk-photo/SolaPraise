@@ -89,7 +89,7 @@ enum ScoreTransposer {
                     let image = render(page)
                     return Page(image: image,
                                 found: recognise ? image.cgImage.map(ScoreRecognition.chords(in:)) ?? [] : [],
-                                pointSize: page.bounds(for: .mediaBox).size)
+                                pointSize: page.bounds(for: .cropBox).size)
                 }
                 return (pages, .pdf)
             }
@@ -120,8 +120,11 @@ enum ScoreTransposer {
 
     /// PDF pages are vector; rasterise at 2× so small chord symbols survive
     /// recognition. Below that, superscript 7s and ♯ signs are lost.
+    /// The page as a viewer shows it — its crop box. The media box can be
+    /// the whole sheet, frames and crop marks round the page included, and a
+    /// 콘티 made from it had a border on those pages and not on others.
     private static func render(_ page: PDFPage) -> UIImage {
-        let bounds = page.bounds(for: .mediaBox)
+        let bounds = page.bounds(for: .cropBox)
         let scale: CGFloat = 2
         let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         let format = UIGraphicsImageRendererFormat()
@@ -132,7 +135,7 @@ enum ScoreTransposer {
             context.fill(CGRect(origin: .zero, size: size))
             context.cgContext.translateBy(x: 0, y: size.height)
             context.cgContext.scaleBy(x: scale, y: -scale)
-            page.draw(with: .mediaBox, to: context.cgContext)
+            page.draw(with: .cropBox, to: context.cgContext)
         }
     }
 
@@ -144,26 +147,44 @@ enum ScoreTransposer {
     ///   「2026/10/18 주일2부 - 1. 곡」 (ContiCaption). It goes on a strip
     ///   added above the page rather than over it: a chart's own corner
     ///   holds its title, its key or a chord, and a line over them hid both.
+    /// - notice: more for the strip, under the caption — a 헌금송's prayer
+    ///   and call. Its first line set apart, the rest wrapped to the page.
     static func transposed(pages: [Page], by semitones: Int, useFlats: Bool? = nil,
-                           scale: CGFloat = 1, caption: String? = nil) -> Data? {
+                           scale: CGFloat = 1, caption: String? = nil, notice: String? = nil) -> Data? {
         guard !pages.isEmpty else { return nil }
         let renderer = UIGraphicsPDFRenderer(
             bounds: CGRect(origin: .zero, size: pages[0].pointSize))
         return renderer.pdfData { context in
-            for page in pages {
+            for (index, page) in pages.enumerated() {
                 let size = page.pointSize
                 let fontSize = max(9, size.width * 0.017)
-                let strip = caption == nil ? 0 : (fontSize * 2).rounded()
+                // Close to the corner: the chart's own margin is below it.
+                let margin = max(6, size.width * 0.012)
+                // The notice on the song's first page only: read once, before it.
+                let block = index == 0 ? notice.map { noticeText($0, fontSize: fontSize) } : nil
+                let blockHeight = block.map {
+                    ceil($0.boundingRect(with: CGSize(width: size.width - margin * 2, height: .greatestFiniteMagnitude),
+                                         options: [.usesLineFragmentOrigin], context: nil).height) + fontSize * 0.8
+                } ?? 0
+                let captionHeight = caption == nil ? 0 : (fontSize * 2).rounded()
+                let strip = captionHeight + blockHeight
                 context.beginPage(withBounds: CGRect(x: 0, y: 0, width: size.width, height: size.height + strip),
                                   pageInfo: [:])
                 let cg = context.cgContext
-                if let caption {
+                if strip > 0 {
                     cg.setFillColor(UIColor.white.cgColor)
                     cg.fill(CGRect(x: 0, y: 0, width: size.width, height: strip))
+                }
+                if let caption {
                     (caption as NSString).draw(
-                        at: CGPoint(x: size.width * 0.03, y: (strip - fontSize * 1.2) / 2),
+                        at: CGPoint(x: margin, y: (captionHeight - fontSize * 1.2) / 2),
                         withAttributes: [.font: UIFont.systemFont(ofSize: fontSize, weight: .semibold),
                                          .foregroundColor: UIColor.darkGray])
+                }
+                if let block {
+                    block.draw(with: CGRect(x: margin, y: captionHeight, width: size.width - margin * 2,
+                                            height: blockHeight),
+                               options: [.usesLineFragmentOrigin], context: nil)
                 }
                 cg.saveGState()
                 cg.translateBy(x: 0, y: strip)
@@ -176,6 +197,23 @@ enum ScoreTransposer {
                 cg.restoreGState()
             }
         }
+    }
+
+    /// A notice as drawn: its first line bold, the rest as a paragraph.
+    private static func noticeText(_ notice: String, fontSize: CGFloat) -> NSAttributedString {
+        let lines = notice.components(separatedBy: "\n")
+        let out = NSMutableAttributedString(string: (lines.first ?? "") + (lines.count > 1 ? "\n" : ""),
+                                            attributes: [.font: UIFont.systemFont(ofSize: fontSize * 1.05, weight: .bold),
+                                                         .foregroundColor: UIColor.black])
+        if lines.count > 1 {
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = fontSize * 0.2
+            out.append(NSAttributedString(string: lines.dropFirst().joined(separator: "\n"),
+                                          attributes: [.font: UIFont.systemFont(ofSize: fontSize * 0.95),
+                                                       .foregroundColor: UIColor.darkGray,
+                                                       .paragraphStyle: style]))
+        }
+        return out
     }
 
     /// Each page as an image, chords drawn as on the stand — for Photos.

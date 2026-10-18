@@ -145,6 +145,13 @@ struct ServicePrepView: View {
     /// 전체 악보 open: the service, and the song it opens at — the one
     /// whose title was tapped. One value, so the start cannot lag the open.
     @State private var standOpen: StandOpen?
+    /// A song being made the 헌금송, or its prayer changed.
+    @State private var offeringEdit: OfferingEdit?
+    struct OfferingEdit: Identifiable {
+        let service: TeamService
+        let item: PlanItem
+        let id = UUID()
+    }
     struct StandOpen: Identifiable {
         let service: TeamService
         var startSong: String? = nil
@@ -254,6 +261,15 @@ struct ServicePrepView: View {
                 ExportToPlaylistSheet(service: service)
                     .environmentObject(team)
             }
+            .sheet(item: $offeringEdit) { edit in
+                OfferingSheet(song: edit.item.title, prayer: edit.item.offering.prayer,
+                              isOffering: edit.item.offering.isOffering,
+                              onSave: { prayer in
+                                  await setOffering(edit, isOffering: true, prayer: prayer)
+                              },
+                              onRemove: { await setOffering(edit, isOffering: false, prayer: nil) },
+                              onCancel: { offeringEdit = nil })
+            }
             .sheet(item: $reviewing) { review in
                 SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs,
                                      remembered: { song in
@@ -320,6 +336,7 @@ struct ServicePrepView: View {
                                setFileName: nextContiName(service),
                                exportOnOpen: makingConti,
                                setCaptions: contiCaptions(service),
+                               notices: offeringNotices(service),
                                contiScope: ContiChoice.scope(service),
                                removeVersion: removeVersion)
             }
@@ -330,6 +347,7 @@ struct ServicePrepView: View {
                                     .map { [$0] } ?? [],
                                setTitle: PlanSongTitle.split(entry.song).title,
                                versions: versions.filter { $0.key == entry.song },
+                               notices: offeringNotices(entry.service),
                                contiScope: scope,
                                removeVersion: removeVersion)
             }
@@ -1193,7 +1211,21 @@ struct ServicePrepView: View {
                         }
                     }
                 }
-                if let notes = item.notes {
+                // The offering song says so, and who prays; its notes show
+                // without the mark they carry.
+                let offering = item.offering
+                if item.kind == .song, offering.isOffering {
+                    // Not a Label: in a list row it takes the row's icon
+                    // column and spreads apart.
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: "gift")
+                        Text("헌금송" + (offering.prayer.map { " · 헌금기도 \($0)" } ?? ""))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                }
+                if let notes = item.kind == .song ? offering.rest : item.notes {
                     Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
@@ -1228,7 +1260,9 @@ struct ServicePrepView: View {
                                channel: channelTitle(forVideo: item.videoId),
                                published: sheetLinks(forVideo: item.videoId),
                                finds: ScoreDestination(service: service, song: item.title, key: item.key),
-                               appChart: madeChart.map { chart in { openChart = chart } }) {
+                               appChart: madeChart.map { chart in { openChart = chart } },
+                               offering: team.isReadOnly ? nil : item.offering,
+                               onOffering: { offeringEdit = OfferingEdit(service: service, item: item) }) {
                     Image(systemName: "paperclip")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1465,6 +1499,26 @@ struct ServicePrepView: View {
                 }
             }
             if !sources.isEmpty { out[song.title] = sources.map(\.item) }
+        }
+        return out
+    }
+
+    /// The 헌금송 mark written; the sheet closes on success.
+    private func setOffering(_ edit: OfferingEdit, isOffering: Bool, prayer: String?) async -> String? {
+        guard let sheetId else { return "시트가 연결되어 있지 않습니다." }
+        let failure = await team.setOffering(edit.item, in: edit.service, isOffering: isOffering,
+                                             prayer: prayer, sheetId: sheetId)
+        if failure == nil { offeringEdit = nil }
+        return failure
+    }
+
+    /// The 헌금송's lines for its chart, by song as written: who prays, and
+    /// the call before the offering.
+    private func offeringNotices(_ service: TeamService) -> [String: String] {
+        var out: [String: String] = [:]
+        for item in team.plan(for: service) where item.kind == .song && item.offering.isOffering {
+            out[item.title] = ["헌금송" + (item.offering.prayer.map { " · 헌금기도 \($0)" } ?? ""), OfferingNote.call]
+                .joined(separator: "\n")
         }
         return out
     }

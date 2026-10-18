@@ -215,10 +215,15 @@ struct SettingsView: View {
                     Label("팀 콘티 재생목록", systemImage: "music.note.list")
                 }
             }
+            NavigationLink {
+                OfferingCallSettingsView()
+            } label: {
+                Label("헌금 안내 문구", systemImage: "gift")
+            }
         } header: {
             Text("찬양팀")
         } footer: {
-            Text("예배표에서 콘티를 내보낼 재생목록입니다.")
+            Text("팀 콘티 재생목록은 예배표에서 콘티를 내보낼 재생목록입니다. 헌금 안내 문구는 헌금송 악보와 콘티 PDF에 헌금기도자와 함께 들어갑니다.")
         }
     }
 
@@ -846,5 +851,28 @@ private struct ChannelRow: View {
 extension Bundle {
     var shortVersion: String {
         (object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "—"
+    }
+}
+
+/// The call before the offering, printed with the 헌금송 (OfferingNote).
+private struct OfferingCallSettingsView: View {
+    @AppStorage(OfferingNote.callKey) private var call = ""
+
+    var body: some View {
+        Form {
+            Section {
+                TextEditor(text: Binding(get: { call.isEmpty ? OfferingNote.defaultCall : call },
+                                         set: { call = $0 }))
+                    .frame(minHeight: 160)
+            } footer: {
+                Text("헌금송으로 지정한 곡의 악보와 콘티 PDF에 헌금기도자와 함께 나옵니다. 이 기기에 저장됩니다.")
+            }
+            Section {
+                Button("처음 문구로 되돌리기") { call = "" }
+                    .disabled(call.isEmpty)
+            }
+        }
+        .navigationTitle("헌금 안내 문구")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

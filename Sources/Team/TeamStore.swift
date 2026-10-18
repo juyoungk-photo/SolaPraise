@@ -76,6 +76,8 @@ struct TeamSong: Identifiable, Hashable {
     /// The channel of the video it came from, when known: it tells the
     /// team from the song in the video's title (PlanSongTitle).
     var channel: String? = nil
+    /// What the Order cell said when it was not a number (「헌금찬양」).
+    var orderLabel: String? = nil
     /// A title chosen or typed when the song came in (SongTitleReviewSheet)
     /// — written in place of the one read out of the video's title.
     var chosenTitle: String? = nil
@@ -147,9 +149,14 @@ struct PlanItem: Identifiable, Hashable {
     let notes: String?
     /// 1-based row, so an edit rewrites in place.
     let row: Int?
+    /// What the Order cell said when it was not a number — the team writes
+    /// 「헌금찬양」 there.
+    var orderLabel: String? = nil
 
     var id: String { "\(order)-\(title)" }
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
+    /// The offering song, and who prays, as its notes or Order cell say.
+    var offering: OfferingNote.Parsed { OfferingNote.parse(notes: notes, orderLabel: orderLabel) }
 }
 
 /// What a member said about one service.
@@ -483,6 +490,60 @@ final class TeamStore: ObservableObject {
     /// A sheet without a Plan tab still has songs, and a list of songs is a
     /// perfectly good order of service for a team that only plans music — so
     /// it is shown as one rather than showing nothing.
+    // MARK: - 헌금송
+
+    /// Marks a song of the 순서 as the offering song, with who prays — or
+    /// unmarks it — in its Notes cell on the Songs tab, keeping the rest of
+    /// what the notes say (OfferingNote). Returns an error message, or nil.
+    func setOffering(_ item: PlanItem, in service: TeamService, isOffering: Bool,
+                     prayer: String?, sheetId: String) async -> String? {
+        let notes = OfferingNote.notes(isOffering: isOffering, prayer: prayer, rest: item.offering.rest)
+        #if DEBUG
+        if isSample {
+            let day = Calendar.current.startOfDay(for: service.date)
+            if let index = plans[day]?.firstIndex(where: { $0.id == item.id }), let old = plans[day]?[index] {
+                plans[day]?[index] = PlanItem(order: old.order, kind: old.kind, title: old.title, minutes: old.minutes,
+                                              person: old.person, key: old.key, url: old.url, notes: notes, row: old.row,
+                                              orderLabel: isOffering ? old.orderLabel : nil)
+            }
+            return nil
+        }
+        #endif
+        // The 순서 read from a Plan tab is laid out by the team; only the
+        // Songs tab is known well enough to write into.
+        guard !hasPlanTab else { return "Plan 탭으로 순서를 쓰는 시트에서는 Plan 탭의 메모에 「헌금송 · 헌금기도: 이름」을 적어 주세요." }
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let row = item.row, row >= 2 else { return "줄 번호를 알 수 없습니다." }
+        do {
+            let rows = try await rawSongRows(sheetId: sheetId)
+            guard let header = rows.first,
+                  let notesColumn = TeamSheet.column(header, ["notes", "note", "비고", "메모"]) else {
+                return "Songs 탭에 Notes(비고) 열이 없어 적지 못했습니다."
+            }
+            guard await confirm(TeamSheet.songsTab, row: row, holds: [item.title], sheetId: sheetId, client: client) else {
+                return Self.sheetMovedMessage
+            }
+            func range(_ column: Int) -> String {
+                let cell = "\(TeamSheet.columnLetter(column))\(row)"
+                return "\(TeamSheet.songsTab)!\(cell):\(cell)"
+            }
+            var updates: [(range: String, rows: [[String]])] = [(range(notesColumn), [[notes ?? ""]])]
+            // Unmarked: an Order cell that said 헌금찬양 says its place again.
+            if !isOffering, item.orderLabel != nil,
+               let orderColumn = TeamSheet.column(header, ["order", "순서", "#"]) {
+                updates.append((range(orderColumn), [[String(item.order)]]))
+            }
+            try await client.batchWrite(sheetId: sheetId, updates: updates)
+            await load(sheetId: sheetId)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 적지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     // MARK: - What the team said about a song before
     //
     // PRINCIPLE: whatever a person tells the app about a song — its title,
@@ -564,7 +625,7 @@ final class TeamStore: ObservableObject {
         return songs(for: service).map {
             PlanItem(order: $0.order, kind: .song, title: $0.title,
                      minutes: nil, person: nil, key: $0.key, url: $0.url,
-                     notes: $0.notes, row: $0.row)
+                     notes: $0.notes, row: $0.row, orderLabel: $0.orderLabel)
         }
     }
 
@@ -1876,7 +1937,10 @@ final class TeamStore: ObservableObject {
                 var row = Array(kept.prefix(layout.width))
                 while row.count < layout.width { row.append("") }
                 row[layout.date] = day
-                row[layout.order] = String(song.order)
+                // A label there — 「헌금찬양」 — is the team's, not a position.
+                if Int(row[layout.order].trimmingCharacters(in: .whitespaces)) != nil || row[layout.order].isEmpty {
+                    row[layout.order] = String(song.order)
+                }
                 return row
             }
             // The song, not the video's title; the recording in 참고버전.
@@ -2369,9 +2433,9 @@ final class TeamStore: ObservableObject {
             let semitones = rawTranspose.flatMap { Int($0) } ?? 0
             let playedKey = (rawTranspose.flatMap { Int($0) } == nil) ? rawTranspose : nil
 
-            out[Calendar.current.startOfDay(for: date), default: []].append(
-                TeamSong(
-                    order: Int(cell(orderCol) ?? "") ?? (out[Calendar.current.startOfDay(for: date)]?.count ?? 0) + 1,
+            let orderCell = cell(orderCol)
+            var song = TeamSong(
+                    order: Int(orderCell ?? "") ?? (out[Calendar.current.startOfDay(for: date)]?.count ?? 0) + 1,
                     title: title,
                     url: cell(urlCol).flatMap(URL.init(string:)),
                     key: playedKey ?? cell(keyCol),
@@ -2381,7 +2445,10 @@ final class TeamStore: ObservableObject {
                     // and sheets count from 1.
                     row: offset + 1
                 )
-            )
+            // A label kept, not lost to a number: 「헌금찬양」 marks the
+            // offering song.
+            if let orderCell, Int(orderCell) == nil { song.orderLabel = orderCell }
+            out[Calendar.current.startOfDay(for: date), default: []].append(song)
         }
         return out
     }

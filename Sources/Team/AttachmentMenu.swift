@@ -38,6 +38,9 @@ struct AttachmentMenu<Content: View>: View {
     var finds: ScoreDestination? = nil
     /// The 코드표 the app made by listening, when there is one.
     var appChart: (() -> Void)? = nil
+    /// The song as the 헌금송, or not; nil where it cannot be marked here.
+    var offering: OfferingNote.Parsed? = nil
+    var onOffering: (() -> Void)? = nil
     @ViewBuilder var label: Content
 
     /// Several at once: a song often has a chart, a lead sheet and a
@@ -139,6 +142,23 @@ struct AttachmentMenu<Content: View>: View {
                                 } label: { Label("지우기", systemImage: "trash") }
                             }
                         }
+                    }
+                }
+                // What the song's chart carries besides: as the 헌금송, who
+                // prays and the call (OfferingSheet).
+                if let offering, let onOffering {
+                    Section {
+                        Button {
+                            showsList = false
+                            later(onOffering)
+                        } label: {
+                            Label(offering.isOffering
+                                  ? "헌금송" + (offering.prayer.map { " · 헌금기도 \($0)" } ?? "") + " — 바꾸기"
+                                  : "헌금송으로 지정",
+                                  systemImage: "gift")
+                        }
+                    } footer: {
+                        Text("헌금송은 악보와 콘티 PDF에 헌금기도자와 헌금 안내가 함께 나옵니다.")
                     }
                 }
                 if let appChart {

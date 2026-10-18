@@ -66,6 +66,9 @@ struct ScoreStandView: View {
     /// Each song's corner line on the whole-set PDF, by song as written:
     /// 「2026/10/18 주일2부 - 1. 곡」 (ContiCaption).
     var setCaptions: [String: String] = [:]
+    /// What a song's chart carries besides — the 헌금송's prayer and call —
+    /// by song as written: shown above its page, and printed with it.
+    var notices: [String: String] = [:]
     /// Uploads a transposed PDF as a new attachment on the song, when the
     /// caller can (Drive granted, a sheet configured). Returns an error
     /// message, or nil on success.
@@ -129,6 +132,7 @@ struct ScoreStandView: View {
     init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
          versions: [String: [ScoreStandItem]] = [:], setFileName: String? = nil, exportOnOpen: Bool = false,
          setCaptions: [String: String] = [:],
+         notices: [String: String] = [:],
          contiScope: String? = nil,
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
@@ -139,6 +143,7 @@ struct ScoreStandView: View {
         self.setFileName = setFileName
         self.exportOnOpen = exportOnOpen
         self.setCaptions = setCaptions
+        self.notices = notices
         self.setTitle = setTitle
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
@@ -272,11 +277,11 @@ struct ScoreStandView: View {
                 .task(id: item.id) { await model.load(item) }
                 .task {
                     // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
-                    if exportOnOpen { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                    if exportOnOpen { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
                 }
                 #if DEBUG
                 .task {
-                    if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                    if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
                 }
                 #endif
             }
@@ -313,6 +318,26 @@ struct ScoreStandView: View {
             if ready, DebugHarness.lyricCheckVideo != nil, checkingLyrics == nil { checkingLyrics = item }
         }
         #endif
+    }
+
+    /// A notice for the song — its first line the heading — on the stand
+    /// as it is on the printed chart.
+    private func noticeCard(_ notice: String) -> some View {
+        let lines = notice.components(separatedBy: "\n")
+        return VStack(alignment: .leading, spacing: 6) {
+            Label(lines.first ?? "", systemImage: "gift")
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+            if lines.count > 1 {
+                Text(lines.dropFirst().joined(separator: "\n"))
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
     }
 
     /// The key the page is showing: the printed one under 원본, else the
@@ -443,11 +468,14 @@ struct ScoreStandView: View {
         }
     }
 
-    /// The set as the 콘티 takes it: each song in its chosen version, not
-    /// whichever was last looked at.
+    /// The set as the 콘티 takes it: the 순서's songs only — those with a
+    /// corner line — each in its chosen version, not whichever was last
+    /// looked at. Charts of songs taken out of the 순서, and an old 콘티's
+    /// leftover pages, went into new 콘티s too.
     private var contiItems: [ScoreStandItem] {
-        guard let contiScope else { return items }
-        return items.map { item in
+        let songs = setCaptions.isEmpty ? items : items.filter { setCaptions[$0.song] != nil }
+        guard let contiScope else { return songs }
+        return songs.map { item in
             versions[item.song].flatMap { ContiChoice.pick($0, scope: contiScope, song: item.song) } ?? item
         }
     }
@@ -584,6 +612,10 @@ struct ScoreStandView: View {
         if let state, state.isReady {
             ScrollView {
                 VStack(spacing: 12) {
+                    // The 헌금송's prayer and call, read before the song.
+                    if let notice = notices[item.song], !editing {
+                        noticeCard(notice)
+                    }
                     ForEach(Array(state.pages.enumerated()), id: \.offset) { pageIndex, page in
                         ScorePageView(
                             page: page,
@@ -607,6 +639,22 @@ struct ScoreStandView: View {
                 // chord by a little moved the page instead.
                 .background(ScrollTouches(minimum: editing ? 2 : 1))
             }
+            // Reading the chords takes seconds a page: said over the page,
+            // where the eye is, not in a line at the top.
+            .overlay {
+                if state.isReading {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(.white)
+                        Text("코드를 읽는 중…").font(.callout.weight(.semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .background(Capsule().fill(Color.black.opacity(0.75)))
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: state.isReading)
         } else if let failure = state?.failure {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -932,10 +980,10 @@ struct ScoreStandView: View {
                 Button { Task { await model.saveToPhotos(item) } } label: {
                     Label("사진에 저장", systemImage: "photo.on.rectangle")
                 }
-                Button { Task { await model.saveToFiles(item) } } label: {
+                Button { Task { await model.saveToFiles(item, notice: notices[item.song]) } } label: {
                     Label("파일에 저장", systemImage: "folder")
                 }
-                Button { Task { await model.exportPDF(item) } } label: {
+                Button { Task { await model.exportPDF(item, notice: notices[item.song]) } } label: {
                     Label("공유…", systemImage: "square.and.arrow.up")
                 }
             }
@@ -943,7 +991,7 @@ struct ScoreStandView: View {
             .disabled(state?.isReady != true)
             if items.count > 1 {
                 Button {
-                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions) }
+                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
                 } label: {
                     Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
                           systemImage: "doc.on.doc")
@@ -1792,14 +1840,15 @@ final class ScoreStandModel: ObservableObject {
         return "\(base) (\(key)).pdf"
     }
 
-    private func pdf(_ item: ScoreStandItem, caption: String? = nil) async -> Data? {
+    private func pdf(_ item: ScoreStandItem, caption: String? = nil, notice: String? = nil) async -> Data? {
         guard let state = states[item.id] else { return nil }
         let pages = state.pages
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
         let scale = chordScale
         return await Task.detached(priority: .userInitiated) {
-            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale, caption: caption)
+            ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale,
+                                       caption: caption, notice: notice)
         }.value
     }
 
@@ -1834,10 +1883,10 @@ final class ScoreStandModel: ObservableObject {
 
     /// The chart as it is on the stand, as a PDF into Files — where to, the
     /// person chooses.
-    func saveToFiles(_ item: ScoreStandItem) async {
+    func saveToFiles(_ item: ScoreStandItem, notice: String? = nil) async {
         isExporting = true
         defer { isExporting = false }
-        guard let data = await pdf(item) else {
+        guard let data = await pdf(item, notice: notice) else {
             note = "PDF를 만들지 못했습니다."
             return
         }
@@ -1850,10 +1899,10 @@ final class ScoreStandModel: ObservableObject {
         }
     }
 
-    func exportPDF(_ item: ScoreStandItem) async {
+    func exportPDF(_ item: ScoreStandItem, notice: String? = nil) async {
         isExporting = true
         defer { isExporting = false }
-        guard let data = await pdf(item) else {
+        guard let data = await pdf(item, notice: notice) else {
             note = "PDF를 만들지 못했습니다."
             return
         }
@@ -1873,7 +1922,7 @@ final class ScoreStandModel: ObservableObject {
     /// a song on a set nobody has paged through. A song whose file cannot
     /// be read is left out and named, rather than failing the whole file.
     func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil,
-                   captions: [String: String] = [:]) async {
+                   captions: [String: String] = [:], notices: [String: String] = [:]) async {
         isExporting = true
         defer { isExporting = false }
         let combined = PDFDocument()
@@ -1887,7 +1936,7 @@ final class ScoreStandModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
             }
-            guard let data = await pdf(item, caption: captions[item.song]),
+            guard let data = await pdf(item, caption: captions[item.song], notice: notices[item.song]),
                   let document = PDFDocument(data: data) else {
                 skipped.append(item.song.isEmpty ? item.attachment.name : item.song)
                 continue
