@@ -281,32 +281,45 @@ struct ScoreStandView: View {
 
     // MARK: - Header
 
-    /// The song's versions — each 콘티's pages, each chart attached — to
-    /// compare and choose from. The choice is the set's: it goes into the
-    /// next 콘티 made from here.
+    /// The song's versions — each 콘티's pages, each chart attached — side
+    /// by side, newest first, one tap to turn to. They were behind a menu,
+    /// and a song with two charts read as a song with one. The choice is
+    /// the set's: it goes into the next 콘티 made from here.
     @ViewBuilder
-    private func versionMenu(_ item: ScoreStandItem) -> some View {
+    private func versionChips(_ item: ScoreStandItem) -> some View {
         if let options = versions[item.song], options.count > 1 {
-            Menu {
-                ForEach(Array(options.enumerated()), id: \.element.id) { offset, option in
-                    Button {
-                        if let at = items.firstIndex(where: { $0.id == item.id }) {
+            let names = VersionChips.names(options.map { $0.versionLabel ?? $0.attachment.name },
+                                           songs: [item.song, PlanSongTitle.split(item.song).title])
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(options.enumerated()), id: \.element.id) { offset, option in
+                        let selected = option.id == item.id
+                        Button {
+                            guard !selected, let at = items.firstIndex(where: { $0.id == item.id }) else { return }
                             items[at] = option
                             Task { await model.load(option) }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(names[offset])
+                                if offset == 0 {
+                                    Text("최신").font(.system(size: 10, weight: .bold))
+                                        .padding(.horizontal, 4).padding(.vertical, 1)
+                                        .background(Capsule().fill(Color.white.opacity(selected ? 0.25 : 0.15)))
+                                }
+                            }
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                            .padding(.horizontal, 11).padding(.vertical, 6)
+                            .background(Capsule().fill(selected ? Color.accentColor : Color.white.opacity(0.12)))
+                            .foregroundStyle(selected ? Color.black : Color.white)
                         }
-                    } label: {
-                        Label((option.versionLabel ?? option.attachment.name) + (offset == 0 ? " · 최신" : ""),
-                              systemImage: option.id == item.id ? "checkmark" : "doc")
+                        .buttonStyle(.plain)
+                        .accessibilityLabel((option.versionLabel ?? option.attachment.name) + (offset == 0 ? ", 최신" : ""))
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }
-            } label: {
-                Label("\(item.versionLabel ?? "버전") · 버전 \(options.count)개", systemImage: "square.stack")
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.white.opacity(0.14)))
             }
-            .environment(\.colorScheme, .dark)
+            .scrollClipDisabled()
         }
     }
 
@@ -355,18 +368,20 @@ struct ScoreStandView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.accentColor)
                     .lineLimit(2)
-            } else if let state, state.isReady {
-                HStack(spacing: 14) {
-                    versionMenu(item)
-                    // What was read off the page, against what is sung.
-                    if showsChart, let systems = model.charts[item.id], !systems.isEmpty {
-                        Button { checkingLyrics = item } label: {
-                            Label("가사 확인", systemImage: "text.badge.checkmark")
-                                .font(.footnote.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
+            } else {
+                // Shown from the start, before the page has loaded: which
+                // version to look at is the first choice, not the last.
+                versionChips(item)
+            }
+            if !editing, let state, state.isReady {
+                // What was read off the page, against what is sung.
+                if showsChart, let systems = model.charts[item.id], !systems.isEmpty {
+                    Button { checkingLyrics = item } label: {
+                        Label("가사 확인", systemImage: "text.badge.checkmark")
+                            .font(.footnote.weight(.semibold))
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
                 }
                 Text(keyLine(item, state))
                     .font(.footnote)

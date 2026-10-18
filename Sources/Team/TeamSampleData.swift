@@ -188,7 +188,7 @@ enum TeamSampleData {
 
         // A local score on two songs of every Sunday, when one is given —
         // so the 악보 stand can be opened from the real paperclip menu and
-        // the service's 연주모드 button without uploading anything:
+        // the service's 전체 악보 button without uploading anything:
         //   -uiTestTeam -uiTestSampleScore /path/to/score.pdf
         var attachments: [Date: [Attachment]] = [:]
         if let path = DebugHarness.sampleContiPath {
@@ -217,6 +217,12 @@ enum TeamSampleData {
                                    fileId: "sample-\(index)-\(day.timeIntervalSince1970)",
                                    url: URL(fileURLWithPath: path), addedBy: "")
                     }
+                // A second version of the first song, put up later in
+                // another key — for the stand's version chips.
+                attachments[day, default: []].append(
+                    Attachment(date: day, song: "주의 약속하신 말씀 위에 서", name: "주의 약속하신 말씀 위에 서 (A).pdf",
+                               fileId: "sample-0a-\(day.timeIntervalSince1970)",
+                               url: URL(fileURLWithPath: path), addedBy: "", addedAt: Date()))
             }
         }
 
