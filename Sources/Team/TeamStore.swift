@@ -79,6 +79,11 @@ struct TeamSong: Identifiable, Hashable {
     /// A title chosen or typed when the song came in (SongTitleReviewSheet)
     /// — written in place of the one read out of the video's title.
     var chosenTitle: String? = nil
+    /// A song already on the sheet, kept in a merge: its row as it was,
+    /// every column — written back whole, with only its date and order set,
+    /// so moving it loses nothing the app does not own (참고버전, notes,
+    /// a team's own columns).
+    var sheetRow: [String]? = nil
     var id: String { "\(order)-\(title)" }
 
     var videoId: String? { url.flatMap { YouTubeID.parse($0.absoluteString) } }
@@ -1817,6 +1822,30 @@ final class TeamStore: ObservableObject {
     /// Existing rows for the date are rewritten in place rather than
     /// appended to. Appending would leave last week's attempt underneath the
     /// new one, and the sheet is what the team reads on Sunday morning.
+    #if DEBUG
+    /// The sample team's 순서 given these songs, in memory — the titles as
+    /// they would be written — so a fill and a merge can be tried in a
+    /// simulator. Other lines keep their places; the songs fill the song
+    /// places in order, any more after.
+    func samplePush(_ incoming: [TeamSong], to service: TeamService) {
+        let day = Calendar.current.startOfDay(for: service.date)
+        var plan = plans[day] ?? []
+        var queue = incoming.map { song in
+            PlanItem(order: 0, kind: .song,
+                     title: song.chosenTitle ?? (song.sheetRow == nil
+                                                 ? PlanSongTitle.forSheet(song.title, channel: song.channel).title
+                                                 : song.title),
+                     minutes: nil, person: nil, key: song.key, url: song.url, notes: song.notes, row: nil)
+        }
+        plan = plan.compactMap { item in
+            guard item.kind == .song else { return item }
+            return queue.isEmpty ? nil : queue.removeFirst()
+        } + queue
+        for index in plan.indices { plan[index].order = index + 1 }
+        plans[day] = plan
+    }
+    #endif
+
     func pushSongs(
         _ incoming: [TeamSong],
         to service: TeamService,
@@ -1843,6 +1872,13 @@ final class TeamStore: ObservableObject {
         }
 
         func cells(_ song: TeamSong, over existing: [String]? = nil) -> [String] {
+            if let kept = song.sheetRow {
+                var row = Array(kept.prefix(layout.width))
+                while row.count < layout.width { row.append("") }
+                row[layout.date] = day
+                row[layout.order] = String(song.order)
+                return row
+            }
             // The song, not the video's title; the recording in 참고버전.
             // A title chosen by hand is written as chosen, and the video's
             // own title goes to 참고버전 whole: what the reading made of it
@@ -1890,7 +1926,21 @@ final class TeamStore: ObservableObject {
             try await client.append(sheetId: sheetId, tab: TeamSheet.songsTab, row: cells(song))
         }
 
-        songs[Calendar.current.startOfDay(for: service.date)] = incoming
+        // What was written, not what came in: a song's title here is the
+        // video's, and a title chosen in 곡 제목 확인 showed as the reading
+        // it replaced until something reloaded. Then the sheet itself, read
+        // again — the honest look, as 콘티에 추가 does.
+        songs[Calendar.current.startOfDay(for: service.date)] = incoming.map { song in
+            var written = song
+            if song.sheetRow == nil {
+                written = TeamSong(order: song.order,
+                                   title: song.chosenTitle ?? PlanSongTitle.forSheet(song.title, channel: song.channel).title,
+                                   url: song.url, key: song.key, transpose: song.transpose, notes: song.notes,
+                                   channel: song.channel)
+            }
+            return written
+        }
+        await load(sheetId: sheetId)
         return PushResult(written: incoming.count, replaced: targets.count)
     }
 

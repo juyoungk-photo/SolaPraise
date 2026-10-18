@@ -135,6 +135,8 @@ struct ServicePrepView: View {
         let service: TeamService
         let playlistTitle: String
         let songs: [TeamSong]
+        /// What the service already has on the Songs tab, to merge with.
+        var existing: [TeamSong] = []
         let id = UUID()
     }
     @State private var exportingTo: TeamService?
@@ -257,6 +259,7 @@ struct ServicePrepView: View {
                                      remembered: { song in
                                          song.videoId.flatMap { SongTitleChoices.title(for: $0) ?? team.sheetTitle(forVideo: $0) }
                                      },
+                                     existing: review.existing,
                                      onSend: { songs in
                                          reviewing = nil
                                          Task { await write(songs, to: review.service) }
@@ -1644,12 +1647,38 @@ struct ServicePrepView: View {
         // Not written yet: the titles, read out of the videos', are checked
         // first — an album or a series is sometimes read as the song.
         // The picker sheet is still closing; the next one waits for it.
+        // What is already there, each with its row — to merge with, never
+        // to overwrite unasked.
+        var existing: [TeamSong] = []
+        if let rows = try? await team.rawSongRows(sheetId: sheetId) {
+            let day = Calendar.current.startOfDay(for: service.date)
+            existing = (TeamStore.parseSongs(rows)[day] ?? []).sorted { $0.order < $1.order }.map { song in
+                var song = song
+                if let row = song.row, rows.indices.contains(row - 1) { song.sheetRow = rows[row - 1] }
+                return song
+            }
+        }
+        #if DEBUG
+        // The sample team has no sheet: its 순서's songs stand in.
+        if existing.isEmpty, team.isSample {
+            existing = team.plan(for: service).filter { $0.kind == .song }.enumerated().map { index, item in
+                TeamSong(order: index + 1, title: item.title, url: item.url, key: item.key, transpose: 0, notes: item.notes)
+            }
+        }
+        #endif
         try? await Task.sleep(for: .milliseconds(450))
-        reviewing = PushReview(service: service, playlistTitle: title, songs: songs)
+        reviewing = PushReview(service: service, playlistTitle: title, songs: songs, existing: existing)
     }
 
     /// The checked songs, onto the Songs tab for this service.
     private func write(_ songs: [TeamSong], to service: TeamService) async {
+        #if DEBUG
+        if team.isSample {
+            team.samplePush(songs, to: service)
+            pushNote = "\(songs.count)곡을 순서에 넣었습니다 (샘플 — 시트에는 쓰지 않음)."
+            return
+        }
+        #endif
         guard let sheetId else { return }
         isPushing = true
         pushNote = nil

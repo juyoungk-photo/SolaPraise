@@ -21,6 +21,10 @@ struct SongTitleReviewSheet: View {
     /// The title said for a song's video before — chosen here, or on the
     /// team's sheet. It is where the title starts.
     var remembered: (TeamSong) -> String? = { _ in nil }
+    /// The service's songs already on the sheet. When there are any, the
+    /// next step is 곡 합치기 — never replacing them unasked.
+    var existing: [TeamSong] = []
+    @State private var merging = false
     /// The songs to write, with any title chosen here.
     let onSend: ([TeamSong]) -> Void
     let onCancel: () -> Void
@@ -50,16 +54,23 @@ struct SongTitleReviewSheet: View {
                         .textCase(nil)
                     }
                 } footer: {
-                    Text("넣을 곡만 체크하세요. 체크한 곡이 그 순서대로 들어가고, 보내면 이 예배의 Songs 목록이 이 곡들로 바뀝니다. 영상 제목에서 곡 이름을 골라 적었습니다 — 앨범이나 예배 시리즈 이름이 잘못 잡혔으면 「다른 이름」에서 고르거나 직접 고치세요. 원래 영상 제목은 참고버전에 남습니다.")
+                    Text(existing.isEmpty
+                         ? "넣을 곡만 체크하세요. 체크한 곡이 그 순서대로 들어갑니다. "
+                         : "넣을 곡만 체크하세요. 이 예배에 이미 \(existing.count)곡이 있어, 다음 화면에서 어떻게 합칠지 정합니다. ") + Text("영상 제목에서 곡 이름을 골라 적었습니다 — 앨범이나 예배 시리즈 이름이 잘못 잡혔으면 「다른 이름」에서 고르거나 직접 고치세요. 원래 영상 제목은 참고버전에 남습니다.")
                 }
+            }
+            .navigationDestination(isPresented: $merging) {
+                MergeSongsView(existing: existing, incoming: chosen(), onSend: onSend)
             }
             .navigationTitle("곡 제목 확인")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("취소", action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("\(count)곡 보내기") { onSend(chosen()) }
-                        .disabled(count == 0 || taken.contains { titles[$0].trimmingCharacters(in: .whitespaces).isEmpty })
+                    Button(existing.isEmpty ? "\(count)곡 보내기" : "다음") {
+                        if existing.isEmpty { onSend(chosen()) } else { merging = true }
+                    }
+                    .disabled(count == 0 || taken.contains { titles[$0].trimmingCharacters(in: .whitespaces).isEmpty })
                 }
             }
         }
