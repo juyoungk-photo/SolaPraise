@@ -594,18 +594,22 @@ struct ScoreStandView: View {
 
                 if editing {
                     VStack(alignment: .leading, spacing: 4) {
-                        if state?.showsOriginal == true {
-                            Text("원본을 보는 중 — 편집은 멈춥니다. 「원본」을 다시 누르면 이어서 편집합니다.")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.orange)
-                                .lineLimit(2)
-                        } else {
+                        // Both lines laid over each other, two lines kept:
+                        // 원본 on and off must not move the page either.
+                        let printed = state?.showsOriginal == true
+                        ZStack(alignment: .topLeading) {
                             Text("코드를 끌어서 옮기고, 눌러서 고치거나 지우세요. 빠진 코드는 그 자리를 누르면 읽어 봅니다 — 「+ 코드」로 넣어도 됩니다. 지운 코드는 점선 상자를 누르면 되살아납니다. 「원본」으로 인쇄된 악보와 비교하세요. 페이지는 두 손가락으로 넘깁니다.")
-                                .font(.footnote)
                                 .foregroundStyle(Color.accentColor)
-                                .lineLimit(2)
+                                .opacity(printed ? 0 : 1)
+                            Text("원본을 보는 중 — 편집은 멈춥니다. 「원본」을 다시 누르면 이어서 편집합니다.")
+                                .foregroundStyle(.orange)
+                                .opacity(printed ? 1 : 0)
                         }
+                        .font(.footnote)
+                        .lineLimit(2, reservesSpace: true)
                         rereadButton(item)
+                            .opacity(printed ? 0.3 : 1)
+                            .disabled(printed)
                     }
                 }
             }
@@ -860,19 +864,20 @@ struct ScoreStandView: View {
     /// is the biggest thing in the row.
     private func controls(_ item: ScoreStandItem) -> some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
+            // One line: 원본 centred on the bar, in 편집 and out — it stays
+            // where the finger knows it. Room kept for it in the middle.
+            HStack(spacing: 8) {
                 keyGroup(item)
                 if editing {
                     // Paused while the page is shown as printed.
                     editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
                 }
-                Spacer(minLength: 12)
-                if !editing { originalButton(item) }
-                Spacer(minLength: 12)
+                Spacer(minLength: 76)
                 toolGroup(item)
                 songNav()
             }
             .padding(.horizontal, 16)
+            .overlay { originalButton(item) }
 
             VStack(spacing: 8) {
                 HStack(spacing: 10) {
@@ -882,7 +887,7 @@ struct ScoreStandView: View {
                     editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
                 }
                     Spacer(minLength: 8)
-                    if !editing { originalButton(item) }
+                    if !editing || sizeClass == .regular { originalButton(item) }
                 }
                 .padding(.horizontal, 16)
                 HStack(spacing: 10) {
@@ -985,11 +990,15 @@ struct ScoreStandView: View {
             if model.states[item.id]?.isEdited == true { confirmingReread = true }
             else { Task { await model.resetEdits(item) } }
         } label: {
+            // A button that looks like one: as a grey line of text it went
+            // unseen, and 「how do I read it again?」 had no visible answer.
             Label("코드 다시 읽기", systemImage: "arrow.clockwise")
                 .font(.footnote.weight(.semibold))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .overlay(Capsule().stroke(Color.accentColor, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white.opacity(0.8))
+        .foregroundStyle(Color.accentColor)
         .accessibilityLabel("코드를 처음부터 다시 인식")
     }
 
@@ -1090,8 +1099,9 @@ struct ScoreStandView: View {
         .accessibilityHidden(editing)
         // While editing, 원본 takes the place 공유 leaves: beside 완료, a
         // check to make often, and the row stays one line on iPad.
+        // (On a phone. iPad keeps 원본 where it always is.)
         .overlay(alignment: .leading) {
-            if editing { originalButton(item) }
+            if editing && sizeClass != .regular { originalButton(item) }
         }
 
     }
