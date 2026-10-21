@@ -30,6 +30,7 @@ struct WorshipFeedView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
+    @EnvironmentObject private var team: TeamStore
     @StateObject private var feed = FeedStore()
 
     @Query(sort: [SortDescriptor(\Channel.sortOrder), SortDescriptor(\Channel.addedAt)])
@@ -42,6 +43,11 @@ struct WorshipFeedView: View {
     private var allVideos: [CachedVideo]
 
     @State private var searchText = ""
+    /// What completion draws from, built once per change of what it is
+    /// built from — reading song titles out of video titles is not free.
+    @State private var completionPool: [SongCompletion.Candidate] = []
+    /// The pool's songs by their letters, to know when a song is reached.
+    @State private var completionTitles: Set<String> = []
     @StateObject private var history = SearchHistory.shared("worship")
     /// Nil means every whitelisted channel.
     @State private var channelFilter: String?
@@ -90,12 +96,8 @@ struct WorshipFeedView: View {
                     placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "찬양·곡 검색"
                 )
-                .searchSuggestions {
-                    ForEach(history.entries, id: \.self) { query in
-                        Label(query, systemImage: "clock.arrow.circlepath")
-                            .searchCompletion(query)
-                    }
-                }
+                .searchSuggestions { suggestionRows }
+                .task(id: poolKey) { buildCompletionPool() }
                 .onSubmit(of: .search) { Task { await runRemoteSearch() } }
                 .onChange(of: searchText) { _, newValue in
                     if newValue.isEmpty { remoteResults = []; searchError = nil }
@@ -145,6 +147,187 @@ struct WorshipFeedView: View {
         }
     }
 
+    // MARK: - Completion
+
+    /// As a title is typed, the songs it can be — the team's first, with
+    /// when it was last sung (SongCompletion). Nothing typed: the searches
+    /// made before. A song reached is not completed again, so the results
+    /// below are not covered by a list of longer titles.
+    @ViewBuilder
+    private var suggestionRows: some View {
+        if trimmedSearch.isEmpty {
+            ForEach(history.entries, id: \.self) { query in
+                Label(query, systemImage: "clock.arrow.circlepath")
+                    .searchCompletion(query)
+            }
+        } else if !completionTitles.contains(String(String.UnicodeScalarView(SongCompletion.letters(trimmedSearch)))) {
+            ForEach(SongCompletion.suggest(trimmedSearch, from: completionPool), id: \.text) { found in
+                HStack(spacing: 8) {
+                    Label(found.text, systemImage: Self.symbol(found.source))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if let detail = found.detail {
+                        Text(detail)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .searchCompletion(found.text)
+            }
+        }
+    }
+
+    private static func symbol(_ source: SongCompletion.Source) -> String {
+        switch source {
+        case .team:    return "music.note.list"
+        case .chosen:  return "checkmark.seal"
+        case .history: return "clock.arrow.circlepath"
+        case .video:   return "play.rectangle"
+        }
+    }
+
+    private var poolKey: String {
+        "\(allVideos.count)|\(team.songs.count)|\(team.services.count)|\(history.entries.count)"
+    }
+
+    private func buildCompletionPool() {
+        var pool: [SongCompletion.Candidate] = []
+        // The team's songs: the latest Sunday each was sung, its key, and
+        // how often — a song sung ten times is the likelier one.
+        // Every 순서 — a Plan tab's where the team keeps one, else the
+        // Songs tab's — and the Songs tab's days that have no service.
+        var sung: [String: (title: String, day: Date, key: String?, count: Int)] = [:]
+        var days: [Date: [(title: String, key: String?)]] = [:]
+        for service in team.services {
+            let day = Calendar.current.startOfDay(for: service.date)
+            days[day, default: []] += team.plan(for: service).filter { $0.kind == .song }.map { ($0.title, $0.key) }
+        }
+        for (day, list) in team.songs where days[day] == nil {
+            days[day] = list.map { ($0.title, $0.key) }
+        }
+        for (day, list) in days {
+            for song in list {
+                let title = PlanSongTitle.split(song.title).title
+                let id = String(String.UnicodeScalarView(SongCompletion.letters(title)))
+                guard !id.isEmpty else { continue }
+                var entry = sung[id] ?? (title, day, song.key, 0)
+                entry.count += 1
+                // The last time it was sung; a coming service only when it
+                // has not been sung yet.
+                let today = Calendar.current.startOfDay(for: Date())
+                let better = entry.day > today ? (day <= today || day < entry.day) : (day <= today && day >= entry.day)
+                if better { entry.day = day; entry.key = song.key ?? entry.key }
+                sung[id] = entry
+            }
+        }
+        let calendar = Calendar.current
+        for entry in sung.values {
+            let date = calendar.dateComponents([.month, .day], from: entry.day)
+            let detail = ["\(date.month ?? 0)/\(date.day ?? 0)", entry.key].compactMap { $0 }.joined(separator: " · ")
+            pool.append(.init(text: entry.title, source: .team, detail: detail, weight: entry.count * 5))
+        }
+        pool += SongTitleChoices.all.map { .init(text: $0, source: .chosen) }
+        pool += history.entries.enumerated().map { index, query in
+            .init(text: query, source: .history, weight: (history.entries.count - index) * 3)
+        }
+        var seen = Set<String>()
+        for video in worshipVideos.prefix(500) {
+            let title = SongTitleChoices.title(for: video.videoId)
+                ?? PlanSongTitle.split(video.title, channel: video.channelTitle).title
+            guard title.count <= 40, seen.insert(title).inserted else { continue }
+            pool.append(.init(text: title, source: .video))
+        }
+        completionPool = pool
+        completionTitles = Set(pool.filter { $0.source != .history }
+            .map { String(String.UnicodeScalarView(SongCompletion.letters($0.text))) })
+    }
+
+    // MARK: - This week
+
+    /// The team's next service with songs to play — its songs in order.
+    private var nextSet: (service: TeamService, songs: [PlanItem])? {
+        for service in team.services.filter({ !$0.isPast }).sorted(by: { $0.date < $1.date }) {
+            let songs = team.plan(for: service).filter { $0.kind == .song && $0.videoId != nil }
+            if !songs.isEmpty { return (service, songs) }
+        }
+        return nil
+    }
+
+    /// 이번 주 찬양: what the team is singing next, a tap from listening —
+    /// the set to learn, at the top of the tab you open to listen.
+    ///
+    /// WHY HERE: the songs were only reachable from 예배 준비, three taps
+    /// down a schedule, so the week's 찬양 was the thing the 찬양 tab
+    /// could not play.
+    @ViewBuilder
+    private var thisWeek: some View {
+        if let next = nextSet {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { playSet(next.songs, from: 0) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "music.note.list")
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("이번 주 찬양")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.primary)
+                            Text(RosterMessage.day(next.service.date) + " " + next.service.title
+                                 + " · \(next.songs.count)곡")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "play.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tint)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("이번 주 찬양 이어 듣기")
+
+                // Each song, in order: one starts the set from there.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(next.songs.enumerated()), id: \.offset) { index, song in
+                            Button { playSet(next.songs, from: index) } label: {
+                                HStack(spacing: 5) {
+                                    Text("\(index + 1)")
+                                        .font(.caption2.monospacedDigit().weight(.bold))
+                                        .foregroundStyle(.tint)
+                                    Text(PlanSongTitle.split(song.title).title)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                    if let key = song.key, !key.isEmpty {
+                                        Text(key)
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Color.primary.opacity(0.07)))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.accentColor.opacity(0.10)))
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func playSet(_ songs: [PlanItem], from index: Int) {
+        host.play(queue: songs.compactMap { item in
+                      item.videoId.map { PlayableVideo(id: $0, title: item.title) }
+                  },
+                  startIndex: index, purpose: .worship, curated: true)
+    }
+
     // MARK: - Browse
 
     private var browseScroll: some View {
@@ -159,6 +342,8 @@ struct WorshipFeedView: View {
                 // and stays put.
                 LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
                     Section {
+                    thisWeek
+
                     if !pinnedPlaylists.isEmpty || !pinnedVideos.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Label("고정됨", systemImage: "pin.fill")
@@ -413,9 +598,11 @@ struct WorshipFeedView: View {
     }
 
     private var localMatches: [CachedVideo] {
+        // Spaces, half-typed syllables and initials, as completion reads
+        // them: 「주경외함」 finds 「주 경외함으로」.
         let needle = searchText.lowercased()
         return worshipVideos
-            .filter { $0.title.lowercased().contains(needle) }
+            .filter { $0.title.lowercased().contains(needle) || SongCompletion.matches(searchText, title: $0.title) }
             .prefix(20)
             .map { $0 }
     }

@@ -24,6 +24,11 @@ enum SongTitleChoices {
         (UserDefaults.standard.dictionary(forKey: key) as? [String: String])?[videoId]
     }
 
+    /// Every title chosen here — songs this device has put a name to.
+    static var all: [String] {
+        Array(((UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]).values)
+    }
+
     /// Nil forgets the choice: the reading is right again.
     static func set(_ title: String?, for videoId: String) {
         var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
