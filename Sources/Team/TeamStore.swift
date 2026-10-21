@@ -289,6 +289,10 @@ final class TeamStore: ObservableObject {
     @Published private(set) var rawSchedule: [[String]]?
     @Published private(set) var rawSongs: [[String]]?
     @Published private(set) var rawSignups: [[String]]?
+    /// The 응답 tab, when the sheet has one (AvailabilityGrid). Then answers
+    /// are read from and written to it, and Signups is history.
+    @Published private(set) var usesGrid = false
+    @Published private(set) var rawGrid: [[String]]?
     @Published private(set) var rawMembers: [[String]]?
     @Published private(set) var rawPlan: [[String]]?
 
@@ -398,6 +402,7 @@ final class TeamStore: ObservableObject {
                        churchNotes: [Date: ChurchNote] = [:],
                        attachments: [Date: [Attachment]] = [:]) {
         isSample = true
+        usesGrid = DebugHarness.sampleGrid
         sampleActingEmail = members.sorted().first
         self.services = services
         self.roles = roles
@@ -665,7 +670,7 @@ final class TeamStore: ObservableObject {
 
     func mySignup(for service: TeamService, role: String, email: String) -> TeamSignup? {
         (signups[Calendar.current.startOfDay(for: service.date)] ?? [])
-            .first { $0.role == role && $0.email.caseInsensitiveCompare(email) == .orderedSame }
+            .first { (usesGrid || $0.role == role) && $0.email.caseInsensitiveCompare(email) == .orderedSame }
     }
 
     // MARK: - Loading
@@ -705,6 +710,8 @@ final class TeamStore: ObservableObject {
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
+            // After the roster: a grid column is a member by name.
+            await loadGrid(sheetId: sheetId, client: client)
             await loadChurchNotes(client: client)
             await loadAttachments(sheetId: sheetId, client: client)
             await loadContiFolder()
@@ -822,6 +829,8 @@ final class TeamStore: ObservableObject {
     func pendingNames(for service: TeamService) -> [String] {
         let day = Calendar.current.startOfDay(for: service.date)
         let answered = Set((signups[day] ?? []).map { $0.email.lowercased() })
+        // On the 응답 tab a member answers by name, address or not.
+        let answeredNames = Set((signups[day] ?? []).map { $0.name.replacingOccurrences(of: " ", with: "") })
         // Somebody the leader has put on a part is already on the row, in
         // orange, saying exactly what they are down for. Listing them again
         // as 미응답 was the same person twice on one line — and it made a
@@ -858,6 +867,7 @@ final class TeamStore: ObservableObject {
 
         return members
             .filter { $0.isActive }
+            .filter { !answeredNames.contains($0.name.replacingOccurrences(of: " ", with: "")) }
             .filter { $0.email.isEmpty || !answered.contains($0.email.lowercased()) }
             .map { $0.name.isEmpty ? $0.email : $0.name }
             .filter { !isAssigned($0) }
@@ -903,7 +913,9 @@ final class TeamStore: ObservableObject {
         // One line per person, not per role, which is how a leader reads it.
         var seen: [String: TeamSignup] = [:]
         for signup in signups[day] ?? [] {
-            seen[signup.email.lowercased()] = signup
+            // By name when there is no address: on the 응답 tab a member
+            // without one answers too, and they must not merge into one.
+            seen[signup.email.isEmpty ? "name:" + signup.name : signup.email.lowercased()] = signup
         }
         // Who is coming first. That is the question being asked; declines
         // and absences are the answer to a different one.
@@ -942,6 +954,11 @@ final class TeamStore: ObservableObject {
         }
         #endif
         guard let client else { return }
+        if usesGrid {
+            await setGridAvailability(status, service: service, email: email, name: name,
+                                      sheetId: sheetId, client: client)
+            return
+        }
         let day = Calendar.current.startOfDay(for: service.date)
         let row = signupLayout.row(
             date: TeamSheet.dateFormatter.string(from: service.date),
@@ -994,6 +1011,209 @@ final class TeamStore: ObservableObject {
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    // MARK: - The 응답 tab
+
+    private func loadGrid(sheetId: String, client: SheetsClient) async {
+        let rows = (try? await client.read(sheetId: sheetId, range: AvailabilityGrid.tab)) ?? []
+        guard let header = rows.first, AvailabilityGrid.Layout(header: header) != nil else {
+            usesGrid = false
+            rawGrid = nil
+            return
+        }
+        usesGrid = true
+        rawGrid = rows
+        signups = gridSignups(rows)
+    }
+
+    /// The grid's answers as the rest of the app reads answers: each member
+    /// by the roster's address for that name, and the part the leader has
+    /// put them on for that service, if any.
+    private func gridSignups(_ rows: [[String]]) -> [Date: [TeamSignup]] {
+        var out: [Date: [TeamSignup]] = [:]
+        for answer in AvailabilityGrid.answers(rows) {
+            let member = members.first { $0.name.trimmingCharacters(in: .whitespaces) == answer.name }
+            let service = services.first { Calendar.current.isDate($0.date, inSameDayAs: answer.day) }
+            let part = service.flatMap { service in
+                service.assignments.first { TeamSheet.names(inCell: $0.value).contains(answer.name) }?.key
+            } ?? ""
+            out[answer.day, default: []].append(TeamSignup(role: part, email: member?.email ?? "", name: answer.name,
+                                                           statusRaw: answer.status, row: answer.row))
+        }
+        return out
+    }
+
+    /// An answer written to the member's cell: their column by the roster's
+    /// name, the service's row — made when the grid has none yet, as a
+    /// column is for a member it has not met.
+    private func setGridAvailability(_ status: SignupStatus, service: TeamService, email: String, name: String,
+                                     sheetId: String, client: SheetsClient) async {
+        guard var grid = rawGrid, let header = grid.first,
+              let layout = AvailabilityGrid.Layout(header: header) else { return }
+        let tab = AvailabilityGrid.tab
+        let person = rosterName(for: email) ?? name
+        func cell(_ column: Int, _ row: Int) -> String {
+            let at = "\(TeamSheet.columnLetter(column))\(row)"
+            return "\(tab)!\(at):\(at)"
+        }
+        do {
+            isReadOnly = false
+            var column = layout.column(for: person)
+            if column == nil {
+                let index = max(header.count, 2)
+                try await client.write(sheetId: sheetId, range: cell(index, 1), row: [person])
+                while grid[0].count < index { grid[0].append("") }
+                grid[0].append(person)
+                column = index
+            }
+            var row = AvailabilityGrid.row(for: service.date, service: service.title, in: grid)
+            // The remembered row must still be this service: a grid sorted
+            // in a browser would otherwise take this answer onto another day.
+            if let target = row, !(await confirm(tab, row: target, holds: [dateText(service)],
+                                                sheetId: sheetId, client: client)) {
+                errorMessage = Self.sheetMovedMessage
+                return
+            }
+            if row == nil {
+                row = try await client.append(sheetId: sheetId, tab: tab, row: [service.title, dateText(service)])
+                if let row {
+                    while grid.count < row { grid.append([]) }
+                    grid[row - 1] = [service.title, dateText(service)]
+                }
+            }
+            guard let row, let column else { return }
+            let word = AvailabilityGrid.word(status.rawValue)
+            try await client.write(sheetId: sheetId, range: cell(column, row), row: [word])
+            while grid[row - 1].count <= column { grid[row - 1].append("") }
+            grid[row - 1][column] = word
+            rawGrid = grid
+            signups = gridSignups(grid)
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            errorMessage = "이 시트에 편집 권한이 없어 응답을 저장하지 못했습니다. 시트 주인에게 이 계정을 편집자로 추가해 달라고 요청하세요."
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// What 시트를 멤버용으로 정리 would do, in words, before it is asked.
+    func gridSetupPreview() -> [String] {
+        let start = Calendar.current.date(byAdding: .day, value: -28, to: Calendar.current.startOfDay(for: Date()))!
+        let schedule = services.sorted { $0.date < $1.date }.map { (day: $0.date, title: $0.title) }
+        let names = members.filter(\.isActive).map(\.name).filter { !$0.isEmpty }
+        var lines: [String] = []
+        if let grid = rawGrid, let header = grid.first, let layout = AvailabilityGrid.Layout(header: header) {
+            let newNames = names.filter { layout.column(for: $0) == nil }
+            let newRows = AvailabilityGrid.missingServices(schedule, in: grid, from: start)
+            if !newNames.isEmpty { lines.append("응답 탭에 멤버 열 추가: " + newNames.joined(separator: ", ")) }
+            if !newRows.isEmpty { lines.append("응답 탭에 예배 줄 \(newRows.count)개 추가") }
+        } else {
+            let carried = signups.filter { $0.key >= start }.values.reduce(0) { $0 + $1.count }
+            lines.append("「응답」 탭을 새로 만듭니다: 예배 \(schedule.filter { $0.day >= start }.count)줄 × 멤버 \(names.count)명. 칸마다 가능 · 미정 · 어려움 · 자리비움 드롭다운.")
+            if carried > 0 { lines.append("Signups 탭의 응답 \(carried)개를 옮겨 적습니다. Signups 탭은 기록으로 그대로 둡니다.") }
+        }
+        let renames = partRenames()
+        if !renames.isEmpty {
+            lines.append("파트 이름 통일: " + renames.map { "\($0.from) → \($0.to)" }.joined(separator: ", "))
+        }
+        return lines
+    }
+
+    /// Part names spelled otherwise on Roles and in Schedule's header.
+    private func partRenames() -> [(from: String, to: String)] {
+        var seen = Set<String>()
+        return (roles.map(\.name) + roleColumns.keys.sorted()).compactMap { name in
+            guard let to = AvailabilityGrid.unifiedPart(name), seen.insert(name).inserted else { return nil }
+            return (name, to)
+        }
+    }
+
+    /// Makes the sheet usable without the app: the 응답 tab — made, carrying
+    /// the Signups answers over, or topped up with new members and services
+    /// — and each part called one name on Roles and Schedule. Run only from
+    /// a button, after its preview. Returns an error message, or nil.
+    func prepareGrid(sheetId: String) async -> String? {
+        #if DEBUG
+        if isSample { return "샘플 모드에서는 시트를 바꾸지 않습니다." }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        let tab = AvailabilityGrid.tab
+        let start = Calendar.current.date(byAdding: .day, value: -28, to: Calendar.current.startOfDay(for: Date()))!
+        let schedule = services.sorted { $0.date < $1.date }.map { (day: $0.date, title: $0.title) }
+        let names = members.filter(\.isActive).map(\.name).filter { !$0.isEmpty }
+        do {
+            let titles = try await client.tabTitles(sheetId: sheetId)
+            if !titles.contains(tab) {
+                // The answers given so far, each member by the roster's name;
+                // a later row for the same person and day wins.
+                var carried: [Date: [String: String]] = [:]
+                for (day, list) in signups {
+                    for signup in list.sorted(by: { ($0.row ?? 0) < ($1.row ?? 0) }) {
+                        let who = rosterName(for: signup.email) ?? signup.name
+                        carried[day, default: [:]][who] = signup.status.rawValue
+                    }
+                }
+                let rows = AvailabilityGrid.build(services: schedule.filter { $0.day >= start },
+                                                  members: names, answers: carried)
+                try await client.addSheet(sheetId: sheetId, title: tab)
+                guard let gid = try await client.tabGid(sheetId: sheetId, title: tab) else {
+                    return "응답 탭을 만들지 못했습니다."
+                }
+                let last = TeamSheet.columnLetter(rows[0].count - 1)
+                try await client.batchWrite(sheetId: sheetId, updates: [("\(tab)!A1:\(last)\(rows.count)", rows)])
+                try await client.formatUpdate(sheetId: sheetId, requests:
+                    AvailabilityGrid.formatRequests(gid: gid, members: names.count, rows: rows.count))
+            } else {
+                let grid = try await client.read(sheetId: sheetId, range: tab)
+                guard let header = grid.first, let layout = AvailabilityGrid.Layout(header: header) else {
+                    return "응답 탭의 첫 줄에 「날짜」 열이 없어 고치지 않았습니다."
+                }
+                let newNames = names.filter { layout.column(for: $0) == nil }
+                if !newNames.isEmpty {
+                    let from = TeamSheet.columnLetter(header.count), to = TeamSheet.columnLetter(header.count + newNames.count - 1)
+                    try await client.batchWrite(sheetId: sheetId, updates: [("\(tab)!\(from)1:\(to)1", [newNames])])
+                }
+                for service in AvailabilityGrid.missingServices(schedule, in: grid, from: start) {
+                    _ = try await client.append(sheetId: sheetId, tab: tab,
+                                                row: [service.title, TeamSheet.dateFormatter.string(from: service.day)])
+                }
+            }
+            try await unifyPartNames(sheetId: sheetId, client: client)
+            await load(sheetId: sheetId)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 정리하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Roles' names and Schedule's part headers, each in the team's one word.
+    private func unifyPartNames(sheetId: String, client: SheetsClient) async throws {
+        var updates: [(range: String, rows: [[String]])] = []
+        let roleRows = try await client.read(sheetId: sheetId, range: TeamSheet.rolesTab)
+        if let headerAt = TeamSheet.headerIndex(roleRows, tab: TeamSheet.rolesTab) {
+            let column = TeamSheet.column(roleRows[headerAt], ["role", "파트", "역할", "name"]) ?? 0
+            for (offset, row) in roleRows.enumerated() where offset > headerAt && row.indices.contains(column) {
+                if let to = AvailabilityGrid.unifiedPart(row[column]) {
+                    let at = "\(TeamSheet.columnLetter(column))\(offset + 1)"
+                    updates.append(("\(TeamSheet.rolesTab)!\(at):\(at)", [[to]]))
+                }
+            }
+        }
+        let scheduleRows = try await client.read(sheetId: sheetId, range: TeamSheet.scheduleTab)
+        if let headerAt = TeamSheet.headerIndex(scheduleRows, tab: TeamSheet.scheduleTab) {
+            let parts = Self.scheduleRoleColumns([scheduleRows[headerAt]])
+            for (name, column) in parts {
+                if let to = AvailabilityGrid.unifiedPart(name) {
+                    let at = "\(TeamSheet.columnLetter(column))\(headerAt + 1)"
+                    updates.append(("\(TeamSheet.scheduleTab)!\(at):\(at)", [[to]]))
+                }
+            }
+        }
+        if !updates.isEmpty { try await client.batchWrite(sheetId: sheetId, updates: updates) }
     }
 
     // MARK: - Attachments
@@ -1617,6 +1837,28 @@ final class TeamStore: ObservableObject {
         if isSample { forget(); return true }
         #endif
         guard let client else { forget(); return true }
+
+        // On the 응답 tab: the member's cell blanked — no answer, as a blank
+        // cell always means there.
+        if usesGrid, var grid = rawGrid, let header = grid.first,
+           let layout = AvailabilityGrid.Layout(header: header) {
+            do {
+                for signup in mine {
+                    guard let row = signup.row, row >= 2, let column = layout.column(for: signup.name),
+                          await confirm(AvailabilityGrid.tab, row: row, holds: [dateText(service)],
+                                        sheetId: sheetId, client: client) else { continue }
+                    let at = "\(TeamSheet.columnLetter(column))\(row)"
+                    try await client.write(sheetId: sheetId, range: "\(AvailabilityGrid.tab)!\(at):\(at)", row: [""])
+                    if grid.indices.contains(row - 1), grid[row - 1].indices.contains(column) { grid[row - 1][column] = "" }
+                }
+                rawGrid = grid
+                signups = gridSignups(grid)
+                return true
+            } catch {
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                return false
+            }
+        }
 
         let rows = mine.compactMap(\.row).filter { $0 >= 2 }
         guard !rows.isEmpty else {

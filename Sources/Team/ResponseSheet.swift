@@ -48,6 +48,9 @@ struct ResponseSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                if team.usesGrid {
+                    gridAnswers
+                } else {
                 Section {
                     // Choosing a part IS the answer. Asking for a part and
                     // then separately for 가능 made people say the same
@@ -114,6 +117,7 @@ struct ResponseSheet: View {
                         Text("「자리비움」은 그 주에 아예 없다는 뜻이라 다시 묻지 않습니다.")
                     }
                 }
+                }
 
                 // Withdrawing has to be as easy as answering, or the first
                 // answer becomes one people hesitate over. Only offered once
@@ -158,8 +162,44 @@ struct ResponseSheet: View {
             .map { $0.name.isEmpty ? $0.email : $0.name }
     }
 
+    /// The 응답 tab's four answers, as the sheet's dropdown offers them. No
+    /// part: on the grid the leader puts people on parts, on Schedule.
+    private var gridAnswers: some View {
+        Section {
+            ForEach([SignupStatus.available, .maybe, .declined, .away], id: \.self) { status in
+                Button {
+                    Task { await save(status, role: chosen) }
+                } label: {
+                    HStack {
+                        Circle().fill(Self.colour(status)).frame(width: 10, height: 10)
+                        Text(status.label).foregroundStyle(Color.primary)
+                        Spacer()
+                        if current?.status == status {
+                            Image(systemName: "checkmark").foregroundStyle(Self.colour(status))
+                        }
+                    }
+                }
+                .disabled(isSaving)
+            }
+        } header: {
+            Text("이 예배에")
+        } footer: {
+            Text("팀 시트의 「응답」 탭, 내 이름 칸에 그대로 적힙니다 — 앱 없이 시트에서 골라도 같습니다. 파트는 리더가 Schedule 탭에서 정합니다.")
+        }
+    }
+
+    private static func colour(_ status: SignupStatus) -> Color {
+        switch status {
+        case .available: return .green
+        case .maybe: return .yellow
+        case .declined: return .red
+        case .away: return .orange
+        }
+    }
+
     private func save(_ status: SignupStatus, role: TeamRole?) async {
-        guard let role, let sheetId = TeamSheetSource.current else { return }
+        guard let sheetId = TeamSheetSource.current,
+              let role = role ?? (team.usesGrid ? TeamRole(name: "", order: 0) : nil) else { return }
         isSaving = true
         defer { isSaving = false }
         // Remembered for next time, since it is almost always the same.

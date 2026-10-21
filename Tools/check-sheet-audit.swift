@@ -144,6 +144,13 @@ struct CheckSheetAudit {
         check("no upcoming service is noted",
               SheetAudit.run(c).contains { $0.id == "schedule.noUpcoming" })
 
+        // A time typed as 12:30 becomes half past midnight.
+        c = healthy
+        c.schedule = [["Date", "Service", "Time"], ["2026-10-25", "주일 2부", "12:30 AM"]]
+        check("a service at night is reported", ids(c).contains("schedule.nightTime"))
+        c.schedule = [["Date", "Service", "Time"], ["2026-10-25", "주일 2부", "11:30 AM"]]
+        check("a morning service is not", !ids(c).contains("schedule.nightTime"))
+
         // SIGNUPS.
         var u = healthy
         u.signups?.append(["2026-10-11", "드럼", "pianist@example.com", "은혜", "X", ""])

@@ -20,6 +20,7 @@ struct SheetHealthView: View {
     @EnvironmentObject private var quota: QuotaLedger
     @Environment(\.modelContext) private var modelContext
     @State private var confirmingTitles = false
+    @State private var confirmingGrid = false
     @Environment(\.dismiss) private var dismiss
 
     let sheetId: String?
@@ -62,6 +63,30 @@ struct SheetHealthView: View {
                     Text("시트와 계정 설정을 읽기만 해서 점검합니다. 고치는 버튼은 누를 때만 시트를 바꿉니다.")
                 }
 
+                // The sheet usable on its own: members answer on it without
+                // the app. What would change is listed before it is asked.
+                Section {
+                    let plan = team.gridSetupPreview()
+                    if team.rawGrid != nil, plan.isEmpty {
+                        Label("멤버가 시트의 「응답」 탭에서 바로 응답할 수 있습니다", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        ForEach(plan, id: \.self) { line in
+                            Text(line).font(.callout)
+                        }
+                        Button {
+                            confirmingGrid = true
+                        } label: {
+                            Label(team.rawGrid != nil ? "응답 탭 정리" : "시트를 멤버용으로 정리", systemImage: "tablecells.badge.ellipsis")
+                        }
+                        .disabled(working || sheetId == nil || team.isReadOnly)
+                    }
+                } header: {
+                    Text("시트에서 바로 응답")
+                } footer: {
+                    Text("앱이 없어도 팀원이 시트만 열어 예배마다 가능 · 미정 · 어려움 · 자리비움을 고를 수 있게 합니다. 앱도 같은 칸을 읽고 씁니다.")
+                }
+
                 ForEach(areas(all), id: \.self) { area in
                     Section(area) {
                         ForEach(all.filter { $0.area == area }) { finding in
@@ -90,6 +115,12 @@ struct SheetHealthView: View {
             } message: {
                 Text(note ?? "")
             }
+            .confirmationDialog("팀 시트를 바꿀까요?", isPresented: $confirmingGrid, titleVisibility: .visible) {
+                Button("정리하기") { Task { await prepareGrid() } }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text(team.gridSetupPreview().joined(separator: "\n") + "\n\n팀 전체가 쓰는 문서입니다. 기존 탭의 내용은 지우지 않습니다.")
+            }
             .confirmationDialog("곡 제목을 정리할까요?", isPresented: $confirmingTitles, titleVisibility: .visible) {
                 Button("정리하기") { Task { await tidyTitles() } }
                 Button("취소", role: .cancel) {}
@@ -97,6 +128,14 @@ struct SheetHealthView: View {
                 Text("Songs 탭의 Title을 곡 제목만 남기고(찬송가는 장 번호와 함께), 팀·앨범·연도는 새 「참고버전」 열에 적습니다. Key·Transpose는 Title 바로 옆으로 옮깁니다. Attachments 탭의 곡 이름과 파일 이름도 맞춥니다. 링크·키·메모 같은 다른 칸은 그대로이고, 이미 적힌 참고버전은 덮어쓰지 않습니다.")
             }
         }
+    }
+
+    private func prepareGrid() async {
+        guard let sheetId else { return }
+        working = true
+        defer { working = false }
+        note = await team.prepareGrid(sheetId: sheetId)
+            ?? "정리했습니다. 팀원에게 「응답」 탭에서 자기 이름 칸을 고르면 된다고 알려 주세요."
     }
 
     /// Areas in the order the findings put them — worst first.

@@ -129,6 +129,9 @@ enum DebugHarness {
     /// A sample 순서 of the songs in the real 콘티 folder's 10/11 콘티.
     static var contiFolderPlan: Bool { args.contains("-uiTestContiFolderPlan") }
 
+    /// The sample team answering on a 응답 tab: -uiTestGrid
+    static var sampleGrid: Bool { args.contains("-uiTestGrid") }
+
     /// Open 악보 연주모드 for the first service: -uiTestOpenStand
     static var openStand: Bool { args.contains("-uiTestOpenStand") }
 

@@ -2332,6 +2332,19 @@ struct ServicePrepView: View {
         let key = upcoming.id
         return HStack(spacing: 8) {
             Menu {
+                if team.usesGrid {
+                    // On the 응답 tab an answer is only that — the part is
+                    // the leader's, on Schedule. Said, not offered.
+                    Section(mine?.role.isEmpty == false ? "배정된 파트: \(mine!.role)" : "응답") {
+                        ForEach([SignupStatus.available, .maybe, .declined, .away], id: \.self) { status in
+                            Button {
+                                Task { await answer(status, for: upcoming, role: nil) }
+                            } label: {
+                                if shown == status { Label(status.label, systemImage: "checkmark") } else { Text(status.label) }
+                            }
+                        }
+                    }
+                } else {
                 Section("맡을 파트") {
                     ForEach(team.roles) { role in
                         Button {
@@ -2344,6 +2357,7 @@ struct ServicePrepView: View {
                             }
                         }
                     }
+                }
                 }
                 // Only the part lives in here now. 어려움 and 자리비움 were in
                 // this menu, which is labelled 맡을 파트 and shaped like a

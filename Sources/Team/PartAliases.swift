@@ -28,7 +28,11 @@ enum PartAliases {
     /// itself.
     static let groups: [[String]] = [
         ["인도", "인도자", "리더", "lead", "leader", "worship leader"],
-        ["반주", "반주자", "piano", "피아노", "건반", "keys", "keyboard"]
+        ["반주", "반주자", "piano", "피아노", "건반", "keys", "keyboard"],
+        ["기타", "a.g.", "ag", "guitar", "acoustic", "어쿠스틱"],
+        ["베이스", "bass"],
+        ["드럼", "drum", "drums"],
+        ["보컬", "vocal", "vocals", "싱어"]
     ]
 
     /// Comparable form: spaces removed, lowercased.

@@ -292,6 +292,21 @@ enum SheetAudit {
             let key = TeamSheet.dateFormatter.string(from: date) + "|" + cell(cells, titleColumn).lowercased()
             if seen[key] != nil { repeats.append(offset + 1) } else { seen[key] = offset + 1 }
         }
+        // A service at 12:30 AM: a time typed as 12:30, which Sheets reads
+        // as half past midnight. Every service on the live sheet said so,
+        // and the 순서's clock started from it.
+        if let timeColumn = TeamSheet.column(header, ["time", "시간"]) {
+            let night = rows.enumerated().filter { offset, cells in
+                guard offset > 0, TeamSheet.day(cell(cells, dateColumn)) != nil,
+                      let time = TeamSheet.timeFormatter.date(from: cell(cells, timeColumn)) else { return false }
+                return Calendar.current.component(.hour, from: time) < 5
+            }.map { $0.offset + 1 }
+            if !night.isEmpty {
+                out.append(.init(id: "schedule.nightTime", severity: .warning, area: "Schedule 탭",
+                                 title: "예배 시간이 한밤중으로 적혀 있습니다",
+                                 detail: "\(list(night))번 줄. 「12:30 AM」은 자정 30분입니다 — 낮 12시 30분이면 12:30 PM, 오전 11시 30분이면 11:30 AM으로 고쳐 주세요. 예배 순서의 시각이 이 시간에서 시작합니다."))
+            }
+        }
         if !repeats.isEmpty {
             out.append(.init(id: "schedule.repeats", severity: .warning, area: "Schedule 탭",
                              title: "같은 날 같은 예배가 두 줄",
