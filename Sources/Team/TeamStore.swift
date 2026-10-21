@@ -1120,13 +1120,20 @@ final class TeamStore: ObservableObject {
         return lines
     }
 
-    /// Part names spelled otherwise on Roles and in Schedule's header.
+    /// Part names spelled otherwise on Roles and in Schedule's header —
+    /// each renamed only where the new name is not already there, so two
+    /// spellings of one part do not become two parts of the same name.
     private func partRenames() -> [(from: String, to: String)] {
-        var seen = Set<String>()
-        return (roles.map(\.name) + roleColumns.keys.sorted()).compactMap { name in
-            guard let to = AvailabilityGrid.unifiedPart(name), seen.insert(name).inserted else { return nil }
-            return (name, to)
+        var out: [(from: String, to: String)] = []
+        for names in [roles.map(\.name), roleColumns.sorted { $0.value < $1.value }.map(\.key)] {
+            var taken = Set(names)
+            for name in names {
+                guard let to = AvailabilityGrid.unifiedPart(name), !taken.contains(to) else { continue }
+                taken.insert(to)
+                if !out.contains(where: { $0.from == name }) { out.append((name, to)) }
+            }
         }
+        return out
     }
 
     /// Makes the sheet usable without the app: the 응답 tab — made, carrying
@@ -1196,8 +1203,9 @@ final class TeamStore: ObservableObject {
         let roleRows = try await client.read(sheetId: sheetId, range: TeamSheet.rolesTab)
         if let headerAt = TeamSheet.headerIndex(roleRows, tab: TeamSheet.rolesTab) {
             let column = TeamSheet.column(roleRows[headerAt], ["role", "파트", "역할", "name"]) ?? 0
+            var taken = Set(roleRows.dropFirst(headerAt + 1).compactMap { $0.indices.contains(column) ? $0[column] : nil })
             for (offset, row) in roleRows.enumerated() where offset > headerAt && row.indices.contains(column) {
-                if let to = AvailabilityGrid.unifiedPart(row[column]) {
+                if let to = AvailabilityGrid.unifiedPart(row[column]), taken.insert(to).inserted {
                     let at = "\(TeamSheet.columnLetter(column))\(offset + 1)"
                     updates.append(("\(TeamSheet.rolesTab)!\(at):\(at)", [[to]]))
                 }
@@ -1206,8 +1214,9 @@ final class TeamStore: ObservableObject {
         let scheduleRows = try await client.read(sheetId: sheetId, range: TeamSheet.scheduleTab)
         if let headerAt = TeamSheet.headerIndex(scheduleRows, tab: TeamSheet.scheduleTab) {
             let parts = Self.scheduleRoleColumns([scheduleRows[headerAt]])
-            for (name, column) in parts {
-                if let to = AvailabilityGrid.unifiedPart(name) {
+            var taken = Set(parts.keys)
+            for (name, column) in parts.sorted(by: { $0.value < $1.value }) {
+                if let to = AvailabilityGrid.unifiedPart(name), taken.insert(to).inserted {
                     let at = "\(TeamSheet.columnLetter(column))\(headerAt + 1)"
                     updates.append(("\(TeamSheet.scheduleTab)!\(at):\(at)", [[to]]))
                 }

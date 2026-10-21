@@ -225,16 +225,20 @@ enum AvailabilityGrid {
 
     // MARK: - One name for each part
 
-    /// The team's own words for each part, one per job. 피아노 on Roles, 건반
-    /// on Schedule and A.G. beside 기타 were one job in three spellings — a
-    /// member reading the sheet could not tell they matched.
+    /// The team's words for each part, one per job: English, as the team
+    /// writes parts — A.G. and E.G. are two guitars, which 「기타」 cannot
+    /// tell apart — except 인도, which says what it means better than any
+    /// English. 피아노 on Roles, 건반 on Schedule and 반주 in the app were
+    /// one job in three spellings; a member reading the sheet could not tell
+    /// they matched. A plain 「기타」 is the acoustic one, as Schedule has it.
     static let partNames: [(name: String, spellings: [String])] = [
-        ("인도", ["인도", "인도자", "리더", "lead", "leader", "worship leader"]),
-        ("건반", ["건반", "피아노", "piano", "keys", "keyboard", "키보드"]),
-        ("기타", ["기타", "a.g.", "ag", "guitar", "acoustic", "어쿠스틱", "어쿠스틱기타"]),
-        ("베이스", ["베이스", "bass"]),
-        ("드럼", ["드럼", "drum", "drums"]),
-        ("보컬", ["보컬", "vocal", "vocals", "싱어"]),
+        ("인도", ["인도", "인도자", "리더", "lead", "leader", "worship leader", "wl"]),
+        ("Keys", ["keys", "건반", "피아노", "piano", "keyboard", "키보드", "반주", "반주자"]),
+        ("A.G.", ["a.g.", "ag", "기타", "guitar", "acoustic", "acoustic guitar", "어쿠스틱", "어쿠스틱기타", "통기타"]),
+        ("E.G.", ["e.g.", "eg", "electric", "electric guitar", "일렉", "일렉기타"]),
+        ("Bass", ["bass", "베이스"]),
+        ("Drum", ["drum", "drums", "드럼"]),
+        ("Vocal", ["vocal", "vocals", "보컬", "싱어"]),
     ]
 
     /// The team's word for a part spelled another way; nil when it is

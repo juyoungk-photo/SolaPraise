@@ -29,10 +29,12 @@ enum PartAliases {
     static let groups: [[String]] = [
         ["인도", "인도자", "리더", "lead", "leader", "worship leader"],
         ["반주", "반주자", "piano", "피아노", "건반", "keys", "keyboard"],
-        ["기타", "a.g.", "ag", "guitar", "acoustic", "어쿠스틱"],
-        ["베이스", "bass"],
-        ["드럼", "drum", "drums"],
-        ["보컬", "vocal", "vocals", "싱어"]
+        // The rest: one job, several spellings — not core.
+        ["A.G.", "a.g.", "ag", "기타", "guitar", "acoustic", "어쿠스틱", "통기타"],
+        ["E.G.", "e.g.", "eg", "electric", "일렉", "일렉기타"],
+        ["Bass", "bass", "베이스"],
+        ["Drum", "drum", "drums", "드럼"],
+        ["Vocal", "vocal", "vocals", "보컬", "싱어"]
     ]
 
     /// Comparable form: spaces removed, lowercased.
@@ -62,9 +64,11 @@ enum PartAliases {
         return group.contains { $0 == right || right.contains($0) || $0.contains(right) }
     }
 
-    /// The parts a service cannot happen without.
+    /// The parts a service cannot happen without: 인도 and the keys — the
+    /// first two groups. Not every group: with the others listed, every
+    /// part read as one a service could not do without.
     static func isCore(_ name: String) -> Bool {
-        groups.contains { group in
+        groups.prefix(2).contains { group in
             group.contains { matches($0, name) }
         }
     }

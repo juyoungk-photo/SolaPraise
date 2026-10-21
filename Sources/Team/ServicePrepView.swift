@@ -2065,6 +2065,16 @@ struct ServicePrepView: View {
     /// so the row does not reshuffle as the sheet is edited.
     private static let keyRoleNames = ["인도", "반주"]
 
+    /// Those two as the sheet names them — a chip says 「Keys 미지정」 on a
+    /// sheet that calls the part Keys.
+    private var coreNames: [String] {
+        Self.keyRoleNames.map { core in
+            team.roleColumns.sorted { $0.value < $1.value }.map(\.key).first { PartAliases.matches($0, core) }
+                ?? team.roles.first { PartAliases.matches($0.name, core) }?.name
+                ?? core
+        }
+    }
+
     /// The column the 순서's ▶ buttons stand in.
     private static let playColumn: CGFloat = 34
     /// The 순서 row's buttons share one height, so they line up.
@@ -2113,8 +2123,10 @@ struct ServicePrepView: View {
             let x = a.replacingOccurrences(of: " ", with: ""), y = b.replacingOccurrences(of: " ", with: "")
             return x == y || (min(x.count, y.count) >= 2 && (x.contains(y) || y.contains(x)))
         }
-        // 인도 and 반주 first, then the schedule's columns in its own order.
-        for role in Self.keyRoleNames { _ = group(role) }
+        // 인도 and the keys first, by the sheet's own words for them (Keys,
+        // 건반 …), then the schedule's columns in its own order.
+        let core = coreNames
+        for role in core { _ = group(role) }
         for role in team.roleColumns.sorted(by: { $0.value < $1.value }).map(\.key) { _ = group(role) }
         for answer in answers where answer.status == .available && !answer.role.isEmpty {
             groups[group(answer.role)].people.append((displayName(answer), answer.id))
@@ -2138,7 +2150,7 @@ struct ServicePrepView: View {
                                   label: group.people.count > 1 ? "\(group.role)\(number + 1)" : group.role))
             }
         }
-        let missing = Self.keyRoleNames.filter { role in !out.contains { PartAliases.matches($0.role, role) } }
+        let missing = core.filter { role in !out.contains { PartAliases.matches($0.role, role) } }
         return (out, missing)
     }
 

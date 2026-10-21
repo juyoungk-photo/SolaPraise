@@ -14,6 +14,7 @@
 //  Run:
 //      swiftc -O -o /tmp/availgrid \
 //          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift Sources/Team/AvailabilityGrid.swift \
+//          Sources/Team/PartAliases.swift \
 //          Tools/check-availability-grid.swift
 //      /tmp/availgrid
 //
@@ -76,8 +77,17 @@ struct CheckAvailabilityGrid {
                "another service on a day the grid has is still missing")
 
         // One name per part.
-        expect(["피아노", "A.G.", "BASS", "DRUM", "VOCAL", "인도자", "건반", "보컬2", "반주"].map(AvailabilityGrid.unifiedPart),
-               ["건반", "기타", "베이스", "드럼", "보컬", "인도", nil, nil, nil], "part names unified")
+        expect(["피아노", "건반", "반주", "기타", "A.G.", "일렉", "BASS", "드럼", "VOCAL", "인도자", "인도", "Keys", "Vocal2"]
+                .map(AvailabilityGrid.unifiedPart),
+               ["Keys", "Keys", "Keys", "A.G.", nil, "E.G.", "Bass", "Drum", "Vocal", "인도", nil, nil, nil],
+               "part names unified: English but 인도; A.G. and E.G. apart; numbered parts left alone")
+
+        // The two a service cannot do without, and only those; the two
+        // guitars are two parts.
+        expect(["인도", "Keys", "건반", "반주", "A.G.", "Bass", "Vocal"].map(PartAliases.isCore),
+               [true, true, true, true, false, false, false], "core parts: 인도 and the keys only")
+        expect([PartAliases.matches("A.G.", "기타"), PartAliases.matches("A.G.", "E.G."),
+                PartAliases.matches("BASS", "베이스")], [true, false, true], "aliases")
 
         // The dropdown covers members' columns, and the four words are coloured.
         let requests = AvailabilityGrid.formatRequests(gid: 7, members: 3, rows: 5)
