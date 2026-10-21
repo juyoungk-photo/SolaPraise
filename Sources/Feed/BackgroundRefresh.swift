@@ -19,6 +19,10 @@ enum BackgroundRefresh {
     /// Must match BGTaskSchedulerPermittedIdentifiers in Info.plist.
     static let taskIdentifier = "com.juyoungkim.solapraise.refresh"
 
+    /// The team sheet read and what is new notified (TeamNotifications) —
+    /// set by the app once its sign-ins are in place; nil before that.
+    @MainActor static var teamCheck: (() async -> Void)?
+
     /// Register before the app finishes launching, or BGTaskScheduler traps.
     static func register(container: ModelContainer) {
         BGTaskScheduler.shared.register(
@@ -58,6 +62,7 @@ enum BackgroundRefresh {
             let context = ModelContext(container)
             let store = FeedStore()
             await store.refresh(purpose: nil, context: context, client: nil)
+            await teamCheck?()
             task.setTaskCompleted(success: true)
         }
 

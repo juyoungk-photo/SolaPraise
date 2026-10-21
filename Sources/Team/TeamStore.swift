@@ -1042,6 +1042,29 @@ final class TeamStore: ObservableObject {
             : "「\(name)」을 팀에 올렸습니다 — 팀 시트 Attachments와 모든 앱에서 보입니다. 이 계정은 콘티 폴더에 쓸 수 없어 그 폴더에는 들어가지 않았습니다."
     }
 
+    // MARK: - Who is on what
+
+    /// Services coming where a member is on a part, by the roster's name —
+    /// each with a key that changes when the parts do, so a change is news.
+    func assignments(of name: String) -> [(service: TeamService, parts: [String], key: String)] {
+        services.filter { !$0.isPast }.sorted { $0.date < $1.date }.prefix(8).compactMap { service in
+            let cells = service.assignments
+                .sorted { (roleColumns[$0.key] ?? .max, $0.key) < (roleColumns[$1.key] ?? .max, $1.key) }
+                .map { (part: $0.key, cell: $0.value) }
+            let parts = RosterMessage.parts(of: name, in: cells, names: TeamSheet.names(inCell:))
+            guard !parts.isEmpty else { return nil }
+            return (service, parts, "\(service.id)|\(parts.joined(separator: ","))|\(name)")
+        }
+    }
+
+    /// Whether a member has answered for a service — by address, or by name
+    /// on the 응답 tab.
+    func hasAnswered(_ service: TeamService, email: String, name: String) -> Bool {
+        (signups[Calendar.current.startOfDay(for: service.date)] ?? []).contains {
+            (!email.isEmpty && $0.email.caseInsensitiveCompare(email) == .orderedSame) || $0.name == name
+        }
+    }
+
     // MARK: - 이번 주 tab
 
     /// Whether the sheet has the 이번 주 tab, as of the last check.

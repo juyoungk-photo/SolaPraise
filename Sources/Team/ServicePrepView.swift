@@ -1539,15 +1539,7 @@ struct ServicePrepView: View {
     private var newAssignments: [(service: TeamService, parts: [String], key: String)] {
         guard let me = team.rosterName(for: team.actingEmail(auth: auth, planning: planning) ?? "") else { return [] }
         let seen = Set(seenAssignmentsRaw.split(separator: "\n").map(String.init))
-        return team.services.filter { !$0.isPast }.sorted { $0.date < $1.date }.prefix(8).compactMap { service in
-            let cells = service.assignments
-                .sorted { (team.roleColumns[$0.key] ?? .max, $0.key) < (team.roleColumns[$1.key] ?? .max, $1.key) }
-                .map { (part: $0.key, cell: $0.value) }
-            let parts = RosterMessage.parts(of: me, in: cells, names: TeamSheet.names(inCell:))
-            guard !parts.isEmpty else { return nil }
-            let key = "\(service.id)|\(parts.joined(separator: ","))|\(me)"
-            return seen.contains(key) ? nil : (service, parts, key)
-        }
+        return team.assignments(of: me).filter { !seen.contains($0.key) }
     }
 
     @ViewBuilder
@@ -1578,6 +1570,13 @@ struct ServicePrepView: View {
                 }
             }
             .listRowBackground(Color.accentColor.opacity(0.12))
+            // Seen here: no notification for it later.
+            .onAppear {
+                #if DEBUG
+                if DebugHarness.notifyCheck { return }
+                #endif
+                TeamNotifications.markNotified(fresh.map(\.key))
+            }
         }
     }
 

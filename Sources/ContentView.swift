@@ -214,6 +214,22 @@ struct ContentView: View {
         }
         .task {
             team.configure(auth: auth, planning: planning)
+            // For the morning's background refresh: the sheet read again and
+            // a new assignment, or a week still unanswered, notified.
+            #if DEBUG
+            if DebugHarness.notifyCheck {
+                UserDefaults.standard.set(true, forKey: TeamNotifications.enabledKey)
+                _ = await ReadingNotifications.requestAuthorization()
+                try? await Task.sleep(for: .seconds(3))
+                await TeamNotifications.check(team: team, email: team.actingEmail(auth: auth, planning: planning))
+            }
+            #endif
+            BackgroundRefresh.teamCheck = { [team, auth, planning] in
+                guard TeamNotifications.enabled, auth.canUseSheets || planning.isSignedIn,
+                      let sheetId = TeamSheetSource.current else { return }
+                await team.load(sheetId: sheetId)
+                await TeamNotifications.check(team: team, email: team.actingEmail(auth: auth, planning: planning))
+            }
             // Without the scope the roster cannot be read, and hammering the
             // API for 403s would only hide the real problem.
             guard auth.canUseSheets,

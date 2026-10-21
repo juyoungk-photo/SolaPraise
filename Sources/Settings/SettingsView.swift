@@ -40,6 +40,7 @@ struct SettingsView: View {
     @State private var hasChurchPassword = SharedChannelList.password != nil
     @StateObject private var feed = FeedStore()
     @StateObject private var archive = ServiceArchive()
+    @AppStorage(TeamNotifications.enabledKey) private var teamNotifications = false
     @State private var refreshNote: String?
     @State private var notifyTime: Date = {
         var c = DateComponents()
@@ -220,10 +221,19 @@ struct SettingsView: View {
             } label: {
                 Label("헌금 안내 문구", systemImage: "gift")
             }
+            Toggle(isOn: Binding(
+                get: { teamNotifications },
+                set: { on in
+                    teamNotifications = on
+                    // Asked when turned on: the moment the person wants it.
+                    if on { Task { if !(await ReadingNotifications.requestAuthorization()) { teamNotifications = false } } }
+                })) {
+                Label("배정 · 응답 알림", systemImage: "bell.badge")
+            }
         } header: {
             Text("찬양팀")
         } footer: {
-            Text("팀 콘티 재생목록은 예배표에서 콘티를 내보낼 재생목록입니다. 헌금 안내 문구는 헌금송 악보와 콘티 PDF에 헌금기도자와 함께 들어갑니다.")
+            Text("팀 콘티 재생목록은 예배표에서 콘티를 내보낼 재생목록입니다. 헌금 안내 문구는 헌금송 악보와 콘티 PDF에 헌금기도자와 함께 들어갑니다. 배정 · 응답 알림을 켜면, 앱이 아침에 팀 시트를 확인해 새로 배정된 파트와 이번 주 아직 응답하지 않은 예배를 알려 줍니다(iOS가 정하는 때에, 한 번씩).")
         }
     }
 

@@ -132,6 +132,10 @@ enum DebugHarness {
     /// The sample team answering on a 응답 tab: -uiTestGrid
     static var sampleGrid: Bool { args.contains("-uiTestGrid") }
 
+    /// Run the team notification check on the sample team at launch:
+    /// -uiTestNotify (turns the setting on, asks for permission).
+    static var notifyCheck: Bool { args.contains("-uiTestNotify") }
+
     /// Open 악보 연주모드 for the first service: -uiTestOpenStand
     static var openStand: Bool { args.contains("-uiTestOpenStand") }
 
