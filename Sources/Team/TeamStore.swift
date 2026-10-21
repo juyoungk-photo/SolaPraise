@@ -295,6 +295,8 @@ final class TeamStore: ObservableObject {
     /// The 응답 tab, when the sheet has one (AvailabilityGrid). Then answers
     /// are read from and written to it, and Signups is history.
     @Published private(set) var usesGrid = false
+    /// The 곡 메모 tab's memos (SongMemos), when the sheet has the tab.
+    @Published private(set) var songMemos: [SongMemos.Memo] = []
     @Published private(set) var rawGrid: [[String]]?
     @Published private(set) var rawMembers: [[String]]?
     @Published private(set) var rawPlan: [[String]]?
@@ -717,6 +719,7 @@ final class TeamStore: ObservableObject {
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             // After the roster: a grid column is a member by name.
             await loadGrid(sheetId: sheetId, client: client)
+            songMemos = SongMemos.parse((try? await client.read(sheetId: sheetId, range: SongMemos.tab)) ?? [])
             await loadChurchNotes(client: client)
             await loadAttachments(sheetId: sheetId, client: client)
             await loadContiFolder()
@@ -1015,6 +1018,66 @@ final class TeamStore: ObservableObject {
             errorMessage = "이 시트에 편집 권한이 없어 사인업을 저장하지 못했습니다. 시트 주인에게 이 계정을 편집자로 추가해 달라고 요청하세요."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // MARK: - 곡 메모
+
+    /// The team's memo for a song, however the 순서 spells it.
+    func memo(for song: String) -> SongMemos.Memo? {
+        SongMemos.memo(for: song, in: songMemos)
+    }
+
+    /// A song's memo written on the 곡 메모 tab — over its own row, or a new
+    /// one; the tab made the first time. Blank clears it. Returns an error
+    /// message, or nil.
+    func setMemo(_ text: String, for song: String, by who: String, sheetId: String) async -> String? {
+        let title = PlanSongTitle.forSheet(song).title
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stamp = TeamSheet.dateFormatter.string(from: Date())
+        func remember(row: Int) {
+            songMemos.removeAll { PlanSongTitle.sameSong($0.song, song) }
+            if !words.isEmpty { songMemos.append(.init(song: title, text: words, by: who, row: row)) }
+        }
+        #if DEBUG
+        if isSample { remember(row: 0); return nil }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        let tab = SongMemos.tab
+        do {
+            if !(try await client.tabTitles(sheetId: sheetId)).contains(tab) {
+                try await client.addSheet(sheetId: sheetId, title: tab)
+                try await client.write(sheetId: sheetId, range: "\(tab)!A1:D1", row: SongMemos.header)
+            }
+            let rows = try await client.read(sheetId: sheetId, range: tab)
+            guard let top = rows.first, let layout = SongMemos.Layout(header: top) else {
+                return "곡 메모 탭의 첫 줄에 「곡 · 메모」 머리글이 없어 적지 못했습니다."
+            }
+            let existing = SongMemos.row(for: song, in: rows)
+            // From the row as it is: columns the team added keep their words,
+            // and the song stays as the team wrote it.
+            var cells = existing.map { rows[$0 - 1] } ?? []
+            while cells.count < max(top.count, 4) { cells.append("") }
+            if existing == nil { cells[layout.song] = title }
+            cells[layout.memo] = words
+            if let by = layout.by { cells[by] = who }
+            if let at = layout.at { cells[at] = stamp }
+            let row: Int
+            if let existing {
+                row = existing
+                let last = TeamSheet.columnLetter(cells.count - 1)
+                try await client.write(sheetId: sheetId, range: "\(tab)!A\(row):\(last)\(row)", row: cells)
+            } else {
+                guard !words.isEmpty else { return nil }
+                row = try await client.append(sheetId: sheetId, tab: tab, row: cells) ?? 0
+            }
+            remember(row: row)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 메모를 적지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

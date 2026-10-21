@@ -364,7 +364,7 @@ struct ScoreStandView: View {
     private func noticeCard(_ notice: String) -> some View {
         let lines = notice.components(separatedBy: "\n")
         return VStack(alignment: .leading, spacing: 6) {
-            Label(lines.first ?? "", systemImage: "gift")
+            Label(lines.first ?? "", systemImage: (lines.first ?? "").hasPrefix("헌금송") ? "gift" : "note.text")
                 .font(.headline)
                 .foregroundStyle(Color.accentColor)
             if lines.count > 1 {

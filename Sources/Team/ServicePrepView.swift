@@ -1195,6 +1195,16 @@ struct ServicePrepView: View {
                 if let notes = item.kind == .song ? offering.rest : item.notes {
                     Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
+                // The team's memo for the song, from any Sunday it was sung.
+                if item.kind == .song, let memo = team.memo(for: item.title) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: "note.text")
+                        Text(memo.text).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                }
             }
             // A song's title opens 전체 악보 at its chart, the rest of the
             // set a swipe away — what a player reaches for on the day. A song
@@ -1515,13 +1525,20 @@ struct ServicePrepView: View {
         return failure
     }
 
-    /// The 헌금송's lines for its chart, by song as written: who prays, and
-    /// the call before the offering.
+    /// What each song's chart carries besides, by song as written: as the
+    /// 헌금송, who prays and the call before the offering; and the team's
+    /// 곡 메모. The first line heads the card.
     private func offeringNotices(_ service: TeamService) -> [String: String] {
         var out: [String: String] = [:]
-        for item in team.plan(for: service) where item.kind == .song && item.offering.isOffering {
-            out[item.title] = ["헌금송" + (item.offering.prayer.map { " · 헌금기도 \($0)" } ?? ""), OfferingNote.call]
-                .joined(separator: "\n")
+        for item in team.plan(for: service) where item.kind == .song {
+            var lines: [String] = []
+            if item.offering.isOffering {
+                lines += ["헌금송" + (item.offering.prayer.map { " · 헌금기도 \($0)" } ?? ""), OfferingNote.call]
+            }
+            if let memo = team.memo(for: item.title) {
+                lines += lines.isEmpty ? ["팀 메모", memo.text] : ["메모: " + memo.text]
+            }
+            if !lines.isEmpty { out[item.title] = lines.joined(separator: "\n") }
         }
         return out
     }

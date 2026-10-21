@@ -69,6 +69,8 @@ struct AttachmentMenu<Content: View>: View {
     }
 
     @State private var showsList = false
+    @State private var memoText = ""
+    @State private var memoSaving = false
 
     var body: some View {
         // A list, not a menu: each chart once — a tap opens it on the stand,
@@ -142,6 +144,27 @@ struct AttachmentMenu<Content: View>: View {
                                 } label: { Label("지우기", systemImage: "trash") }
                             }
                         }
+                    }
+                }
+                // The team's memo for the song — kept by song on the sheet's
+                // 곡 메모 tab, so it is there every time the song comes round.
+                if !song.isEmpty {
+                    Section {
+                        TextField("인트로 4마디, 2절 후 간주 없이 …", text: $memoText, axis: .vertical)
+                            .lineLimit(2...6)
+                        Button {
+                            Task { await saveMemo() }
+                        } label: {
+                            if memoSaving { ProgressView() } else { Text("메모 저장") }
+                        }
+                        .disabled(memoSaving || sheetId == nil || team.isReadOnly
+                                  || memoText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                     == (team.memo(for: song)?.text ?? ""))
+                    } header: {
+                        Text("팀 메모")
+                    } footer: {
+                        Text("이 곡을 다시 부를 때마다 보입니다. 팀 시트의 「곡 메모」 탭에 곡별로 적혀, 시트에서 바로 고쳐도 됩니다." +
+                             (team.memo(for: song).map { $0.by.isEmpty ? "" : " 마지막으로 고친 사람: \($0.by)" } ?? ""))
                     }
                 }
                 // What the song's chart carries besides: as the 헌금송, who
@@ -221,6 +244,15 @@ struct AttachmentMenu<Content: View>: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .onAppear { memoText = team.memo(for: song)?.text ?? "" }
+    }
+
+    private func saveMemo() async {
+        guard let sheetId else { return }
+        memoSaving = true
+        defer { memoSaving = false }
+        let who = team.rosterName(for: team.actingEmail(auth: auth, planning: planning) ?? "") ?? auth.displayName ?? ""
+        if let failure = await team.setMemo(memoText, for: song, by: who, sheetId: sheetId) { note = failure }
     }
 
     /// From the list to the stand: the list goes, then the stand comes.
