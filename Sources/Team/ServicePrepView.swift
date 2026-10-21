@@ -145,6 +145,8 @@ struct ServicePrepView: View {
     /// 전체 악보 open: the service, and the song it opens at — the one
     /// whose title was tapped. One value, so the start cannot lag the open.
     @State private var standOpen: StandOpen?
+    /// Assignments already seen on this device, so each is said once.
+    @AppStorage("team.seenAssignments") private var seenAssignmentsRaw = ""
     /// A song being made the 헌금송, or its prayer changed.
     @State private var offeringEdit: OfferingEdit?
     struct OfferingEdit: Identifiable {
@@ -341,6 +343,10 @@ struct ServicePrepView: View {
                                removeVersion: removeVersion,
                                shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
                                    await team.chooseForConti(item, service: service, sheetId: sheetId!)
+                               },
+                               uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name in
+                                   await team.uploadConti(data, name: name, service: service, sheetId: sheetId!,
+                                                          by: team.actingEmail(auth: auth, planning: planning) ?? "")
                                })
             }
             .fullScreenCover(item: $standSong) { entry in
@@ -806,6 +812,7 @@ struct ServicePrepView: View {
                 // where it is, and the next one is open to begin with.
                 damagedRowsWarning
                 duplicateSongsWarning
+                assignmentBanner
 
                 scheduleSection
 
@@ -990,6 +997,14 @@ struct ServicePrepView: View {
                 }
                 .buttonStyle(.borderless)
             }
+            // For the team's chat: who is on what, what is still open, who
+            // has not answered, and the sheet for anyone without the app.
+            Button {
+                SharePresenter.present(items: [rosterText(service)])
+            } label: {
+                Label("배정표 보내기", systemImage: "paperplane")
+            }
+            .buttonStyle(.borderless)
 
             // A sheet rather than a menu. The menu could only list the
             // playlists pinned in the 찬양 tab — two, on most devices — and
@@ -1514,6 +1529,73 @@ struct ServicePrepView: View {
             if !sources.isEmpty { out[song.title] = sources.map(\.item) }
         }
         return out
+    }
+
+    // MARK: - Assignments
+
+    /// Services coming where the leader has put this member on a part, not
+    /// yet seen on this device. Schedule is where a leader assigns, and
+    /// nothing told the member — they found out on Sunday, or by asking.
+    private var newAssignments: [(service: TeamService, parts: [String], key: String)] {
+        guard let me = team.rosterName(for: team.actingEmail(auth: auth, planning: planning) ?? "") else { return [] }
+        let seen = Set(seenAssignmentsRaw.split(separator: "\n").map(String.init))
+        return team.services.filter { !$0.isPast }.sorted { $0.date < $1.date }.prefix(8).compactMap { service in
+            let cells = service.assignments
+                .sorted { (team.roleColumns[$0.key] ?? .max, $0.key) < (team.roleColumns[$1.key] ?? .max, $1.key) }
+                .map { (part: $0.key, cell: $0.value) }
+            let parts = RosterMessage.parts(of: me, in: cells, names: TeamSheet.names(inCell:))
+            guard !parts.isEmpty else { return nil }
+            let key = "\(service.id)|\(parts.joined(separator: ","))|\(me)"
+            return seen.contains(key) ? nil : (service, parts, key)
+        }
+    }
+
+    @ViewBuilder
+    private var assignmentBanner: some View {
+        let fresh = newAssignments
+        if !fresh.isEmpty {
+            Section {
+                ForEach(fresh, id: \.key) { entry in
+                    HStack(spacing: 10) {
+                        Image(systemName: "music.mic")
+                            .foregroundStyle(Color.accentColor)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(RosterMessage.day(entry.service.date) + " " + entry.service.title)
+                                .font(.subheadline.weight(.semibold))
+                            Text(RosterMessage.withRo(entry.parts.joined(separator: ", ")) + " 배정되었습니다")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button("확인") {
+                            seenAssignmentsRaw += (seenAssignmentsRaw.isEmpty ? "" : "\n") + entry.key
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { scrollTo?(Calendar.current.startOfDay(for: entry.service.date)) }
+                }
+            }
+            .listRowBackground(Color.accentColor.opacity(0.12))
+        }
+    }
+
+    /// 배정표 보내기's message for a service: the parts as the row's chips
+    /// show them — who answered for a part and whom the leader put on one —
+    /// an empty 인도 or keys first, and the service's own time.
+    private func rosterText(_ service: TeamService) -> String {
+        let staffed = holders(service, team.responses(for: service))
+        var order: [String] = [], people: [String: [String]] = [:]
+        for holder in staffed.holders {
+            if people[holder.role] == nil { order.append(holder.role) }
+            people[holder.role, default: []].append(holder.who)
+        }
+        let parts = staffed.missing.map { (part: $0, who: "") }
+            + order.map { (part: $0, who: people[$0]!.joined(separator: ", ")) }
+        return RosterMessage.text(day: service.date, title: service.title,
+                                  time: service.time ?? Self.clockFormatter.string(from: serviceStart(service)),
+                                  parts: parts, pending: team.pendingNames(for: service), link: teamSheetURL)
     }
 
     /// The 헌금송 mark written; the sheet closes on success.

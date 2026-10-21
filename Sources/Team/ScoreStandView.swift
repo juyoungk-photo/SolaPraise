@@ -58,6 +58,9 @@ struct ScoreStandView: View {
     /// Shares a version chosen for the 콘티 with the team (the sheet's 콘티
     /// column); nil where there is no sheet to share it on.
     var shareChoice: ((ScoreStandItem) async -> String?)?
+    /// Puts a new 콘티 made here up for the team (TeamStore.uploadConti),
+    /// returning what happened in words; nil where it cannot be put up.
+    var uploadSet: ((Data, String) async -> String)?
     /// Redrawn when a version is chosen for the 콘티 (kept in defaults).
     @State private var choiceTick = 0
     @State private var removing: ScoreStandItem?
@@ -144,12 +147,14 @@ struct ScoreStandView: View {
          contiScope: String? = nil,
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          shareChoice: ((ScoreStandItem) async -> String?)? = nil,
+         uploadSet: ((Data, String) async -> String)? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
         self.contiScope = contiScope
         self.removeVersion = removeVersion
         self.shareChoice = shareChoice
+        self.uploadSet = uploadSet
         self.setFileName = setFileName
         self.exportOnOpen = exportOnOpen
         self.setCaptions = setCaptions
@@ -302,11 +307,11 @@ struct ScoreStandView: View {
                 .task(id: item.id) { await model.load(item) }
                 .task {
                     // 「새 콘티 버전 만들기」: the set as chosen, made into one file.
-                    if exportOnOpen { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
+                    if exportOnOpen { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
                 }
                 #if DEBUG
                 .task {
-                    if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
+                    if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
                 }
                 #endif
             }
@@ -1104,7 +1109,7 @@ struct ScoreStandView: View {
             .disabled(state?.isReady != true)
             if items.count > 1 {
                 Button {
-                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices) }
+                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
                 } label: {
                     Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
                           systemImage: "doc.on.doc")
@@ -2164,8 +2169,11 @@ final class ScoreStandModel: ObservableObject {
     /// A song not opened yet is read first, so this can take a few seconds
     /// a song on a set nobody has paged through. A song whose file cannot
     /// be read is left out and named, rather than failing the whole file.
+    /// - upload: a new 콘티 version is put up for the team first; what
+    ///   happened is said, and the share sheet follows.
     func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil,
-                   captions: [String: String] = [:], notices: [String: String] = [:]) async {
+                   captions: [String: String] = [:], notices: [String: String] = [:],
+                   upload: ((Data, String) async -> String)? = nil) async {
         isExporting = true
         defer { isExporting = false }
         let combined = PDFDocument()
@@ -2199,7 +2207,11 @@ final class ScoreStandModel: ObservableObject {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(file)
         do {
             try data.write(to: url, options: .atomic)
-            if skipped.isEmpty {
+            if let upload, fileName != nil {
+                let said = await upload(data, file)
+                pendingExport = ExportFile(url: url)
+                note = skipped.isEmpty ? said : said + "\n열 수 없는 악보는 빠졌습니다: \(skipped.joined(separator: ", "))"
+            } else if skipped.isEmpty {
                 export = ExportFile(url: url)
             } else {
                 // An alert and the share sheet cannot both be up: say what

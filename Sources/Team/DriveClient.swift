@@ -89,14 +89,17 @@ actor DriveClient {
     /// Multipart rather than resumable: 악보 are a page or two — a few
     /// hundred kilobytes — and resumable upload is three round trips and a
     /// session URL to manage for a file that fits in one request.
-    func upload(data: Data, name: String, mimeType: String) async throws -> Uploaded {
+    /// - folder: a folder to put it in instead — the team's 콘티 folder.
+    ///   Refused (no access) is thrown, for the caller to fall back.
+    func upload(data: Data, name: String, mimeType: String, folder: String? = nil) async throws -> Uploaded {
         let boundary = "solapraise-\(UUID().uuidString)"
         var body = Data()
 
         // Into the 악보 folder when it can be had. A folder that cannot be
         // created is not a reason to refuse the upload: the file goes to
         // the Drive root, as it always used to.
-        let parent = try? await scoreFolder()
+        let parent: String?
+        if let folder { parent = folder } else { parent = try? await scoreFolder() }
         struct Metadata: Encodable { let name: String; let parents: [String]? }
         let metadata = try JSONEncoder().encode(
             Metadata(name: name, parents: parent.map { [$0] }))

@@ -1022,6 +1022,26 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    // MARK: - A new 콘티, put up
+
+    /// Whether the last upload landed in the folder it was asked for.
+    private var lastUploadWentToFolder = false
+
+    /// A 콘티 made here, put up for the team: into the 콘티 folder when this
+    /// account may write there, else the app's 악보 folder — either way on
+    /// the Attachments tab as the service's file, so every app lists it as
+    /// the newest 콘티 and the sheet links to it. A message for the person.
+    func uploadConti(_ data: Data, name: String, service: TeamService, sheetId: String, by who: String) async -> String {
+        if let failure = await attach(data: data, name: name, mimeType: "application/pdf", song: "",
+                                      to: service, sheetId: sheetId, by: who, folder: ContiFolder.folderId) {
+            return "팀에 올리지 못했습니다: \(failure)\n공유 창에서 직접 저장하세요."
+        }
+        await loadContiFolder()
+        return lastUploadWentToFolder
+            ? "「\(name)」을 콘티 폴더에 올렸습니다. 팀 시트 Attachments와 모든 앱에서 바로 보입니다."
+            : "「\(name)」을 팀에 올렸습니다 — 팀 시트 Attachments와 모든 앱에서 보입니다. 이 계정은 콘티 폴더에 쓸 수 없어 그 폴더에는 들어가지 않았습니다."
+    }
+
     // MARK: - 이번 주 tab
 
     /// Whether the sheet has the 이번 주 tab, as of the last check.
@@ -1482,9 +1502,11 @@ final class TeamStore: ObservableObject {
         to service: TeamService,
         sheetId: String,
         by email: String,
-        replacingSameName: Bool = false
+        replacingSameName: Bool = false,
+        folder: String? = nil
     ) async -> String? {
         guard let client, let drive else { return "구글 계정에 연결되어 있지 않습니다." }
+        lastUploadWentToFolder = false
 
         // The tab first, then Drive: a sheet that will not take the row
         // should not leave a file behind in Drive to clean up.
@@ -1509,7 +1531,14 @@ final class TeamStore: ObservableObject {
 
         let uploaded: DriveClient.Uploaded
         do {
-            uploaded = try await drive.upload(data: data, name: name, mimeType: mimeType)
+            // Into the folder asked for when this account may write there;
+            // else the app's own 악보 folder, as every upload goes.
+            if let folder, let placed = try? await drive.upload(data: data, name: name, mimeType: mimeType, folder: folder) {
+                uploaded = placed
+                lastUploadWentToFolder = true
+            } else {
+                uploaded = try await drive.upload(data: data, name: name, mimeType: mimeType)
+            }
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
