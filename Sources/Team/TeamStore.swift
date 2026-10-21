@@ -297,6 +297,8 @@ final class TeamStore: ObservableObject {
     @Published private(set) var usesGrid = false
     /// The 곡 메모 tab's memos (SongMemos), when the sheet has the tab.
     @Published private(set) var songMemos: [SongMemos.Memo] = []
+    /// The 곡 메모 tab as read, for its 지난 예배 column.
+    @Published private(set) var rawSongMemos: [[String]] = []
     @Published private(set) var rawGrid: [[String]]?
     @Published private(set) var rawMembers: [[String]]?
     @Published private(set) var rawPlan: [[String]]?
@@ -719,7 +721,8 @@ final class TeamStore: ObservableObject {
             memberEmails = await loadMembers(sheetId: sheetId, client: client)
             // After the roster: a grid column is a member by name.
             await loadGrid(sheetId: sheetId, client: client)
-            songMemos = SongMemos.parse((try? await client.read(sheetId: sheetId, range: SongMemos.tab)) ?? [])
+            rawSongMemos = (try? await client.read(sheetId: sheetId, range: SongMemos.quotedTab)) ?? []
+            songMemos = SongMemos.parse(rawSongMemos)
             hasWeekTab = (try? await client.tabTitles(sheetId: sheetId))?.contains(WeekTab.tab) ?? false
             await loadChurchNotes(client: client)
             await loadAttachments(sheetId: sheetId, client: client)
@@ -953,6 +956,7 @@ final class TeamStore: ObservableObject {
     ) async {
         #if DEBUG
         if isSample {
+            if DebugHarness.slowSheet { try? await Task.sleep(for: .seconds(1)) }
             let day = Calendar.current.startOfDay(for: service.date)
             var list = signups[day] ?? []
             list.removeAll { $0.email.caseInsensitiveCompare(email) == .orderedSame }
@@ -1137,12 +1141,9 @@ final class TeamStore: ObservableObject {
         if isSample { remember(row: 0); return nil }
         #endif
         guard let client else { return "시트에 연결되어 있지 않습니다." }
-        let tab = SongMemos.tab
+        let tab = SongMemos.quotedTab
         do {
-            if !(try await client.tabTitles(sheetId: sheetId)).contains(tab) {
-                try await client.addSheet(sheetId: sheetId, title: tab)
-                try await client.write(sheetId: sheetId, range: "\(tab)!A1:D1", row: SongMemos.header)
-            }
+            try await ensureMemoTab(sheetId: sheetId, client: client)
             let rows = try await client.read(sheetId: sheetId, range: tab)
             guard let top = rows.first, let layout = SongMemos.Layout(header: top) else {
                 return "곡 메모 탭의 첫 줄에 「곡 · 메모」 머리글이 없어 적지 못했습니다."
@@ -1174,6 +1175,98 @@ final class TeamStore: ObservableObject {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
+
+    private func ensureMemoTab(sheetId: String, client: SheetsClient) async throws {
+        guard !(try await client.tabTitles(sheetId: sheetId)).contains(SongMemos.tab) else { return }
+        try await client.addSheet(sheetId: sheetId, title: SongMemos.tab)
+        let last = TeamSheet.columnLetter(SongMemos.header.count - 1)
+        try await client.write(sheetId: sheetId, range: "\(SongMemos.quotedTab)!A1:\(last)1", row: SongMemos.header)
+    }
+
+    // MARK: - 지난 예배
+
+    /// A service's songs as recorded: the title, the key played, the notes.
+    func sung(in service: TeamService) -> [SongMemos.Sung] {
+        plan(for: service).filter { $0.kind == .song }
+            .map { .init(title: $0.title, key: $0.key, notes: $0.notes) }
+    }
+
+    /// A song's 지난 예배 lines, newest first.
+    func history(for song: String) -> [String] {
+        SongMemos.history(for: song, in: rawSongMemos)
+    }
+
+    /// The service is on every one of its songs' 지난 예배 already.
+    func isRecorded(_ service: TeamService) -> Bool {
+        SongMemos.isRecorded(day: service.date, songs: sung(in: service), in: rawSongMemos)
+    }
+
+    /// What recording would write, as the tab stands — for the preview.
+    func recordPreview(_ service: TeamService) -> [(song: String, line: String)] {
+        sung(in: service).map { (PlanSongTitle.split($0.title).title, SongMemos.line(day: service.date, $0)) }
+    }
+
+    /// Writes the service onto each song's 지난 예배: one cell on the song's
+    /// own row, a new row for a song the tab has not met, the heading when
+    /// the tab has none. Nothing else is touched. Returns an error message,
+    /// or nil.
+    func record(_ service: TeamService, sheetId: String) async -> String? {
+        let songs = sung(in: service)
+        guard !songs.isEmpty else { return nil }
+        #if DEBUG
+        if isSample {
+            if rawSongMemos.isEmpty { rawSongMemos = [SongMemos.header] }
+            if let plan = SongMemos.record(day: service.date, songs: songs, in: rawSongMemos) {
+                apply(plan)
+            }
+            return nil
+        }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        let tab = SongMemos.quotedTab
+        do {
+            try await ensureMemoTab(sheetId: sheetId, client: client)
+            let rows = try await client.read(sheetId: sheetId, range: tab)
+            guard let plan = SongMemos.record(day: service.date, songs: songs, in: rows) else {
+                return "곡 메모 탭의 첫 줄에 「곡 · 메모」 머리글이 없어 적지 못했습니다."
+            }
+            let letter = TeamSheet.columnLetter(plan.column)
+            var updates: [(range: String, rows: [[String]])] = []
+            if plan.needsHeading { updates.append(("\(tab)!\(letter)1", [[SongMemos.historyHeader]])) }
+            for cell in plan.cells { updates.append(("\(tab)!\(letter)\(cell.row)", [[Self.asText(cell.text)]])) }
+            try await client.batchWrite(sheetId: sheetId, updates: updates)
+            for row in plan.newRows {
+                try await client.append(sheetId: sheetId, tab: SongMemos.tab, row: row.map(Self.asText))
+            }
+            rawSongMemos = try await client.read(sheetId: sheetId, range: tab)
+            songMemos = SongMemos.parse(rawSongMemos)
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 기록하지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// A line that is only a date stays the words typed: written as
+    /// USER_ENTERED, 「2026-10-18」 would become a date cell and read back
+    /// in the sheet's own format.
+    private static func asText(_ text: String) -> String {
+        TeamSheet.day(text) != nil && !text.contains("\n") ? "'" + text : text
+    }
+
+    #if DEBUG
+    private func apply(_ plan: SongMemos.Record) {
+        while rawSongMemos[0].count <= plan.column { rawSongMemos[0].append("") }
+        if plan.needsHeading { rawSongMemos[0][plan.column] = SongMemos.historyHeader }
+        for cell in plan.cells where rawSongMemos.indices.contains(cell.row - 1) {
+            while rawSongMemos[cell.row - 1].count <= plan.column { rawSongMemos[cell.row - 1].append("") }
+            rawSongMemos[cell.row - 1][plan.column] = cell.text
+        }
+        rawSongMemos += plan.newRows
+    }
+    #endif
 
     // MARK: - The version a 콘티 takes
 
@@ -1253,8 +1346,14 @@ final class TeamStore: ObservableObject {
             let sameDay = services.filter { Calendar.current.isDate($0.date, inSameDayAs: answer.day) }
             let service = sameDay.first { !answer.service.isEmpty && AvailabilityGrid.sameService($0.title, answer.service) }
                 ?? sameDay.first
+            // Matched as the roster message matches: 「김주영」 in a cell is
+            // 주영's column.
             let part = service.flatMap { service in
-                service.assignments.first { TeamSheet.names(inCell: $0.value).contains(answer.name) }?.key
+                RosterMessage.parts(of: answer.name,
+                                    in: service.assignments
+                                        .sorted { (roleColumns[$0.key] ?? .max, $0.key) < (roleColumns[$1.key] ?? .max, $1.key) }
+                                        .map { (part: $0.key, cell: $0.value) },
+                                    names: TeamSheet.names(inCell:)).first
             } ?? ""
             out[answer.day, default: []].append(TeamSignup(role: part, email: member?.email ?? "", name: answer.name,
                                                            statusRaw: answer.status, row: answer.row))
@@ -2044,6 +2143,9 @@ final class TeamStore: ObservableObject {
             assignments: assignments,
             row: services[index].row
         )
+        // On the 응답 tab an answer's part is read from the schedule, so a
+        // new assignment gives it one now rather than on the next reload.
+        if usesGrid, let rawGrid { signups = gridSignups(rawGrid) }
     }
 
     /// Takes back every answer this person has given for a service.
@@ -2072,7 +2174,10 @@ final class TeamStore: ObservableObject {
             signups[day]?.removeAll(where: isMine)
         }
         #if DEBUG
-        if isSample { forget(); return true }
+        if isSample {
+            if DebugHarness.slowSheet { try? await Task.sleep(for: .seconds(1)) }
+            forget(); return true
+        }
         #endif
         guard let client else { forget(); return true }
 

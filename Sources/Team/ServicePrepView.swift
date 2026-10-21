@@ -145,6 +145,8 @@ struct ServicePrepView: View {
     /// 전체 악보 open: the service, and the song it opens at — the one
     /// whose title was tapped. One value, so the start cannot lag the open.
     @State private var standOpen: StandOpen?
+    /// The service whose 지난 예배 record is being previewed.
+    @State private var recording: TeamService?
     /// Assignments already seen on this device, so each is said once.
     @AppStorage("team.seenAssignments") private var seenAssignmentsRaw = ""
     /// A song being made the 헌금송, or its prayer changed.
@@ -327,6 +329,10 @@ struct ServicePrepView: View {
                                     songs: team.plan(for: entry.service).filter { $0.kind == .song }.map(\.title))
                         .environmentObject(team)
                 }
+            }
+            .sheet(item: $recording) { service in
+                ServiceRecordSheet(service: service, sheetId: sheetId)
+                    .environmentObject(team)
             }
             .fullScreenCover(item: $standOpen) { open in
                 let service = open.service
@@ -1321,19 +1327,36 @@ struct ServicePrepView: View {
         // the ways to add or make one — and the whole set on the stand.
         if team.plan(for: service).contains(where: { $0.kind == .song }) {
             VStack(alignment: .trailing, spacing: 6) {
-                HStack(spacing: 10) {
-                    Spacer(minLength: 0)
-                    // After the service, the songs outlive the 콘티 — next
-                    // week's overwrites this one: kept in the archive
-                    // playlist, offered once the service is over, where
-                    // "what we sang" is a fact rather than a plan.
-                    // Rechecked each minute: the badge comes when the
-                    // service ends, not on the next redraw after it.
-                    TimelineView(.everyMinute) { _ in
-                        if hasHappened(service) { archiveBadge(service) }
+                // After the service, the songs outlive the 콘티 — next
+                // week's overwrites this one: kept in the archive playlist
+                // and on each song's 지난 예배, offered once the service is
+                // over, where "what we sang" is a fact rather than a plan.
+                // Rechecked each minute: the badges come when the service
+                // ends, not on the next redraw after it. On one line when
+                // the four fit (iPad); else 기록 · 보관 above, rather than
+                // four badges squeezed until their words wrap (iPhone).
+                TimelineView(.everyMinute) { _ in
+                    let after = hasHappened(service)
+                    let set = HStack(spacing: 10) {
+                        contiMenu(service, contis: contis, built: built, pieces: pieces)
+                        standButton(service, stand: stand)
                     }
-                    contiMenu(service, contis: contis, built: built, pieces: pieces)
-                    standButton(service, stand: stand)
+                    let kept = HStack(spacing: 10) {
+                        recordBadge(service)
+                        archiveBadge(service)
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            Spacer(minLength: 0)
+                            if after { kept }
+                            set
+                        }
+                        VStack(alignment: .trailing, spacing: 8) {
+                            if after { kept }
+                            set
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
 
                 if let note = archiveStore.note, hasHappened(service) {
@@ -1362,6 +1385,23 @@ struct ServicePrepView: View {
                 .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    /// 기록 — each song's key and notes onto its 지난 예배 on the 곡 메모
+    /// tab — offered once the service is over, after a preview.
+    @ViewBuilder
+    private func recordBadge(_ service: TeamService) -> some View {
+        if !team.sung(in: service).isEmpty, sheetId != nil {
+            let recorded = team.isRecorded(service)
+            Button { recording = service } label: {
+                ChartBadge(text: recorded ? "기록됨" : "기록",
+                           systemImage: recorded ? "checkmark.circle.fill" : "square.and.pencil",
+                           tint: recorded ? .green : .accentColor, large: true)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(recorded ? Color.green : Color.accentColor)
+            .accessibilityLabel(recorded ? "곡 메모에 기록됨" : "곡 메모에 예배 기록")
         }
     }
 
@@ -2102,9 +2142,17 @@ struct ServicePrepView: View {
     }
 
     /// What the chip says about my own answer.
-    private func answerLabel(_ mine: TeamSignup?, shown: SignupStatus?) -> String {
+    /// The part is the schedule's when the leader has put me on one — the
+    /// part my answer was filed under is only what I offered.
+    private func answerLabel(_ mine: TeamSignup?, shown: SignupStatus?, service: TeamService) -> String {
         guard let shown else { return "미지정" }
-        if shown == .available, let role = mine?.role, !role.isEmpty { return role }
+        if shown == .available {
+            if let me = team.rosterName(for: team.actingEmail(auth: auth, planning: planning) ?? ""),
+               let parts = team.assignments(of: me).first(where: { $0.service.id == service.id })?.parts {
+                return parts.joined(separator: " · ")
+            }
+            if let role = mine?.role, !role.isEmpty { return role }
+        }
         return shown.label
     }
 
@@ -2113,11 +2161,14 @@ struct ServicePrepView: View {
     /// 가능 needs a part to be filed against: the one already chosen, else
     /// the usual one, else the first the sheet lists. The other two are true
     /// of every part at once, so they never ask.
-    private func record(_ status: SignupStatus, for upcoming: TeamService) async {
+    /// `tracked: false` from the ✓ ? ✕ control, which shows its own answer
+    /// while it is written — setting `inFlight` would redraw the whole
+    /// screen on each press (AnswerControl).
+    private func record(_ status: SignupStatus, for upcoming: TeamService, tracked: Bool = true) async {
         let key = upcoming.id
-        rowError[key] = nil
-        inFlight[key] = .some(status)
-        defer { inFlight[key] = nil }
+        if rowError[key] != nil { rowError[key] = nil }
+        if tracked { inFlight[key] = .some(status) }
+        defer { if tracked { inFlight[key] = nil } }
 
         guard let sheetId else {
             rowError[key] = "팀 시트가 연결되어 있지 않습니다. 설정에서 시트를 연결하세요."
@@ -2143,11 +2194,11 @@ struct ServicePrepView: View {
     }
 
     /// Takes the answer back, under every address that is me.
-    private func clearAnswer(for upcoming: TeamService) async {
+    private func clearAnswer(for upcoming: TeamService, tracked: Bool = true) async {
         let key = upcoming.id
-        rowError[key] = nil
-        inFlight[key] = .some(nil)
-        defer { inFlight[key] = nil }
+        if rowError[key] != nil { rowError[key] = nil }
+        if tracked { inFlight[key] = .some(nil) }
+        defer { if tracked { inFlight[key] = nil } }
 
         guard let sheetId else {
             rowError[key] = "팀 시트가 연결되어 있지 않습니다. 설정에서 시트를 연결하세요."
@@ -2196,9 +2247,12 @@ struct ServicePrepView: View {
     private struct Holder {
         let role: String
         let who: String
-        /// Set only when they answered for it, which is what makes the chip
-        /// green rather than the orange of a plan they have not agreed to.
+        /// Set only when they answered, which is what makes the chip green
+        /// rather than the orange of a plan they have not agreed to.
         let signupId: String?
+        /// Their answer: put on 인도 and said 어려움 is a gap the leader
+        /// must see, on the chip that says 인도.
+        let status: SignupStatus?
         /// The part, numbered when it has more than one person: VOCAL1.
         var label: String
     }
@@ -2217,7 +2271,7 @@ struct ServicePrepView: View {
     /// Parts are matched through PartAliases, so a sheet that writes 인도자
     /// or Piano answers for 인도 and 반주.
     private func holders(_ service: TeamService, _ answers: [TeamSignup]) -> (holders: [Holder], missing: [String]) {
-        var groups: [(role: String, people: [(who: String, signupId: String?)])] = []
+        var groups: [(role: String, people: [(who: String, answer: TeamSignup?)])] = []
         func group(_ role: String) -> Int {
             if let index = groups.firstIndex(where: { PartAliases.matches($0.role, role) }) { return index }
             groups.append((role, []))
@@ -2227,30 +2281,46 @@ struct ServicePrepView: View {
             let x = a.replacingOccurrences(of: " ", with: ""), y = b.replacingOccurrences(of: " ", with: "")
             return x == y || (min(x.count, y.count) >= 2 && (x.contains(y) || y.contains(x)))
         }
+        func answer(of name: String) -> TeamSignup? {
+            answers.first { samePerson(displayName($0), name) || samePerson($0.name, name) }
+        }
         // 인도 and the keys first, by the sheet's own words for them (Keys,
         // 건반 …), then the schedule's columns in its own order.
         let core = coreNames
         for role in core { _ = group(role) }
         for role in team.roleColumns.sorted(by: { $0.value < $1.value }).map(\.key) { _ = group(role) }
-        for answer in answers where answer.status == .available && !answer.role.isEmpty {
-            groups[group(answer.role)].people.append((displayName(answer), answer.id))
-        }
-        // In column order, then by name: a dictionary's own order changes
-        // from one launch to the next, and so did the chips'.
+
+        // ONE PERSON, ONE PLACE. The schedule's cell — the leader's
+        // decision — places a person, and their answer only colours it.
+        // An answer used to be placed by the part it was filed under as
+        // well, so 「가능」 under Keys and then 인도 from the leader showed
+        // the same person twice; on the 응답 tab, where an answer has no
+        // part until the next reload, as a bare green name beside the
+        // orange 인도. In column order, then by name: a dictionary's own
+        // order changes from one launch to the next, and so did the chips'.
         let planned = service.assignments.sorted {
             (team.roleColumns[$0.key] ?? .max, $0.key) < (team.roleColumns[$1.key] ?? .max, $1.key)
         }
+        var placed: [String] = []
         for (role, cell) in planned {
             let index = group(role)
             for name in TeamSheet.names(inCell: cell)
             where !groups[index].people.contains(where: { samePerson($0.who, name) }) {
-                groups[index].people.append((name, nil))
+                let said = answer(of: name)
+                groups[index].people.append((said.map(displayName) ?? name, said))
+                if let said { placed.append(said.id) }
             }
+        }
+        // Then whoever said yes for a part and is not on the schedule yet.
+        for answer in answers where answer.status == .available && !answer.role.isEmpty
+            && !placed.contains(answer.id) {
+            groups[group(answer.role)].people.append((displayName(answer), answer))
         }
         var out: [Holder] = []
         for group in groups {
             for (number, person) in group.people.enumerated() {
-                out.append(Holder(role: group.role, who: person.who, signupId: person.signupId,
+                out.append(Holder(role: group.role, who: person.who, signupId: person.answer?.id,
+                                  status: person.answer?.status,
                                   label: group.people.count > 1 ? "\(group.role)\(number + 1)" : group.role))
             }
         }
@@ -2494,7 +2564,7 @@ struct ServicePrepView: View {
                     if let shown {
                         Circle().fill(tint(shown)).frame(width: 6, height: 6)
                     }
-                    Text(answerLabel(mine, shown: shown))
+                    Text(answerLabel(mine, shown: shown, service: upcoming))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                 }
@@ -2529,43 +2599,12 @@ struct ServicePrepView: View {
             // Tinted, the rows still waiting on you are the loud ones and
             // the done ones recede. Only for weeks still ahead: nothing is
             // owed on a Sunday that has already happened.
-            HStack(spacing: 0) {
-                answerButton(.available, "checkmark", upcoming, shown,
-                             needsAnswer: needsAnswer)
-                answerButton(.maybe, "questionmark", upcoming, shown,
-                             needsAnswer: needsAnswer)
-                answerButton(.declined, "xmark", upcoming, shown,
-                             needsAnswer: needsAnswer)
+            AnswerControl(saved: mine?.status, isPast: upcoming.isPast, isReadOnly: team.isReadOnly,
+                          tint: tint) { status in
+                if let status { await record(status, for: upcoming, tracked: false) }
+                else { await clearAnswer(for: upcoming, tracked: false) }
             }
-            // One highlight behind the three, moved to the answer: it slides
-            // from one to the next instead of vanishing from one segment and
-            // appearing in another.
-            .background(alignment: .leading) {
-                let order: [SignupStatus] = [.available, .maybe, .declined]
-                let at = shown.flatMap { order.firstIndex(of: $0) }
-                Capsule()
-                    .fill(shown.map(tint) ?? Color.clear)
-                    .frame(width: 34, height: 28)
-                    .offset(x: CGFloat(at ?? 0) * 34)
-                    .opacity(at == nil ? 0 : 1)
-            }
-            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: shown)
-            // Taps held while an answer is being written — without fading
-            // the control, which flickered on every press.
-            .allowsHitTesting(!team.isReadOnly && inFlight[upcoming.id] == nil)
-            .padding(2)
-            .background(
-                Capsule().fill(needsAnswer
-                               ? Color.accentColor.opacity(0.16)
-                               : Color(.tertiarySystemFill))
-            )
-            .overlay(
-                Capsule().strokeBorder(
-                    needsAnswer ? Color.accentColor.opacity(0.55)
-                                : Color.primary.opacity(0.10),
-                    lineWidth: needsAnswer ? 1 : 0.5
-                )
-            )
+            .id(upcoming.id)
         }
         .layoutPriority(1)
         // A Sunday that has happened is a record, not a question.
@@ -2576,38 +2615,6 @@ struct ServicePrepView: View {
         // that is over, and nothing should be changeable about it either.
         .disabled(upcoming.isPast)
         .opacity(upcoming.isPast ? 0.45 : 1)
-    }
-
-    /// One segment of the three. Pressing the chosen one takes the answer
-    /// back, so every segment is its own undo.
-    private func answerButton(_ status: SignupStatus,
-                              _ symbol: String,
-                              _ upcoming: TeamService,
-                              _ shown: SignupStatus?,
-                              needsAnswer: Bool = false) -> some View {
-        let isOn = shown == status
-        return Button {
-            Task {
-                if isOn { await clearAnswer(for: upcoming) }
-                else { await record(status, for: upcoming) }
-            }
-        } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold))
-                // Solid when chosen, so the answer is the thing that stands
-                // out rather than the control around it. Yellow needs a dark
-                // glyph; the other two carry white.
-                .foregroundStyle(isOn
-                                 ? (status == .maybe ? Color.black : Color.white)
-                                 : (needsAnswer
-                                    ? Color.accentColor.opacity(0.85)
-                                    : Color.secondary))
-                .frame(width: 34, height: 28)
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(status.label)
-        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 
     /// Picking a part is answering: one gesture, not a sheet and a switch.
@@ -2710,8 +2717,10 @@ struct ServicePrepView: View {
             // Green when they answered for it, orange and dashed when it is
             // only the leader's plan and they have not said yes yet.
             assignable(service, role: holder.role, person: nil) {
-                chip(holder.who, detail: holder.label,
-                     color: holder.signupId == nil ? .orange : .green,
+                chip(holder.who,
+                     detail: holder.status.map { $0 == .available ? holder.label : "\(holder.label) · \($0.label)" }
+                        ?? holder.label,
+                     color: holder.status.map(tint) ?? .orange,
                      dashed: holder.signupId == nil)
             }
         }
@@ -2792,5 +2801,119 @@ private struct ChartBadge: View {
         .fixedSize()
         .padding(.horizontal, large ? 14 : (text.isEmpty ? 8 : 9)).padding(.vertical, large ? 9 : 5)
         .background(Capsule().fill(tint.opacity(0.15)))
+    }
+}
+
+/// ✓ ? ✕ for one service: three segments in a track, one highlight that
+/// slides to the answer. Pressing the chosen one takes the answer back.
+///
+/// WHY ITS OWN VIEW: the answer being written used to live in the screen's
+/// own state, so every press redrew all of 예배 준비 — every week, every
+/// 순서, every chart lookup — in the same frame the highlight started to
+/// move, and again when the sheet answered. On a phone that was the stutter.
+/// Here a press redraws three buttons.
+///
+/// WHY IT NEVER WAITS: the sheet takes a read and a write per answer, and
+/// taps were refused until both came back, so a second tap in that second
+/// did nothing. Now the highlight moves at once, and taps made while one
+/// answer is being written are kept — the last one is what is written next.
+private struct AnswerControl: View {
+    /// What the sheet holds for me.
+    let saved: SignupStatus?
+    let isPast: Bool
+    let isReadOnly: Bool
+    let tint: (SignupStatus) -> Color
+    /// Writes an answer; nil takes it back.
+    let send: (SignupStatus?) async -> Void
+
+    /// The answer pressed, until the sheet has it. `.some(nil)` is a
+    /// taken-back answer.
+    @State private var picked: SignupStatus??
+    @State private var sending = false
+    @State private var queued: SignupStatus??
+
+    private static let order: [SignupStatus] = [.available, .maybe, .declined]
+    private static let symbols = ["checkmark", "questionmark", "xmark"]
+    private static let width: CGFloat = 34
+
+    private var shown: SignupStatus? { picked ?? saved }
+    // An unanswered week wears the accent until it is answered. A grey
+    // track reads the same whether you have answered or not, and the screen
+    // exists to collect answers. Only for weeks still ahead.
+    private var needsAnswer: Bool { shown == nil && !isPast }
+
+    var body: some View {
+        let at = shown.flatMap { Self.order.firstIndex(of: $0) }
+        HStack(spacing: 0) {
+            ForEach(Array(Self.order.enumerated()), id: \.offset) { index, status in
+                segment(status, symbol: Self.symbols[index])
+            }
+        }
+        // One highlight behind the three, moved to the answer.
+        .background(alignment: .leading) {
+            Capsule()
+                .fill(shown.map(tint) ?? Color.clear)
+                .frame(width: Self.width, height: 28)
+                .offset(x: CGFloat(at ?? 0) * Self.width)
+                .opacity(at == nil ? 0 : 1)
+        }
+        .allowsHitTesting(!isReadOnly)
+        .padding(2)
+        .background(
+            Capsule().fill(needsAnswer ? Color.accentColor.opacity(0.16) : Color(.tertiarySystemFill))
+        )
+        .overlay(
+            Capsule().strokeBorder(needsAnswer ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.10),
+                                   lineWidth: needsAnswer ? 1 : 0.5)
+        )
+        // The sheet caught up, or said no: the highlight goes where it says,
+        // sliding too.
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: saved)
+    }
+
+    private func segment(_ status: SignupStatus, symbol: String) -> some View {
+        let isOn = shown == status
+        return Button { press(status) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .bold))
+                // Solid when chosen. Yellow needs a dark glyph; the other
+                // two carry white.
+                .foregroundStyle(isOn
+                                 ? (status == .maybe ? Color.black : Color.white)
+                                 : (needsAnswer ? Color.accentColor.opacity(0.85) : Color.secondary))
+                .frame(width: Self.width, height: 28)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(status.label)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func press(_ status: SignupStatus) {
+        let target: SignupStatus? = shown == status ? nil : status
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { picked = .some(target) }
+        UISelectionFeedbackGenerator().selectionChanged()
+        if sending {
+            queued = .some(target)
+        } else {
+            Task { await write(target) }
+        }
+    }
+
+    /// Writes, then whatever was pressed meanwhile — the last press only.
+    private func write(_ first: SignupStatus?) async {
+        sending = true
+        var next = first
+        var written: SignupStatus?? = nil
+        while written != .some(next) {
+            await send(next)
+            written = .some(next)
+            if let later = queued {
+                queued = nil
+                next = later
+            }
+        }
+        sending = false
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { picked = nil }
     }
 }

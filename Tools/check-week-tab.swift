@@ -13,7 +13,7 @@
 //      swiftc -O -o /tmp/weektab \
 //          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
 //          Sources/Feed/SongSearchSuggestions.swift Sources/Feed/PlanSongTitle.swift \
-//          Sources/Team/SongMemos.swift Sources/Team/WeekTab.swift Tools/check-week-tab.swift
+//          Sources/Team/OfferingNote.swift Sources/Team/SongMemos.swift Sources/Team/WeekTab.swift Tools/check-week-tab.swift
 //      /tmp/weektab
 //
 

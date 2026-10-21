@@ -163,8 +163,16 @@ struct AttachmentMenu<Content: View>: View {
                     } header: {
                         Text("팀 메모")
                     } footer: {
-                        Text("이 곡을 다시 부를 때마다 보입니다. 팀 시트의 「곡 메모」 탭에 곡별로 적혀, 시트에서 바로 고쳐도 됩니다." +
-                             (team.memo(for: song).map { $0.by.isEmpty ? "" : " 마지막으로 고친 사람: \($0.by)" } ?? ""))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("이 곡을 다시 부를 때마다 보입니다. 팀 시트의 「곡 메모」 탭에 곡별로 적혀, 시트에서 바로 고쳐도 됩니다." +
+                                 (team.memo(for: song).map { $0.by.isEmpty ? "" : " 마지막으로 고친 사람: \($0.by)" } ?? ""))
+                            // 지난 예배: what the team did with it before.
+                            let history = team.history(for: song)
+                            if !history.isEmpty {
+                                Text("지난 예배").fontWeight(.semibold).padding(.top, 4)
+                                ForEach(history.prefix(4), id: \.self) { Text($0) }
+                            }
+                        }
                     }
                 }
                 // What the song's chart carries besides: as the 헌금송, who

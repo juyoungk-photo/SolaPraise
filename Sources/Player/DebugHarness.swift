@@ -135,6 +135,9 @@ enum DebugHarness {
     /// Run the team notification check on the sample team at launch:
     /// -uiTestNotify (turns the setting on, asks for permission).
     static var notifyCheck: Bool { args.contains("-uiTestNotify") }
+    /// The sample sheet answers after a second, as a real one does — to
+    /// see what taps feel like while an answer is being written.
+    static var slowSheet: Bool { args.contains("-uiTestSlowSheet") }
 
     /// Open 악보 연주모드 for the first service: -uiTestOpenStand
     static var openStand: Bool { args.contains("-uiTestOpenStand") }
