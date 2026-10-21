@@ -51,6 +51,9 @@ struct Attachment: Identifiable, Hashable {
     /// When it was put up — to tell a song's chart attached after the
     /// 콘티 from one made before it.
     var addedAt: Date? = nil
+    /// Marked on the Attachments tab's 콘티 column: the version of its song
+    /// the team chose to play from — one shared choice, seen on the sheet.
+    var chosenForConti = false
 
     var id: String { fileId }
     var belongsToService: Bool { song.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -322,9 +325,11 @@ final class TeamStore: ObservableObject {
             accounts.mainHasYouTube = true
         }
         #endif
+        // On a sheet answered on the 응답 tab, Signups is history: checked
+        // as live, its old duplicates counted against a sheet with none.
         return SheetAudit.run(SheetAudit.Input(
-            schedule: rawSchedule, songs: rawSongs, signups: rawSignups,
-            members: rawMembers, plan: rawPlan, accounts: accounts))
+            schedule: rawSchedule, songs: rawSongs, signups: usesGrid ? nil : rawSignups,
+            members: rawMembers, plan: rawPlan, grid: rawGrid, accounts: accounts))
     }
 
     @Published private(set) var isLoading = false
@@ -1013,6 +1018,58 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    // MARK: - The version a 콘티 takes
+
+    static let contiColumnNames = ["콘티", "conti", "use"]
+
+    /// The version of a song the team plays from, marked on the Attachments
+    /// tab — ✓ on its row, cleared on the song's other charts that day — so
+    /// it is one choice for the whole team, read on the sheet by anyone.
+    /// A 콘티's pages chosen clears every mark: unmarked means the newest.
+    /// Returns an error message, or nil.
+    func chooseForConti(_ item: ScoreStandItem, service: TeamService, sheetId: String) async -> String? {
+        let day = Calendar.current.startOfDay(for: service.date)
+        let songCharts = (attachments[day] ?? []).filter {
+            !$0.belongsToService && PlanSongTitle.sameSong($0.song, item.song)
+        }
+        let chosenId = item.pages == nil && item.earlierDay == nil ? item.attachment.fileId : nil
+        func apply() {
+            for chart in songCharts {
+                if let i = attachments[day]?.firstIndex(where: { $0.fileId == chart.fileId }) {
+                    attachments[day]?[i].chosenForConti = chart.fileId == chosenId
+                }
+            }
+        }
+        #if DEBUG
+        if isSample { apply(); return nil }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        do {
+            let (header, _) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
+            guard let column = TeamSheet.column(header, Self.contiColumnNames) else {
+                return "Attachments 탭에 콘티 열을 만들지 못했습니다."
+            }
+            var updates: [(range: String, rows: [[String]])] = []
+            for chart in songCharts {
+                guard let row = chart.row, row >= 2 else { continue }
+                let want = chart.fileId == chosenId ? "✓" : ""
+                guard want != (chart.chosenForConti ? "✓" : "") else { continue }
+                guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [chart.fileId],
+                                    sheetId: sheetId, client: client) else { return Self.sheetMovedMessage }
+                let at = "\(TeamSheet.columnLetter(column))\(row)"
+                updates.append(("\(TeamSheet.attachmentsTab)!\(at):\(at)", [[want]]))
+            }
+            if !updates.isEmpty { try await client.batchWrite(sheetId: sheetId, updates: updates) }
+            apply()
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 팀과 나누지 못했습니다. 이 기기에서만 콘티에 넣습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     // MARK: - The 응답 tab
 
     private func loadGrid(sheetId: String, client: SheetsClient) async {
@@ -1034,7 +1091,11 @@ final class TeamStore: ObservableObject {
         var out: [Date: [TeamSignup]] = [:]
         for answer in AvailabilityGrid.answers(rows) {
             let member = members.first { $0.name.trimmingCharacters(in: .whitespaces) == answer.name }
-            let service = services.first { Calendar.current.isDate($0.date, inSameDayAs: answer.day) }
+            // That day's service by name when the grid names it — 주일예배
+            // and 팀연습 on one day staff different parts.
+            let sameDay = services.filter { Calendar.current.isDate($0.date, inSameDayAs: answer.day) }
+            let service = sameDay.first { !answer.service.isEmpty && AvailabilityGrid.sameService($0.title, answer.service) }
+                ?? sameDay.first
             let part = service.flatMap { service in
                 service.assignments.first { TeamSheet.names(inCell: $0.value).contains(answer.name) }?.key
             } ?? ""
@@ -1247,6 +1308,7 @@ final class TeamStore: ObservableObject {
         let hashCol = TeamSheet.column(header, ["hash", "해시"])
         let editsCol = TeamSheet.column(header, ["edits", "교정"])
         let atCol = TeamSheet.column(header, ["addedat", "올린시각"])
+        let contiCol = TeamSheet.column(header, Self.contiColumnNames)
         let iso = ISO8601DateFormatter()
 
         var out: [Date: [Attachment]] = [:]
@@ -1263,7 +1325,8 @@ final class TeamStore: ObservableObject {
                            fileId: cell(idCol), url: url, addedBy: cell(byCol),
                            row: offset + 1, hash: cell(hashCol).isEmpty ? nil : cell(hashCol),
                            editsFileId: cell(editsCol).isEmpty ? nil : cell(editsCol),
-                           addedAt: iso.date(from: cell(atCol)))
+                           addedAt: iso.date(from: cell(atCol)),
+                           chosenForConti: !cell(contiCol).isEmpty)
             )
         }
         attachments = out
@@ -1438,7 +1501,7 @@ final class TeamStore: ObservableObject {
         if var header = rows.first, let index = TeamSheet.headerIndex(raw, tab: tab) {
             // A tab from before these columns gets each added at the end of
             // its header, where it disturbs nothing.
-            for (name, aliases) in [("Hash", ["hash", "해시"]), ("Edits", ["edits", "교정"])]
+            for (name, aliases) in [("Hash", ["hash", "해시"]), ("Edits", ["edits", "교정"]), ("콘티", Self.contiColumnNames)]
             where TeamSheet.column(header, aliases) == nil {
                 let at = (header.lastIndex { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? -1) + 1
                 let cell = "\(tab)!\(TeamSheet.columnLetter(at))\(index + 1)"
@@ -2746,6 +2809,14 @@ final class TeamStore: ObservableObject {
             )
             members.append(Member(email: address, name: name, isActive: true, row: row ?? 0))
             if !address.isEmpty { memberEmails.insert(address) }
+            // Their column on the 응답 tab too: without it a new member has
+            // nowhere to answer on the sheet.
+            if usesGrid, let header = rawGrid?.first, !name.isEmpty,
+               AvailabilityGrid.Layout(header: header)?.column(for: name) == nil {
+                let at = "\(TeamSheet.columnLetter(header.count))1"
+                try await client.write(sheetId: sheetId, range: "\(AvailabilityGrid.tab)!\(at):\(at)", row: [name])
+                rawGrid?[0].append(name)
+            }
             errorMessage = nil
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

@@ -71,6 +71,8 @@ enum SheetAudit {
         var plan: [[String]]?
         /// The Attachments tab, when there is one.
         var attachments: [[String]]? = nil
+        /// The 응답 tab, when there is one (AvailabilityGrid).
+        var grid: [[String]]? = nil
         var accounts = Accounts()
         /// False for a read from outside the app (Tools/audit-live-sheet),
         /// which has no sign-in to judge.
@@ -90,6 +92,7 @@ enum SheetAudit {
         if let schedule = input.schedule { out += scheduleTab(schedule, today: input.today) }
         if let signups = input.signups { out += signupsTab(signups, roster: roster) }
         if let members = input.members { out += membersTab(members) }
+        if let grid = input.grid { out += gridTab(grid, schedule: input.schedule, members: input.members, today: input.today) }
         if let plan = input.plan, plan.count > 1 { out += undatedRows(plan, tab: "Plan", id: "plan.undated") }
         return out.sorted { $0.severity != $1.severity ? $0.severity > $1.severity : $0.id < $1.id }
     }
@@ -373,6 +376,86 @@ enum SheetAudit {
     }
 
     // MARK: - Members
+
+    // MARK: - 응답
+
+    /// The 응답 tab as a member with only the sheet meets it: a column to
+    /// answer in, a row for every service coming, and words the app reads.
+    /// Each failure is silent — an answer under a misspelt name is nobody's,
+    /// a service without a row cannot be answered at all.
+    private static func gridTab(_ rows: [[String]], schedule: [[String]]?, members: [[String]]?,
+                                today: Date) -> [Finding] {
+        var out: [Finding] = []
+        let area = "응답 탭"
+        guard let header = rows.first, let layout = AvailabilityGrid.Layout(header: header) else {
+            return [.init(id: "grid.noDate", severity: .problem, area: area,
+                          title: "첫 줄에 「날짜」 열이 없습니다",
+                          detail: "앱이 응답을 읽지 못합니다. 첫 줄을 「예배 · 날짜 · 이름들」로 두세요.")]
+        }
+        // The roster's names: active ones need a column; any name is a
+        // known one.
+        var active: [String] = [], known = Set<String>()
+        if let members, let top = members.first {
+            let name = TeamSheet.column(top, ["name", "이름"]) ?? 1
+            let flag = TeamSheet.column(top, ["active", "사용", "활성"])
+            for cells in members.dropFirst() {
+                let who = cell(cells, name)
+                guard !who.isEmpty else { continue }
+                known.insert(who)
+                if !["false", "no", "n", "0"].contains(cell(cells, flag).lowercased()) { active.append(who) }
+            }
+        }
+        let columns = layout.members.map(\.name)
+        let strangers = members == nil ? [] : columns.filter { !known.contains($0) }
+        if !strangers.isEmpty {
+            out.append(.init(id: "grid.unknownName", severity: .warning, area: area,
+                             title: "Members 탭에 없는 이름의 열",
+                             detail: "\(strangers.joined(separator: ", ")) — 이름이 Members 탭과 다르면 그 사람은 응답해도 미응답으로 보입니다. 두 탭의 이름을 똑같이 맞춰 주세요."))
+        }
+        let missing = active.filter { !columns.contains($0) }
+        if !missing.isEmpty {
+            out.append(.init(id: "grid.missingMember", severity: .warning, area: area,
+                             title: "응답할 열이 없는 멤버 \(missing.count)명",
+                             detail: "\(missing.joined(separator: ", ")) — 시트에서 응답할 곳이 없습니다. 위의 「응답 탭 정리」로 열을 더하세요."))
+        }
+        var unknown: [String] = []
+        for (offset, cells) in rows.enumerated() where offset > 0 {
+            for member in layout.members {
+                let word = cell(cells, member.column)
+                if !word.isEmpty, TeamSheet.statusWords[word.lowercased()] == nil {
+                    unknown.append("\(TeamSheet.columnLetter(member.column))\(offset + 1) 「\(word)」")
+                }
+            }
+        }
+        if !unknown.isEmpty {
+            out.append(.init(id: "grid.unknownWord", severity: .warning, area: area,
+                             title: "앱이 모르는 응답 \(unknown.count)개",
+                             detail: unknown.prefix(6).joined(separator: ", ") + " — 가능 · 미정 · 어려움 · 자리비움 중 하나로 고쳐 주세요. 이 칸은 응답으로 세지 않습니다."))
+        }
+        // Services coming that have no row.
+        var noRow: [String] = []
+        if let schedule, let top = schedule.first {
+            let date = TeamSheet.column(top, ["date", "날짜"]) ?? 0
+            let title = TeamSheet.column(top, ["title", "service", "구분", "type", "예배", "행사", "예배명"])
+            let start = Calendar.current.startOfDay(for: today)
+            let coming = schedule.dropFirst().compactMap { cells -> (day: Date, title: String)? in
+                guard let day = TeamSheet.day(cell(cells, date)), day >= start else { return nil }
+                return (day, cell(cells, title))
+            }
+            noRow = AvailabilityGrid.missingServices(coming, in: rows, from: start)
+                .map { TeamSheet.dateFormatter.string(from: $0.day) }
+            if !noRow.isEmpty {
+                out.append(.init(id: "grid.missingService", severity: .warning, area: area,
+                                 title: "응답할 줄이 없는 예정 예배 \(noRow.count)개",
+                                 detail: noRow.prefix(6).joined(separator: ", ") + " — 시트에서는 이 날짜에 응답할 수 없습니다. 위의 「응답 탭 정리」로 줄을 더하세요."))
+            }
+        }
+        if out.isEmpty {
+            out.append(.init(id: "grid.ok", severity: .ok, area: area,
+                             title: "멤버 \(columns.count)명이 시트에서 바로 응답할 수 있습니다"))
+        }
+        return out
+    }
 
     private static func membersTab(_ rows: [[String]]) -> [Finding] {
         var out: [Finding] = []

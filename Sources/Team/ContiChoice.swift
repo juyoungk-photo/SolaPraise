@@ -30,9 +30,14 @@ enum ContiChoice {
         UserDefaults.standard.set(id, forKey: key(scope, song))
     }
 
-    /// The version the 콘티 takes: the one chosen, while it is still there;
-    /// else the newest — `versions` come newest first.
+    /// The version the 콘티 takes: the one the team marked on the sheet;
+    /// else the one chosen on this device (a choice the sheet could not
+    /// take — an earlier service's chart, a 콘티's pages); else the newest
+    /// — `versions` come newest first.
     static func pick(_ versions: [ScoreStandItem], scope: String, song: String) -> ScoreStandItem? {
+        if let marked = versions.first(where: { $0.attachment.chosenForConti && $0.pages == nil && $0.earlierDay == nil }) {
+            return marked
+        }
         let id = chosen(scope: scope, song: song)
         return versions.first { $0.id == id } ?? versions.first
     }

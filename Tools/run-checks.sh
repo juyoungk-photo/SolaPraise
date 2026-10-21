@@ -90,7 +90,8 @@ if [ "${1:-}" = "--live" ]; then
     # The tool's own header gives its compile line; this follows it.
     if swiftc -O -o /tmp/liveaudit Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
         Sources/Feed/SongSearchSuggestions.swift Sources/Feed/PlanSongTitle.swift \
-        Sources/Team/SongTitleTidy.swift Sources/Team/SheetAudit.swift Tools/audit-live-sheet.swift 2>/dev/null; then
+        Sources/Team/SongTitleTidy.swift Sources/Team/AvailabilityGrid.swift Sources/Team/SheetAudit.swift \
+        Tools/audit-live-sheet.swift 2>/dev/null; then
         # Addresses are masked: this output ends up in logs and chats.
         /tmp/liveaudit | sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/<address>/g'
         [ "${PIPESTATUS[0]}" -eq 1 ] && failed=$((failed + 1))

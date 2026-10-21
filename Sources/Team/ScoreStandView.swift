@@ -55,6 +55,9 @@ struct ScoreStandView: View {
     /// Takes a version off the song — its attachment — returning an error
     /// message, or nil. Nil where versions cannot be taken off here.
     var removeVersion: ((ScoreStandItem) async -> String?)?
+    /// Shares a version chosen for the 콘티 with the team (the sheet's 콘티
+    /// column); nil where there is no sheet to share it on.
+    var shareChoice: ((ScoreStandItem) async -> String?)?
     /// Redrawn when a version is chosen for the 콘티 (kept in defaults).
     @State private var choiceTick = 0
     @State private var removing: ScoreStandItem?
@@ -140,11 +143,13 @@ struct ScoreStandView: View {
          notices: [String: String] = [:],
          contiScope: String? = nil,
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
+         shareChoice: ((ScoreStandItem) async -> String?)? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
         self.contiScope = contiScope
         self.removeVersion = removeVersion
+        self.shareChoice = shareChoice
         self.setFileName = setFileName
         self.exportOnOpen = exportOnOpen
         self.setCaptions = setCaptions
@@ -445,6 +450,16 @@ struct ScoreStandView: View {
                         } else {
                             Button {
                                 ContiChoice.choose(item.id, scope: contiScope, song: item.song)
+                                // Marked for the team, so every member's 콘티 —
+                                // and the sheet — takes the same one.
+                                if let shareChoice {
+                                    Task {
+                                        if let failure = await shareChoice(item) { model.note = failure }
+                                        markChosen(item)
+                                    }
+                                } else {
+                                    markChosen(item)
+                                }
                                 choiceTick += 1
                             } label: {
                                 Label("콘티에 넣기", systemImage: "checkmark.circle")
@@ -473,6 +488,23 @@ struct ScoreStandView: View {
             }
             .scrollClipDisabled()
         }
+    }
+
+    /// The stand's own copies of the song's versions marked as the sheet now
+    /// has them: the chosen one ✓, the others not.
+    private func markChosen(_ item: ScoreStandItem) {
+        guard var list = versions[item.song] else { return }
+        let chosen = item.pages == nil && item.earlierDay == nil ? item.attachment.fileId : nil
+        for index in list.indices where list[index].pages == nil && list[index].earlierDay == nil {
+            var attachment = list[index].attachment
+            attachment.chosenForConti = attachment.fileId == chosen
+            list[index] = ScoreStandItem(attachment: attachment, song: list[index].song, teamKey: list[index].teamKey,
+                                         pages: list[index].pages, versionLabel: list[index].versionLabel)
+        }
+        versions[item.song] = list
+        if let at = items.firstIndex(where: { $0.song == item.song }),
+           let updated = list.first(where: { $0.id == items[at].id }) { items[at] = updated }
+        choiceTick += 1
     }
 
     /// The version on screen taken off its song; the stand moves to the

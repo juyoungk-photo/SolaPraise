@@ -338,7 +338,10 @@ struct ServicePrepView: View {
                                setCaptions: contiCaptions(service),
                                notices: offeringNotices(service),
                                contiScope: ContiChoice.scope(service),
-                               removeVersion: removeVersion)
+                               removeVersion: removeVersion,
+                               shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
+                                   await team.chooseForConti(item, service: service, sheetId: sheetId!)
+                               })
             }
             .fullScreenCover(item: $standSong) { entry in
                 let versions = songVersions(entry.service)
@@ -349,7 +352,10 @@ struct ServicePrepView: View {
                                versions: versions.filter { $0.key == entry.song },
                                notices: offeringNotices(entry.service),
                                contiScope: scope,
-                               removeVersion: removeVersion)
+                               removeVersion: removeVersion,
+                               shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
+                                   await team.chooseForConti(item, service: entry.service, sheetId: sheetId!)
+                               })
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $reordering) { service in

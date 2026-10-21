@@ -15,7 +15,8 @@
 //      swiftc -O -o /tmp/auditcheck \
 //          Sources/Team/TeamSheet.swift Sources/Team/SheetTidy.swift \
 //          Sources/Feed/SongSearchSuggestions.swift Sources/Feed/PlanSongTitle.swift \
-//          Sources/Team/SongTitleTidy.swift Sources/Team/SheetAudit.swift Tools/check-sheet-audit.swift
+//          Sources/Team/SongTitleTidy.swift Sources/Team/AvailabilityGrid.swift \
+//          Sources/Team/SheetAudit.swift Tools/check-sheet-audit.swift
 //      /tmp/auditcheck
 //
 
@@ -150,6 +151,28 @@ struct CheckSheetAudit {
         check("a service at night is reported", ids(c).contains("schedule.nightTime"))
         c.schedule = [["Date", "Service", "Time"], ["2026-10-25", "주일 2부", "11:30 AM"]]
         check("a morning service is not", !ids(c).contains("schedule.nightTime"))
+
+        // 응답 TAB: a clean grid stays clean; each silent failure is named.
+        var g = healthy
+        let names = (healthy.members ?? []).dropFirst().compactMap { $0.first }
+        let coming = (healthy.schedule ?? []).dropFirst().compactMap { row -> [String]? in
+            guard let day = TeamSheet.day(row.first ?? ""), day >= Calendar.current.startOfDay(for: healthy.today) else { return nil }
+            return [row.count > 1 ? row[1] : "", row[0]]
+        }
+        g.grid = [["예배", "날짜"] + names] + coming.map { $0 + names.map { _ in "가능" } }
+        check("a full grid is clean", !ids(g).contains { $0.hasPrefix("grid.") && $0 != "grid.ok" }, "\(ids(g))")
+        var bad = g
+        bad.grid![0].append("모르는이")
+        check("a column not on Members is reported", ids(bad).contains("grid.unknownName"))
+        bad = g
+        bad.grid![0].removeLast()
+        check("a member without a column is reported", ids(bad).contains("grid.missingMember"))
+        bad = g
+        if bad.grid!.count > 1 { bad.grid![1][2] = "몰라" }
+        check("a word the app does not read is reported", ids(bad).contains("grid.unknownWord"))
+        bad = g
+        if bad.grid!.count > 1 { bad.grid!.removeLast() }
+        check("a coming service without a row is reported", ids(bad).contains("grid.missingService"))
 
         // SIGNUPS.
         var u = healthy
