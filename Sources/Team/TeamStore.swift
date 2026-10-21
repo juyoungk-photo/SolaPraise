@@ -720,6 +720,7 @@ final class TeamStore: ObservableObject {
             // After the roster: a grid column is a member by name.
             await loadGrid(sheetId: sheetId, client: client)
             songMemos = SongMemos.parse((try? await client.read(sheetId: sheetId, range: SongMemos.tab)) ?? [])
+            hasWeekTab = (try? await client.tabTitles(sheetId: sheetId))?.contains(WeekTab.tab) ?? false
             await loadChurchNotes(client: client)
             await loadAttachments(sheetId: sheetId, client: client)
             await loadContiFolder()
@@ -1018,6 +1019,56 @@ final class TeamStore: ObservableObject {
             errorMessage = "이 시트에 편집 권한이 없어 사인업을 저장하지 못했습니다. 시트 주인에게 이 계정을 편집자로 추가해 달라고 요청하세요."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // MARK: - 이번 주 tab
+
+    /// Whether the sheet has the 이번 주 tab, as of the last check.
+    @Published private(set) var hasWeekTab = false
+
+    /// Writes the 이번 주 tab (WeekTab): made the first time, its formulas
+    /// written again after — the columns may have moved. Read back after,
+    /// so a date the formulas cannot find is said rather than shown as an
+    /// empty page. Run only from a button. Returns a message for the
+    /// person, or nil when all is well.
+    func prepareWeekTab(sheetId: String) async -> String? {
+        #if DEBUG
+        if isSample { return "샘플 모드에서는 시트를 바꾸지 않습니다." }
+        #endif
+        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        let tab = WeekTab.tab, quoted = "'\(WeekTab.tab)'"
+        do {
+            let titles = try await client.tabTitles(sheetId: sheetId)
+            let attachmentHeader = titles.contains(TeamSheet.attachmentsTab)
+                ? (try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab))?.first : nil
+            guard let schedule = rawSchedule?.first, let songs = rawSongs?.first,
+                  let cells = WeekTab.cells(.init(schedule: schedule, songs: songs, attachments: attachmentHeader,
+                                                  memos: titles.contains(SongMemos.tab))) else {
+                return "Schedule · Songs 탭에서 날짜 열을 찾지 못해 만들지 않았습니다."
+            }
+            let isNew = !titles.contains(tab)
+            if isNew { try await client.addSheet(sheetId: sheetId, title: tab) }
+            guard let gid = try await client.tabGid(sheetId: sheetId, title: tab) else { return "이번 주 탭을 만들지 못했습니다." }
+            // Every cell of the area written, blanks too: a value left where
+            // a formula spills would stop it with #REF!.
+            let width = 8, height = max(cells.count + 45, 60)
+            var grid = cells.map { row in row + [String](repeating: "", count: max(0, width - row.count)) }
+            while grid.count < height { grid.append([String](repeating: "", count: width)) }
+            try await client.batchWrite(sheetId: sheetId, updates: [("\(quoted)!A1:H\(height)", grid)])
+            if isNew { try await client.formatUpdate(sheetId: sheetId, requests: WeekTab.formatRequests(gid: gid, rows: cells.count)) }
+            hasWeekTab = true
+            let shown = try await client.read(sheetId: sheetId, range: "\(quoted)!A1:C1").first ?? []
+            let date = shown.count > 1 ? shown[1].trimmingCharacters(in: .whitespaces) : ""
+            if date.isEmpty || date.hasPrefix("#") {
+                return "「이번 주」 탭을 만들었지만 다음 예배 날짜를 찾지 못했습니다. Schedule의 날짜가 날짜가 아닌 글자로 적혀 있거나, 앞으로의 예배가 없을 수 있습니다."
+            }
+            return nil
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return "이 시트에 편집 권한이 없어 만들지 못했습니다."
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

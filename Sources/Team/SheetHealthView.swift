@@ -21,6 +21,7 @@ struct SheetHealthView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var confirmingTitles = false
     @State private var confirmingGrid = false
+    @State private var confirmingWeek = false
     @Environment(\.dismiss) private var dismiss
 
     let sheetId: String?
@@ -87,6 +88,20 @@ struct SheetHealthView: View {
                     Text("앱이 없어도 팀원이 시트만 열어 예배마다 가능 · 미정 · 어려움 · 자리비움을 고를 수 있게 합니다. 앱도 같은 칸을 읽고 씁니다.")
                 }
 
+                // One page for the next service, built from formulas.
+                Section {
+                    Button {
+                        confirmingWeek = true
+                    } label: {
+                        Label(team.hasWeekTab ? "「이번 주」 탭 다시 만들기" : "「이번 주」 탭 만들기", systemImage: "calendar.day.timeline.left")
+                    }
+                    .disabled(working || sheetId == nil || team.isReadOnly)
+                } header: {
+                    Text("시트에서 이번 주 보기")
+                } footer: {
+                    Text("다음 예배의 시간 · 콘티 PDF · 파트별 배정 · 곡(키 · 메모 · 팀 메모 · 영상 · 고른 악보)을 시트의 한 탭에 수식으로 모읍니다. 앱 없이도 매주 다음 예배로 저절로 넘어갑니다. 열이 바뀌었으면 다시 만들면 됩니다.")
+                }
+
                 ForEach(areas(all), id: \.self) { area in
                     Section(area) {
                         ForEach(all.filter { $0.area == area }) { finding in
@@ -115,6 +130,12 @@ struct SheetHealthView: View {
             } message: {
                 Text(note ?? "")
             }
+            .confirmationDialog("「이번 주」 탭을 만들까요?", isPresented: $confirmingWeek, titleVisibility: .visible) {
+                Button(team.hasWeekTab ? "다시 만들기" : "만들기") { Task { await prepareWeek() } }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("팀 시트에 「이번 주」 탭을 \(team.hasWeekTab ? "다시 씁니다 — 그 탭에 손으로 적은 것은 지워집니다" : "더합니다"). 다른 탭은 바꾸지 않습니다.")
+            }
             .confirmationDialog("팀 시트를 바꿀까요?", isPresented: $confirmingGrid, titleVisibility: .visible) {
                 Button("정리하기") { Task { await prepareGrid() } }
                 Button("취소", role: .cancel) {}
@@ -128,6 +149,14 @@ struct SheetHealthView: View {
                 Text("Songs 탭의 Title을 곡 제목만 남기고(찬송가는 장 번호와 함께), 팀·앨범·연도는 새 「참고버전」 열에 적습니다. Key·Transpose는 Title 바로 옆으로 옮깁니다. Attachments 탭의 곡 이름과 파일 이름도 맞춥니다. 링크·키·메모 같은 다른 칸은 그대로이고, 이미 적힌 참고버전은 덮어쓰지 않습니다.")
             }
         }
+    }
+
+    private func prepareWeek() async {
+        guard let sheetId else { return }
+        working = true
+        defer { working = false }
+        note = await team.prepareWeekTab(sheetId: sheetId)
+            ?? "「이번 주」 탭을 만들었습니다. 팀원에게 시트에서 이 탭만 열면 된다고 알려 주세요."
     }
 
     private func prepareGrid() async {
