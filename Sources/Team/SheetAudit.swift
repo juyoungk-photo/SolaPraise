@@ -91,7 +91,7 @@ enum SheetAudit {
         }
         if let schedule = input.schedule { out += scheduleTab(schedule, today: input.today) }
         if let signups = input.signups { out += signupsTab(signups, roster: roster) }
-        if let members = input.members { out += membersTab(members) }
+        if let members = input.members { out += membersTab(members, grid: input.grid != nil) }
         if let grid = input.grid { out += gridTab(grid, schedule: input.schedule, members: input.members, today: input.today) }
         if let plan = input.plan, plan.count > 1 { out += undatedRows(plan, tab: "Plan", id: "plan.undated") }
         return out.sorted { $0.severity != $1.severity ? $0.severity > $1.severity : $0.id < $1.id }
@@ -162,12 +162,17 @@ enum SheetAudit {
 
     private static func structure(_ input: Input) -> [Finding] {
         var out: [Finding] = []
-        let required: [(String, [[String]]?, [[String]])] = [
+        var required: [(String, [[String]]?, [[String]])] = [
             ("Schedule", input.schedule, [["date", "날짜"]]),
             ("Songs", input.songs, [["date", "날짜"], ["title", "곡", "곡명", "찬양"]]),
-            ("Signups", input.signups, [["date", "날짜"], ["role", "파트", "역할"],
-                                        ["memberemail", "email", "이메일"], ["status", "상태", "응답"]])
         ]
+        // Answers come from the 응답 tab when the sheet has one; Signups is
+        // then history, and its absence is no fault. Without either, there
+        // is nowhere to answer.
+        if input.grid == nil {
+            required.append(("Signups", input.signups, [["date", "날짜"], ["role", "파트", "역할"],
+                                                        ["memberemail", "email", "이메일"], ["status", "상태", "응답"]]))
+        }
         for (tab, rows, headers) in required {
             guard let rows, let header = rows.first else {
                 out.append(.init(id: "structure.missing.\(tab)", severity: .problem, area: "시트 구조",
@@ -457,7 +462,7 @@ enum SheetAudit {
         return out
     }
 
-    private static func membersTab(_ rows: [[String]]) -> [Finding] {
+    private static func membersTab(_ rows: [[String]], grid: Bool = false) -> [Finding] {
         var out: [Finding] = []
         guard let header = rows.first else { return out }
         let email = TeamSheet.column(header, ["email", "이메일", "메일"]) ?? 0
@@ -484,7 +489,9 @@ enum SheetAudit {
         if !missing.isEmpty {
             out.append(.init(id: "members.noEmail", severity: .note, area: "Members 탭",
                              title: "주소가 없는 사람 \(missing.count)명",
-                             detail: "\(list(missing))번 줄. 이 사람은 앱에서 응답할 수 없습니다."))
+                             detail: grid
+                                ? "\(list(missing))번 줄. 시트의 응답 탭에서는 응답할 수 있고, 앱으로 응답하려면 로그인하는 주소가 필요합니다."
+                                : "\(list(missing))번 줄. 이 사람은 앱에서 응답할 수 없습니다."))
         }
         return out
     }

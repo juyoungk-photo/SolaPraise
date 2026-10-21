@@ -40,7 +40,7 @@ struct AuditLiveSheet {
             print("Could not reach the sheet.")
             exit(2)
         }
-        let tabs = ["Schedule", "Songs", "Signups", "Members", "Plan", "Attachments"]
+        let tabs = ["Schedule", "Songs", "Signups", "Members", "Plan", "Attachments", "응답"]
         var gids: [String: String] = [:]
         for tab in tabs {
             let pattern = #"\[\d+,0,\\?"(\d+)\\?",\[\{[^\]]*?\\?""# + tab + #"\\?""#
@@ -69,9 +69,11 @@ struct AuditLiveSheet {
             .joined(separator: " · "))
 
         let findings = SheetAudit.run(SheetAudit.Input(
-            schedule: rows["Schedule"], songs: rows["Songs"], signups: rows["Signups"],
+            schedule: rows["Schedule"], songs: rows["Songs"],
+            // As the app does: with a 응답 tab, Signups is history.
+            signups: rows["응답"] == nil ? rows["Signups"] : nil,
             members: rows["Members"], plan: rows["Plan"], attachments: rows["Attachments"],
-            checksAccounts: false))
+            grid: rows["응답"], checksAccounts: false))
 
         for finding in findings {
             let mark: String

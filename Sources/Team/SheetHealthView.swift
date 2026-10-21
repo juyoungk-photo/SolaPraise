@@ -55,6 +55,17 @@ struct SheetHealthView: View {
                                                          : "exclamationmark.triangle.fill")
                         .font(.headline)
                         .foregroundStyle(attention.isEmpty ? .green : .orange)
+                    // What to look at, said here — the count alone left the
+                    // reader hunting through the sections below for it.
+                    ForEach(attention) { finding in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: finding.severity == .problem ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(finding.severity == .problem ? .red : .orange)
+                                .font(.caption)
+                            Text("\(finding.area) · \(finding.title)")
+                                .font(.callout)
+                        }
+                    }
                     if let loaded = team.lastLoaded {
                         Text("마지막으로 시트를 읽은 때: \(loaded.formatted(date: .omitted, time: .shortened))")
                             .font(.caption)

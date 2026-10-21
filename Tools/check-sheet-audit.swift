@@ -152,6 +152,14 @@ struct CheckSheetAudit {
         c.schedule = [["Date", "Service", "Time"], ["2026-10-25", "주일 2부", "11:30 AM"]]
         check("a morning service is not", !ids(c).contains("schedule.nightTime"))
 
+        // 응답 TAB in place of Signups: Signups is not asked for.
+        var answered = healthy
+        answered.signups = nil
+        answered.grid = [["예배", "날짜", "주영", "은혜"], ["주일 2부", "2026-10-11", "가능", ""]]
+        check("with a 응답 tab, Signups is not required", !ids(answered).contains("structure.missing.Signups"))
+        answered.grid = nil
+        check("with neither, Signups is", ids(answered).contains("structure.missing.Signups"))
+
         // 응답 TAB: a clean grid stays clean; each silent failure is named.
         var g = healthy
         let names = (healthy.members ?? []).dropFirst().compactMap { $0.first }
