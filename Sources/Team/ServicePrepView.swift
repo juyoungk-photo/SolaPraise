@@ -2538,6 +2538,22 @@ struct ServicePrepView: View {
                 answerButton(.declined, "xmark", upcoming, shown,
                              needsAnswer: needsAnswer)
             }
+            // One highlight behind the three, moved to the answer: it slides
+            // from one to the next instead of vanishing from one segment and
+            // appearing in another.
+            .background(alignment: .leading) {
+                let order: [SignupStatus] = [.available, .maybe, .declined]
+                let at = shown.flatMap { order.firstIndex(of: $0) }
+                Capsule()
+                    .fill(shown.map(tint) ?? Color.clear)
+                    .frame(width: 34, height: 28)
+                    .offset(x: CGFloat(at ?? 0) * 34)
+                    .opacity(at == nil ? 0 : 1)
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: shown)
+            // Taps held while an answer is being written — without fading
+            // the control, which flickered on every press.
+            .allowsHitTesting(!team.isReadOnly && inFlight[upcoming.id] == nil)
             .padding(2)
             .background(
                 Capsule().fill(needsAnswer
@@ -2588,13 +2604,9 @@ struct ServicePrepView: View {
                                     ? Color.accentColor.opacity(0.85)
                                     : Color.secondary))
                 .frame(width: 34, height: 28)
-                .background(
-                    Capsule().fill(isOn ? tint(status) : Color.clear)
-                )
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(team.isReadOnly || inFlight[upcoming.id] != nil)
         .accessibilityLabel(status.label)
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
