@@ -54,9 +54,10 @@ final class RehearsalLink: NSObject, ObservableObject {
         /// The chart: the attachment's file id and which of its pages.
         var fileId: String
         var key: String
-        var delta: ChartDelta<ScoreChord>?
-        var lyrics: [LyricFix]?
-        var pages: [[ScoreChord]]? = nil
+        /// The content, as XFDF — the standard form of a PDF's annotations:
+        /// an <add>/<modify>/<delete> command for a change, a whole
+        /// document for a chart's chords or its lyric fixes.
+        var xfdf: String? = nil
         /// Who fixed it, for the line that says so.
         var from: String
     }
@@ -66,7 +67,14 @@ final class RehearsalLink: NSObject, ObservableObject {
 
     private var me: MCPeerID?
     private var instance = UUID().uuidString
-    private var session: MCSession?
+    /// One session holds eight devices at most — itself among them — so a
+    /// team of ten was more than one could carry: the ninth stand never
+    /// joined. Each device keeps as many as it needs, every other device
+    /// in one of them, all connected directly.
+    private var sessions: [MCSession] = []
+    private var session: MCSession? { sessions.first }
+    /// Short of the limit of eight, for invitations still being answered.
+    private static let perSession = 6
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     private var team = ""
@@ -88,9 +96,7 @@ final class RehearsalLink: NSObject, ObservableObject {
         let peer = MCPeerID(displayName: String(name.prefix(30)).isEmpty ? "팀원" : String(name.prefix(30)))
         me = peer
         instance = UUID().uuidString
-        let session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
-        session.delegate = self
-        self.session = session
+        sessions = [newSession(for: peer)]
         let advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: ["team": team, "id": instance],
                                                    serviceType: Self.service)
         advertiser.delegate = self
@@ -107,18 +113,38 @@ final class RehearsalLink: NSObject, ObservableObject {
         guard users == 0 else { return }
         advertiser?.stopAdvertisingPeer()
         browser?.stopBrowsingForPeers()
-        session?.disconnect()
+        for session in sessions { session.disconnect() }
         advertiser = nil
         browser = nil
-        session = nil
+        sessions = []
         peers = []
     }
 
     /// To every device connected, at once and in order.
     func send(_ message: Message) {
-        guard let session, !session.connectedPeers.isEmpty,
-              let data = try? JSONEncoder().encode(message) else { return }
-        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        guard let data = try? JSONEncoder().encode(message) else { return }
+        for session in sessions where !session.connectedPeers.isEmpty {
+            try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        }
+    }
+
+    private func newSession(for peer: MCPeerID) -> MCSession {
+        let session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
+        session.delegate = self
+        return session
+    }
+
+    /// A session with room for one more, made when all are full.
+    fileprivate func roomySession() -> MCSession? {
+        guard let me, !sessions.isEmpty else { return nil }
+        if let roomy = sessions.first(where: { $0.connectedPeers.count < Self.perSession }) { return roomy }
+        let added = newSession(for: me)
+        sessions.append(added)
+        return added
+    }
+
+    fileprivate func isConnected(_ peer: MCPeerID) -> Bool {
+        sessions.contains { $0.connectedPeers.contains(peer) }
     }
 
     /// Called on the main actor with each message from the room. The token
@@ -139,7 +165,7 @@ final class RehearsalLink: NSObject, ObservableObject {
     }
 
     fileprivate func refreshPeers() {
-        peers = session?.connectedPeers.map(\.displayName).sorted() ?? []
+        peers = sessions.flatMap(\.connectedPeers).map(\.displayName).sorted()
     }
 }
 
@@ -166,8 +192,8 @@ extension RehearsalLink: MCNearbyServiceAdvertiserDelegate {
                                 withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         let theirs = context.flatMap { String(data: $0, encoding: .utf8) }
         Task { @MainActor in
-            let ok = theirs == self.team && self.session != nil
-            invitationHandler(ok, ok ? self.session : nil)
+            let room = theirs == self.team ? self.roomySession() : nil
+            invitationHandler(room != nil, room)
         }
     }
 }
@@ -179,9 +205,8 @@ extension RehearsalLink: MCNearbyServiceBrowserDelegate {
             // Same team, and one of the two invites — the one whose instance
             // sorts first — or both would, and the two half-connections
             // cancel out.
-            guard let session = self.session, info?["team"] == self.team,
-                  let theirs = info?["id"], self.instance < theirs,
-                  !session.connectedPeers.contains(peerID) else { return }
+            guard info?["team"] == self.team, let theirs = info?["id"], self.instance < theirs,
+                  !self.isConnected(peerID), let session = self.roomySession() else { return }
             browser.invitePeer(peerID, to: session, withContext: Data(self.team.utf8), timeout: 15)
         }
     }

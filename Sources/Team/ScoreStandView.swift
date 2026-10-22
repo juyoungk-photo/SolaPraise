@@ -897,7 +897,7 @@ struct ScoreStandView: View {
                 let name: (UUID) -> String? = { id in
                     originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 }
                 }
-                ScoreChartView(systems: systems, chord: name,
+                ScoreChartView(song: model.chordPro(item, systems: systems, state: state),
                                scale: min(ScoreStandModel.chartScaleRange.upperBound,
                                           max(ScoreStandModel.chartScaleRange.lowerBound, model.chartScale * pinch)),
                                spacing: chartSpacing,
@@ -1148,6 +1148,19 @@ struct ScoreStandView: View {
                     Label("공유…", systemImage: "square.and.arrow.up")
                 }
             }
+            // For phones without this app, and other chord and PDF apps.
+            Section("다른 기기·앱에서 보기") {
+                Button { Task { await model.exportAnnotated(item) } } label: {
+                    Label("교정본 PDF — 원래 키, 고친 코드는 주석", systemImage: "doc.richtext")
+                }
+                Button { Task { await model.exportChordPro(item) } } label: {
+                    Label("코드표 ChordPro — 지금 키", systemImage: "music.note.list")
+                }
+                Button { Task { await model.exportXFDF(item) } } label: {
+                    Label("교정 XFDF — PDF 앱에서 가져오기", systemImage: "doc.badge.gearshape")
+                }
+            }
+            .disabled(state?.isReady != true)
             // The page as it is will do: unread, it is the chart as printed.
             .disabled(state?.isReady != true)
             if items.count > 1 {
@@ -2029,9 +2042,7 @@ final class ScoreStandModel: ObservableObject {
         charts[item.id] = systems
         // Shared with the chords: the team reads the same words — the room
         // at once, the sheet a moment later.
-        RehearsalLink.shared.send(.init(kind: .lyrics, fileId: item.attachment.fileId,
-                                        key: SharedEdits.key(pages: item.pages), delta: nil,
-                                        lyrics: fixes, from: nearbyName))
+        send(.lyrics, item, xfdf: XFDF.encode(CorrectionsBody.document([], lyrics: fixes), pdfPages: [], sizes: []))
         if var saved = ScoreEditStore.load(item.id) {
             saved.dirty = true
             ScoreEditStore.write(saved, for: item.id)
@@ -2076,9 +2087,12 @@ final class ScoreStandModel: ObservableObject {
         // The room first: only what changed, to the stands nearby at once.
         // The sheet gets the whole correction a moment later.
         if let old = before?.pages, let delta = ChartDelta.between(old, now), !delta.isEmpty {
-            RehearsalLink.shared.send(.init(kind: .delta, fileId: item.attachment.fileId,
-                                            key: SharedEdits.key(pages: item.pages), delta: delta,
-                                            lyrics: nil, from: nearbyName))
+            let (pdfPages, sizes) = placement(item, count: now.count)
+            func marks(_ pick: (ChartDelta<ScoreChord>.Page) -> [ScoreChord]) -> [XFDF.Mark] {
+                delta.pages.flatMap { page in pick(page).map { CorrectionsBody.mark($0, part: page.index) } }
+            }
+            send(.delta, item, xfdf: XFDF.command(add: marks(\.added), modify: marks(\.changed),
+                                                  delete: marks(\.removed), pdfPages: pdfPages, sizes: sizes))
         }
         scheduleShare(item)
     }
@@ -2139,14 +2153,23 @@ final class ScoreStandModel: ObservableObject {
             case .want:
                 // Answered by whoever has the chords read.
                 if let pages = readChords(item) {
-                    send(.chords, item, pages: pages)
+                    let (pdfPages, sizes) = placement(item, count: pages.count)
+                    send(.chords, item, xfdf: XFDF.encode(CorrectionsBody.document(pages), pdfPages: pdfPages, sizes: sizes))
                 }
                 continue
             case .chords:
-                guard let pages = message.pages else { continue }
-                takeChords(item, pages: pages)
+                guard let document = message.xfdf.flatMap(XFDF.decode) else { continue }
+                takeChords(item, pages: document.pages.map { $0.map(CorrectionsBody.chord) })
             case .delta:
-                guard let delta = message.delta else { continue }
+                guard let command = message.xfdf.flatMap(XFDF.decodeCommand) else { continue }
+                let parts = Set((command.add + command.modify + command.delete).map(\.part))
+                let delta = ChartDelta<ScoreChord>(pages: parts.sorted().map { part in
+                    ChartDelta<ScoreChord>.Page(
+                        index: part,
+                        changed: command.modify.filter { $0.part == part }.map(CorrectionsBody.chord),
+                        added: command.add.filter { $0.part == part }.map(CorrectionsBody.chord),
+                        removed: command.delete.filter { $0.part == part }.map(CorrectionsBody.chord))
+                })
                 guard let current = readChords(item) else {
                     // Not read here yet: the room's reading, not a new one.
                     askRoom(item)
@@ -2158,7 +2181,8 @@ final class ScoreStandModel: ObservableObject {
                 // The whole chart, from the one who changed it.
                 if laid.missed > 0 { askRoom(item) }
             case .lyrics:
-                ScoreLyricFixStore.save(message.lyrics ?? [], for: item.id)
+                let fixes = message.xfdf.flatMap(XFDF.decode)?.lyrics.map(CorrectionsBody.lyric) ?? []
+                ScoreLyricFixStore.save(fixes, for: item.id)
                 charts[item.id] = nil
             }
             heardNearby[item.id] = Date()
@@ -2210,10 +2234,15 @@ final class ScoreStandModel: ObservableObject {
         }
     }
 
-    private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, pages: [[ScoreChord]]? = nil) {
+    private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, xfdf: String? = nil) {
         RehearsalLink.shared.send(.init(kind: kind, fileId: item.attachment.fileId,
-                                        key: SharedEdits.key(pages: item.pages), delta: nil,
-                                        lyrics: nil, pages: pages, from: nearbyName))
+                                        key: SharedEdits.key(pages: item.pages), xfdf: xfdf, from: nearbyName))
+    }
+
+    /// Which page of the file each page of the chart is, and its size in
+    /// points — where XFDF puts a chord for any PDF reader.
+    private func placement(_ item: ScoreStandItem, count: Int) -> (pdfPages: [Int], sizes: [CGSize]) {
+        (item.pages ?? Array(0..<count), states[item.id]?.pages.map(\.pointSize) ?? [])
     }
 
     // MARK: Sharing corrections
@@ -2259,7 +2288,10 @@ final class ScoreStandModel: ObservableObject {
         }
         let key = SharedEdits.key(pages: item.pages)
         let lyrics = ScoreLyricFixStore.load(item.id)
-        let result = await team.shareCorrection(fileId: item.attachment.fileId, part: key) { entry in
+        let sizes = states[item.id]?.pages.map(\.pointSize) ?? []
+        let result = await team.shareCorrection(fileId: item.attachment.fileId, part: key,
+                                                pdfPages: item.pages ?? Array(0..<saved.pages.count),
+                                                sizes: sizes) { entry in
             entry.chords = EditMerge.pages(base: saved.base, local: saved.pages, remote: entry.chords)
             let words = EditMerge.list(base: saved.lyricBase, local: lyrics, remote: entry.lyrics,
                                        same: { $0.samePlace($1) })
@@ -2461,6 +2493,115 @@ final class ScoreStandModel: ObservableObject {
             export = ExportFile(url: url)
         } catch {
             note = "PDF를 저장하지 못했습니다."
+        }
+    }
+
+    // MARK: For other devices and apps
+
+    /// 교정본: the chart's own file, its corrections laid on as standard PDF
+    /// annotations — FreeText, a white box with the chord — so any PDF app,
+    /// on any phone, shows them; and hides them, in those that can. In the
+    /// chart's own key: the printed chords under them are that key.
+    func exportAnnotated(_ item: ScoreStandItem) async {
+        isExporting = true
+        defer { isExporting = false }
+        guard let state = states[item.id], let data = ScoreFileCache.load(item.attachment.fileId) else {
+            note = "악보 파일이 이 기기에 아직 없습니다. 악보를 한 번 연 뒤 다시 해 보세요."
+            return
+        }
+        let source: PDFDocument
+        if let pdf = PDFDocument(data: data) {
+            source = pdf
+        } else if let image = UIImage(data: data), let page = PDFPage(image: image) {
+            source = PDFDocument()
+            source.insert(page, at: 0)
+        } else {
+            note = "이 파일로는 교정본을 만들 수 없습니다."
+            return
+        }
+        let wanted = item.pages ?? Array(0..<source.pageCount)
+        let out = PDFDocument()
+        for (part, index) in wanted.enumerated() {
+            guard let page = source.page(at: index)?.copy() as? PDFPage else { continue }
+            let bounds = page.bounds(for: .mediaBox)
+            let chords = state.pages.indices.contains(part) ? state.pages[part].chords : []
+            for chord in chords where chord.userAdded || chord.corrected == true || chord.offset != .zero {
+                let placed = chord.placed
+                let rect = CGRect(x: bounds.minX + placed.minX * bounds.width,
+                                  y: bounds.maxY - placed.maxY * bounds.height,
+                                  width: placed.width * bounds.width, height: placed.height * bounds.height)
+                    .insetBy(dx: -2, dy: -1)
+                let annotation = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
+                annotation.contents = chord.original
+                annotation.font = UIFont.boldSystemFont(ofSize: max(6, rect.height * 0.75))
+                annotation.fontColor = .black
+                annotation.color = .white
+                annotation.alignment = .center
+                let border = PDFBorder()
+                border.lineWidth = 0
+                annotation.border = border
+                annotation.userName = "SolaPraise"
+                page.addAnnotation(annotation)
+            }
+            out.insert(page, at: out.pageCount)
+        }
+        guard let pdf = out.dataRepresentation() else {
+            note = "교정본을 만들지 못했습니다."
+            return
+        }
+        share(pdf, named: baseName(item) + " (교정본).pdf")
+    }
+
+    /// The corrections alone, as XFDF — the file PDF apps import onto their
+    /// own copy of the chart.
+    func exportXFDF(_ item: ScoreStandItem) async {
+        guard let pages = readChords(item) else {
+            note = "코드를 읽은 뒤에 내보낼 수 있습니다."
+            return
+        }
+        let (pdfPages, sizes) = placement(item, count: pages.count)
+        let xml = XFDF.encode(CorrectionsBody.document(pages, lyrics: ScoreLyricFixStore.load(item.id)),
+                              pdfPages: pdfPages, sizes: sizes)
+        share(Data(xml.utf8), named: baseName(item) + ".xfdf")
+    }
+
+    /// The 코드표 as a ChordPro file, in the key on screen — what chord apps
+    /// on any phone open, transpose and print.
+    func exportChordPro(_ item: ScoreStandItem) async {
+        isExporting = true
+        defer { isExporting = false }
+        if charts[item.id] == nil { await loadChart(item) }
+        guard let systems = charts[item.id], !systems.isEmpty, let state = states[item.id] else {
+            note = "코드표를 만들 수 없는 악보입니다."
+            return
+        }
+        let text = ChordProSheet.text(chordPro(item, systems: systems, state: state))
+        share(Data(text.utf8), named: baseName(item) + ".chordpro")
+    }
+
+    /// The 코드표 as ChordPro sees it, in the key on screen.
+    func chordPro(_ item: ScoreStandItem, systems: [ScoreChart.System], state: State) -> ChordProSheet.Song {
+        let originals = Dictionary(state.pages.flatMap(\.chords).map { ($0.id, $0.original) }, uniquingKeysWith: { a, _ in a })
+        let shift = state.showsOriginal ? 0 : state.shift
+        let key = state.targetRoot.map { Self.name($0, flats: state.useFlats) }
+        return ChordProSheet.song(systems: systems,
+                                  chord: { id in originals[id].map { ScoreTransposer.symbol($0, by: shift, useFlats: state.useFlats) ?? $0 } },
+                                  title: item.song.isEmpty ? nil : PlanSongTitle.split(item.song).title,
+                                  key: key)
+    }
+
+    private func baseName(_ item: ScoreStandItem) -> String {
+        (item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension : PlanSongTitle.split(item.song).title)
+            .replacingOccurrences(of: "/", with: "-")
+    }
+
+    private func share(_ data: Data, named name: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try data.write(to: url, options: .atomic)
+            export = ExportFile(url: url)
+        } catch {
+            note = "파일을 만들지 못했습니다."
         }
     }
 

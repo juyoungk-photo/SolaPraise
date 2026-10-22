@@ -2054,7 +2054,7 @@ final class TeamStore: ObservableObject {
             let column = TeamSheet.columnLetter(layout.body)
             guard let cell = try? await client.read(sheetId: sheetId, range: "\(CorrectionsTab.tab)!\(column)\(row.row)"),
                   let text = cell.first?.first,
-                  let entry = try? JSONDecoder().decode(SharedEdits.Entry.self, from: Data(text.utf8)) else { return nil }
+                  let entry = CorrectionsBody.decode(text) else { return nil }
             return (CorrectionsTab.token(row.revision), entry)
         }
         guard let token = attachment(fileId: fileId)?.editsFileId,
@@ -2086,7 +2086,9 @@ final class TeamStore: ObservableObject {
     /// Writes a chart part's corrections into its row of the tab: the row
     /// as it is now, `change` laid on it, the next writing number — read
     /// back, and made again on top of anyone else's that landed first.
-    func shareCorrection(fileId: String, part: String,
+    /// - pdfPages, sizes: the chart's pages in the file and their size in
+    ///   points, for the XFDF rectangles other PDF readers place chords by.
+    func shareCorrection(fileId: String, part: String, pdfPages: [Int] = [], sizes: [CGSize] = [],
                          _ change: (inout SharedEdits.Entry) -> Void) async -> Result<SharedResult, ShareEditsError> {
         guard let client, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
         let item = attachment(fileId: fileId)
@@ -2104,7 +2106,7 @@ final class TeamStore: ObservableObject {
                 if let found {
                     let range = "\(CorrectionsTab.tab)!\(TeamSheet.columnLetter(layout.body))\(found.row)"
                     if let text = (try? await client.read(sheetId: sheetId, range: range))?.first?.first,
-                       let kept = try? JSONDecoder().decode(SharedEdits.Entry.self, from: Data(text.utf8)) {
+                       let kept = CorrectionsBody.decode(text) {
                         entry = kept
                     }
                 } else if let token = item?.editsFileId, let file = await SharedEdits.fetch(token),
@@ -2113,8 +2115,8 @@ final class TeamStore: ObservableObject {
                     entry = before
                 }
                 change(&entry)
-                let body = String(decoding: try JSONEncoder().encode(entry), as: UTF8.self)
-                guard body.count <= CorrectionsTab.largestBody else {
+                guard let body = CorrectionsBody.encode(entry, part: part, pdfPages: pdfPages, sizes: sizes),
+                      body.count <= CorrectionsTab.largestBody else {
                     return .failure(.failed("교정이 시트 한 칸보다 커서 공유하지 못했습니다"))
                 }
                 let revision = (found?.revision ?? 0) + 1

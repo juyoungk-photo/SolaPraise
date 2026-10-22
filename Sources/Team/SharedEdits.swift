@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 enum SharedEdits {
 
@@ -88,4 +89,61 @@ enum SharedEdits {
     }
 
     private static let mineKey = "sharedEdits.mine"
+}
+
+/// A chart's corrections as the 「교정」 tab holds them: XFDF (the standard
+/// form of a PDF's annotations) for a chart's chords and lyric fixes; the
+/// small page map of a 콘티 file as JSON, which is no annotation.
+enum CorrectionsBody {
+
+    static func encode(_ entry: SharedEdits.Entry, part: String, pdfPages: [Int], sizes: [CGSize]) -> String? {
+        if part == CorrectionsTab.pageMapPart {
+            return (try? JSONEncoder().encode(entry)).map { String(decoding: $0, as: UTF8.self) }
+        }
+        return XFDF.encode(document(entry.chords ?? [], lyrics: entry.lyrics ?? []), pdfPages: pdfPages, sizes: sizes)
+    }
+
+    /// XFDF, or the JSON this tab held in its first version.
+    static func decode(_ text: String) -> SharedEdits.Entry? {
+        if let document = XFDF.decode(text) {
+            return SharedEdits.Entry(chords: document.pages.map { $0.map(chord) },
+                                     lyrics: document.lyrics.isEmpty ? nil : document.lyrics.map(lyric))
+        }
+        return try? JSONDecoder().decode(SharedEdits.Entry.self, from: Data(text.utf8))
+    }
+
+    static func document(_ pages: [[ScoreChord]], lyrics: [LyricFix] = []) -> XFDF.Document {
+        XFDF.Document(pages: pages.enumerated().map { part, chords in chords.map { mark($0, part: part) } },
+                      lyrics: lyrics.map { .init(system: $0.system, bar: $0.bar, cell: $0.cell, verse: $0.verse,
+                                                 from: $0.from, to: $0.to) })
+    }
+
+    static func mark(_ chord: ScoreChord, part: Int) -> XFDF.Mark {
+        XFDF.Mark(name: chord.id.uuidString, part: part, box: chord.box, offset: chord.offset,
+                  text: chord.original, userAdded: chord.userAdded, corrected: chord.corrected)
+    }
+
+    static func chord(_ mark: XFDF.Mark) -> ScoreChord {
+        var chord = ScoreChord(original: mark.text, box: mark.box)
+        chord.id = id(mark.name)
+        chord.offset = mark.offset
+        chord.userAdded = mark.userAdded
+        chord.corrected = mark.corrected
+        return chord
+    }
+
+    static func lyric(_ fix: XFDF.Lyric) -> LyricFix {
+        LyricFix(system: fix.system, bar: fix.bar, cell: fix.cell, verse: fix.verse, from: fix.from, to: fix.to)
+    }
+
+    /// The annotation's name as this app's chord id — the same every time
+    /// for a name another app gave, so its chords keep one id here.
+    static func id(_ name: String) -> UUID {
+        if let id = UUID(uuidString: name) { return id }
+        var bytes = Array(SHA256.hash(data: Data(name.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
 }
