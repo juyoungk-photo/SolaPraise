@@ -25,11 +25,18 @@ struct SongTitleReviewSheet: View {
     /// next step is 곡 합치기 — never replacing them unasked.
     var existing: [TeamSong] = []
     @State private var merging = false
+    /// The songs to merge, as they stood when 다음 was pressed.
+    @State private var incoming: [TeamSong] = []
     /// The songs to write, with any title chosen here.
     let onSend: ([TeamSong]) -> Void
     let onCancel: () -> Void
 
     @State private var titles: [String] = []
+    /// Each song's title read every way, once: reading a video's title is
+    /// regular expressions over it, and the rows are drawn again on every
+    /// keystroke and check — for a playlist of a few hundred, read again
+    /// each time, the screen never finished drawing.
+    @State private var readings: [Reading] = []
     /// The songs taken, by position. All, until some are left out.
     @State private var taken: Set<Int> = []
     @State private var started = false
@@ -60,7 +67,7 @@ struct SongTitleReviewSheet: View {
                 }
             }
             .navigationDestination(isPresented: $merging) {
-                MergeSongsView(existing: existing, incoming: chosen(), onSend: onSend)
+                MergeSongsView(existing: existing, incoming: incoming, onSend: onSend)
             }
             .navigationTitle("곡 제목 확인")
             .navigationBarTitleDisplayMode(.inline)
@@ -68,7 +75,9 @@ struct SongTitleReviewSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("취소", action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(existing.isEmpty ? "\(count)곡 보내기" : "다음") {
-                        if existing.isEmpty { onSend(chosen()) } else { merging = true }
+                        let songs = chosen()
+                        remember(songs)
+                        if existing.isEmpty { onSend(songs) } else { incoming = songs; merging = true }
                     }
                     .disabled(count == 0 || taken.contains { titles[$0].trimmingCharacters(in: .whitespaces).isEmpty })
                 }
@@ -77,14 +86,20 @@ struct SongTitleReviewSheet: View {
         .onAppear {
             guard !started else { return }
             started = true
-            titles = songs.map { remembered($0) ?? PlanSongTitle.forSheet($0.title, channel: $0.channel).title }
+            readings = songs.map { song in
+                Reading(fresh: PlanSongTitle.forSheet(song.title, channel: song.channel).title,
+                        remembered: remembered(song),
+                        options: PlanSongTitle.candidates(song.title, channel: song.channel))
+            }
+            titles = readings.map { $0.remembered ?? $0.fresh }
             taken = Set(songs.indices)
         }
     }
 
     @ViewBuilder
     private func row(_ index: Int, _ song: TeamSong) -> some View {
-        if titles.indices.contains(index) {
+        if titles.indices.contains(index), readings.indices.contains(index) {
+            let reading = readings[index]
             let isTaken = taken.contains(index)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -102,8 +117,7 @@ struct SongTitleReviewSheet: View {
                         .foregroundStyle(isTaken ? .primary : .secondary)
                         .font(.body.weight(.semibold))
                         .textInputAutocapitalization(.never)
-                    let options = PlanSongTitle.candidates(song.title, channel: song.channel)
-                        .filter { $0 != titles[index] }
+                    let options = reading.options.filter { $0 != titles[index] }
                     if !options.isEmpty {
                         Menu {
                             ForEach(options, id: \.self) { option in
@@ -120,8 +134,7 @@ struct SongTitleReviewSheet: View {
                     }
                 }
                 // Said before for this video, so not a fresh guess.
-                if let before = remembered(song), before == titles[index],
-                   before != PlanSongTitle.forSheet(song.title, channel: song.channel).title {
+                if let before = reading.remembered, before == titles[index], before != reading.fresh {
                     Label("지난번에 정한 이름", systemImage: "clock.arrow.circlepath")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
@@ -141,17 +154,39 @@ struct SongTitleReviewSheet: View {
     /// The songs taken, numbered again in the playlist's order. A title
     /// changed here is the song's; one left as read is not marked, so it is
     /// written exactly as before.
+    ///
+    /// Reads only: it once kept each title as it went, from inside the
+    /// view's body — a write to UserDefaults that redrew the screen, which
+    /// ran it again, and the app froze on 재생목록에서 찬양 채우기.
     private func chosen() -> [TeamSong] {
         songs.indices.filter(taken.contains).enumerated().map { position, index in
             let song = songs[index]
             let title = titles[index].trimmingCharacters(in: .whitespaces)
-            let changed = title != PlanSongTitle.forSheet(song.title, channel: song.channel).title
-            // Kept by video, for the player's searches and the rest
-            // (SongTitleChoices); a title put back as read forgets it.
-            if let id = song.videoId { SongTitleChoices.set(changed ? title : nil, for: id) }
+            let fresh = readings.indices.contains(index) ? readings[index].fresh
+                : PlanSongTitle.forSheet(song.title, channel: song.channel).title
+            let changed = title != fresh
             return TeamSong(order: position + 1, title: song.title, url: song.url, key: song.key,
                             transpose: song.transpose, notes: song.notes, channel: song.channel,
                             chosenTitle: changed ? title : nil)
         }
+    }
+
+    /// Kept by video, for the player's searches and the rest
+    /// (SongTitleChoices); a title put back as read forgets it. Once, when
+    /// the songs are sent on.
+    private func remember(_ songs: [TeamSong]) {
+        for song in songs {
+            guard let id = song.videoId else { continue }
+            SongTitleChoices.set(song.chosenTitle, for: id)
+        }
+    }
+
+    struct Reading {
+        /// The title as read out of the video's.
+        let fresh: String
+        /// The title said for it before, here or on the sheet.
+        let remembered: String?
+        /// Other readings, for 「다른 이름」.
+        let options: [String]
     }
 }

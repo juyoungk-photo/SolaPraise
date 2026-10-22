@@ -138,6 +138,8 @@ struct ServicePrepView: View {
         let songs: [TeamSong]
         /// What the service already has on the Songs tab, to merge with.
         var existing: [TeamSong] = []
+        /// The title each video carries on the sheet, read once.
+        var sheetTitles: [String: String] = [:]
         let id = UUID()
     }
     @State private var exportingTo: TeamService?
@@ -278,7 +280,7 @@ struct ServicePrepView: View {
             .sheet(item: $reviewing) { review in
                 SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs,
                                      remembered: { song in
-                                         song.videoId.flatMap { SongTitleChoices.title(for: $0) ?? team.sheetTitle(forVideo: $0) }
+                                         song.videoId.flatMap { SongTitleChoices.title(for: $0) ?? review.sheetTitles[$0] }
                                      },
                                      existing: review.existing,
                                      onSend: { songs in
@@ -1877,7 +1879,8 @@ struct ServicePrepView: View {
         }
         #endif
         try? await Task.sleep(for: .milliseconds(450))
-        reviewing = PushReview(service: service, playlistTitle: title, songs: songs, existing: existing)
+        reviewing = PushReview(service: service, playlistTitle: title, songs: songs, existing: existing,
+                               sheetTitles: team.sheetTitles())
     }
 
     /// The checked songs, onto the Songs tab for this service.

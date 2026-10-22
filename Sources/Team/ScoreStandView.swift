@@ -301,7 +301,7 @@ struct ScoreStandView: View {
 
             if let item {
                 VStack(spacing: 0) {
-                    if showsChrome { header(item).transition(.move(edge: .top).combined(with: .opacity)) }
+                    if showsChrome { Built { header(item) }.transition(.move(edge: .top).combined(with: .opacity)) }
                     songPager
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -320,7 +320,7 @@ struct ScoreStandView: View {
                             .padding(.vertical, 6)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if showsChrome { controls(item).transition(.move(edge: .bottom).combined(with: .opacity)) }
+                    if showsChrome { Built { controls(item) }.transition(.move(edge: .bottom).combined(with: .opacity)) }
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
@@ -992,7 +992,7 @@ struct ScoreStandView: View {
                     editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
                 }
                 Spacer(minLength: 76)
-                toolGroup(item)
+                Built { toolGroup(item) }
                 songNav()
             }
             .padding(.horizontal, 16)
@@ -1013,10 +1013,10 @@ struct ScoreStandView: View {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 10) {
                             Spacer(minLength: 0)
-                            toolGroup(item)
+                            Built { toolGroup(item) }
                         }
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) { toolGroup(item) }
+                            HStack(spacing: 10) { Built { toolGroup(item) } }
                         }
                     }
                     // Outside the scroll: the arrows never scroll away.
@@ -1179,64 +1179,20 @@ struct ScoreStandView: View {
         // Not while editing — sharing an edit in progress is what 완료 then
         // 공유 is for — but their place is kept, so 완료 sits exactly where
         // 편집 did.
-        Group {
-        // One song, or the whole 콘티 as one file — to share, or keep in
-        // Files: the share sheet offers both.
-        let shareLabel = pill(model.isExporting ? AnyView(ProgressView().tint(.white))
-                                                : AnyView(Image(systemName: "square.and.arrow.up")))
-        // As it is on the stand — the key, every correction — kept where
-        // the person wants it: Photos a page an image, Files a PDF.
-        Menu {
-            Section(item.song.isEmpty ? "현재 악보" : PlanSongTitle.split(item.song).title) {
-                Button { Task { await model.saveToPhotos(item) } } label: {
-                    Label("사진에 저장", systemImage: "photo.on.rectangle")
-                }
-                Button { Task { await model.saveToFiles(item, notice: notices[item.song]) } } label: {
-                    Label("파일에 저장", systemImage: "folder")
-                }
-                Button { Task { await model.exportPDF(item, notice: notices[item.song]) } } label: {
-                    Label("공유…", systemImage: "square.and.arrow.up")
-                }
-            }
-            // For phones without this app, and other chord and PDF apps.
-            Section("다른 기기·앱에서 보기") {
-                Button { Task { await model.exportAnnotated(item) } } label: {
-                    Label("교정본 PDF — 원래 키, 고친 코드는 주석", systemImage: "doc.richtext")
-                }
-                Button { Task { await model.exportChordPro(item) } } label: {
-                    Label("코드표 ChordPro — 지금 키", systemImage: "music.note.list")
-                }
-                Button { Task { await model.exportXFDF(item) } } label: {
-                    Label("교정 XFDF — PDF 앱에서 가져오기", systemImage: "doc.badge.gearshape")
-                }
-            }
-            .disabled(state?.isReady != true)
-            // The page as it is will do: unread, it is the chart as printed.
-            .disabled(state?.isReady != true)
-            if items.count > 1 {
-                Button {
-                    Task { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
-                } label: {
-                    Label(setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로",
-                          systemImage: "doc.on.doc")
-                }
-            }
-        } label: { shareLabel }
-        .menuOrder(.fixed)
-        .disabled(model.isExporting)
-        .accessibilityLabel("저장·공유")
-
-        if let uploadTransposed {
-            Button {
-                Task { await model.upload(item, using: uploadTransposed) }
-            } label: {
-                pill(model.isUploading ? AnyView(ProgressView().tint(.white))
-                                       : AnyView(Image(systemName: "icloud.and.arrow.up")))
-            }
-            .disabled(!ready || model.isUploading || (state?.shift ?? 0) == 0)
-            .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
-        }
-        }
+        // A view of its own, not built here: the stand's body, its bar and
+        // this menu were built as one value nested many calls deep, and on
+        // a Debug build opened from 작업실 that ran the main thread out of
+        // stack. Its own body is built apart, at the top of the stack.
+        StandShareMenu(model: model, item: item, isReady: state?.isReady == true, ready: ready,
+                       shift: state?.shift ?? 0, notice: notices[item.song],
+                       setLabel: items.count > 1
+                           ? (setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로")
+                           : nil,
+                       exportSet: {
+                           await model.exportSet(contiItems, title: setTitle, fileName: setFileName,
+                                                 captions: setCaptions, notices: notices, upload: uploadSet)
+                       },
+                       uploadTransposed: uploadTransposed)
         .opacity(editing ? 0 : 1)
         .allowsHitTesting(!editing)
         .accessibilityHidden(editing)
@@ -1276,11 +1232,7 @@ struct ScoreStandView: View {
     }
 
     private func pill<V: View>(_ content: V, active: Bool = false, wide: Bool = false) -> some View {
-        content
-            .font(.system(size: 18, weight: .semibold))
-            .frame(width: wide ? 60 : 44, height: 40)
-            .background(active ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 10))
+        standPill(content, active: active, wide: wide)
     }
 
     private func go(_ delta: Int) {
@@ -3237,4 +3189,96 @@ struct PageInk {
     var othersRich: [RichPage] = []
     var mine: [XFDF.Ink] = []
     var mineDrawing: RichPage? = nil
+}
+
+/// A part of the stand built in a body of its own.
+///
+/// WHY: SwiftUI builds a view's body as one value, every nested stack and
+/// modifier inside it; on a Debug build each level keeps its share on the
+/// thread's stack. The stand — header, pages, bar, menus — built as one
+/// came to most of the main thread's 1 MB, and opened from 작업실 it ran
+/// out and the app quit. A part built here is built when SwiftUI comes to
+/// it, apart from its parent, not inside it.
+private struct Built<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
+}
+
+/// A button's face on the stand's bar.
+private func standPill<V: View>(_ content: V, active: Bool = false, wide: Bool = false) -> some View {
+    content
+        .font(.system(size: 18, weight: .semibold))
+        .frame(width: wide ? 60 : 44, height: 40)
+        .background(active ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 10))
+}
+
+/// 저장·공유, and the transposed chart up to Drive: the end of the stand's bar.
+private struct StandShareMenu: View {
+    @ObservedObject var model: ScoreStandModel
+    let item: ScoreStandItem
+    let isReady: Bool
+    /// Read, with chords on it.
+    let ready: Bool
+    let shift: Int
+    let notice: String?
+    /// The whole 콘티 as one file, when there is more than one song.
+    let setLabel: String?
+    let exportSet: () async -> Void
+    let uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)?
+
+    var body: some View {
+        // One song, or the whole 콘티 as one file — to share, or keep in
+        // Files: the share sheet offers both.
+        let shareLabel = standPill(model.isExporting ? AnyView(ProgressView().tint(.white))
+                                                     : AnyView(Image(systemName: "square.and.arrow.up")))
+        // As it is on the stand — the key, every correction — kept where
+        // the person wants it: Photos a page an image, Files a PDF.
+        Menu {
+            Section(item.song.isEmpty ? "현재 악보" : PlanSongTitle.split(item.song).title) {
+                Button { Task { await model.saveToPhotos(item) } } label: {
+                    Label("사진에 저장", systemImage: "photo.on.rectangle")
+                }
+                Button { Task { await model.saveToFiles(item, notice: notice) } } label: {
+                    Label("파일에 저장", systemImage: "folder")
+                }
+                Button { Task { await model.exportPDF(item, notice: notice) } } label: {
+                    Label("공유…", systemImage: "square.and.arrow.up")
+                }
+            }
+            // For phones without this app, and other chord and PDF apps.
+            Section("다른 기기·앱에서 보기") {
+                Button { Task { await model.exportAnnotated(item) } } label: {
+                    Label("교정본 PDF — 원래 키, 고친 코드는 주석", systemImage: "doc.richtext")
+                }
+                Button { Task { await model.exportChordPro(item) } } label: {
+                    Label("코드표 ChordPro — 지금 키", systemImage: "music.note.list")
+                }
+                Button { Task { await model.exportXFDF(item) } } label: {
+                    Label("교정 XFDF — PDF 앱에서 가져오기", systemImage: "doc.badge.gearshape")
+                }
+            }
+            // The page as it is will do: unread, it is the chart as printed.
+            .disabled(!isReady)
+            if let setLabel {
+                Button { Task { await exportSet() } } label: {
+                    Label(setLabel, systemImage: "doc.on.doc")
+                }
+            }
+        } label: { shareLabel }
+        .menuOrder(.fixed)
+        .disabled(model.isExporting)
+        .accessibilityLabel("저장·공유")
+
+        if let uploadTransposed {
+            Button {
+                Task { await model.upload(item, using: uploadTransposed) }
+            } label: {
+                standPill(model.isUploading ? AnyView(ProgressView().tint(.white))
+                                            : AnyView(Image(systemName: "icloud.and.arrow.up")))
+            }
+            .disabled(!ready || model.isUploading || shift == 0)
+            .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
+        }
+    }
 }

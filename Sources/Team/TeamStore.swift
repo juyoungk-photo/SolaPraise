@@ -600,14 +600,24 @@ final class TeamStore: ObservableObject {
     /// The song's title as the team last wrote it for this video, as the
     /// Songs tab carries it. A title fixed by hand once is the title.
     func sheetTitle(forVideo id: String) -> String? {
+        sheetTitles(only: id)[id]
+    }
+
+    /// Every video's title on the sheet, from the service nearest today
+    /// that has it — read in one pass, for a list of songs at once.
+    func sheetTitles(only id: String? = nil) -> [String: String] {
         let today = Calendar.current.startOfDay(for: Date())
+        var titles: [String: String] = [:]
+        var settled = Set<String>()
         for service in services.sorted(by: { abs($0.date.timeIntervalSince(today)) < abs($1.date.timeIntervalSince(today)) }) {
-            if let item = plan(for: service).first(where: { $0.kind == .song && $0.videoId == id }) {
+            for item in plan(for: service) where item.kind == .song {
+                guard let video = item.videoId, id == nil || video == id, settled.insert(video).inserted else { continue }
                 let title = PlanSongTitle.forSheet(item.title).title
-                return title.isEmpty ? nil : title
+                if !title.isEmpty { titles[video] = title }
             }
+            if let id, settled.contains(id) { break }
         }
-        return nil
+        return titles
     }
 
     /// The charts the team attached to a song on the most recent earlier
