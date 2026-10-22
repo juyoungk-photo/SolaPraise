@@ -49,6 +49,11 @@ final class RehearsalLink: NSObject, ObservableObject {
             /// A chart's chords, all of them: the answer to `want`, so the
             /// room works from one reading rather than one per device.
             case chords
+            /// 「This is the reading I have」, as a digest: sent when a chart
+            /// is open and the room changes, so two stands that read the
+            /// chart each on their own before they met find out, and one
+            /// takes the other's.
+            case digest
         }
         var kind: Kind
         /// The chart: the attachment's file id and which of its pages.
@@ -58,6 +63,11 @@ final class RehearsalLink: NSObject, ObservableObject {
         /// an <add>/<modify>/<delete> command for a change, a whole
         /// document for a chart's chords or its lyric fixes.
         var xfdf: String? = nil
+        var digest: String? = nil
+        /// The device it is from, and — for an answer or a request meant for
+        /// one device — the device it is for.
+        var sender: String = ""
+        var to: String? = nil
         /// Who fixed it, for the line that says so.
         var from: String
     }
@@ -121,7 +131,12 @@ final class RehearsalLink: NSObject, ObservableObject {
     }
 
     /// To every device connected, at once and in order.
+    /// This device, as the room knows it.
+    var me_: String { instance }
+
     func send(_ message: Message) {
+        var message = message
+        message.sender = instance
         guard let data = try? JSONEncoder().encode(message) else { return }
         for session in sessions where !session.connectedPeers.isEmpty {
             try? session.send(data, toPeers: session.connectedPeers, with: .reliable)

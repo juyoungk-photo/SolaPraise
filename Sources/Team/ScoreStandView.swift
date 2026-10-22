@@ -18,6 +18,7 @@
 
 import SwiftUI
 import Combine
+import CryptoKit
 import Photos
 import UIKit
 import PDFKit
@@ -1563,7 +1564,7 @@ final class ScoreStandModel: ObservableObject {
             ScoreEditStore.write(shared, for: item.id)
             ScoreLyricFixStore.save(lyrics, for: item.id)
             saved = shared
-            shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
+            shareStatus[item.id] = "\(fetched.by ?? "팀원") 님이 고친 코드를 받았습니다"
         }
         if let old = saved, !old.edited, old.version != ScoreRecognition.version { saved = nil }
         // The pages only: what is shown at once. Chords come from a kept
@@ -2110,6 +2111,9 @@ final class ScoreStandModel: ObservableObject {
     /// chart of the set, so a change to a song not on screen lands too.
     func joinRoom(items: [ScoreStandItem], team sheetId: String?) {
         for item in items where knownItems[item.id] == nil { knownItems[item.id] = item }
+        // Fixes never shared — to any song of the set, not only the one on
+        // screen: sent now. They used to wait for that song to be opened.
+        for item in items where ScoreEditStore.load(item.id)?.dirty == true { scheduleShare(item) }
         guard linkToken == nil else { return }
         RehearsalLink.shared.start(team: RehearsalLink.teamTag(sheetId), name: nearbyName)
         linkToken = RehearsalLink.shared.listen { [weak self] message in self?.heard(message) }
@@ -2135,9 +2139,14 @@ final class ScoreStandModel: ObservableObject {
     /// seconds, on the one change that most needed to be seen at once.
     private func readIfInRoom() {
         guard !RehearsalLink.shared.peers.isEmpty, let item = onScreen,
-              states[item.id]?.isReady == true, states[item.id]?.isRead != true,
-              states[item.id]?.isReading != true else { return }
-        askRoom(item)
+              states[item.id]?.isReady == true, states[item.id]?.isReading != true else { return }
+        // Read here already: say which reading, so a stand that read it on
+        // its own before the room met finds out.
+        if let pages = readChords(item) {
+            send(.digest, item, digest: Self.digest(pages))
+        } else {
+            askRoom(item)
+        }
     }
 
     /// One printed chord on two devices: the same id, or — read on each
@@ -2149,13 +2158,23 @@ final class ScoreStandModel: ObservableObject {
     private func heard(_ message: RehearsalLink.Message) {
         for item in knownItems.values
         where item.attachment.fileId == message.fileId && SharedEdits.key(pages: item.pages) == message.key {
+            // Meant for another device: not this one's to answer or take.
+            if let to = message.to, to != RehearsalLink.shared.me_ { continue }
             switch message.kind {
             case .want:
                 // Answered by whoever has the chords read.
                 if let pages = readChords(item) {
                     let (pdfPages, sizes) = placement(item, count: pages.count)
-                    send(.chords, item, xfdf: XFDF.encode(CorrectionsBody.document(pages), pdfPages: pdfPages, sizes: sizes))
+                    send(.chords, item, xfdf: XFDF.encode(CorrectionsBody.document(pages), pdfPages: pdfPages, sizes: sizes),
+                         to: message.sender)
                 }
+                continue
+            case .digest:
+                // Two readings of one chart in the room: the device that
+                // sorts later takes the other's, so the room ends on one.
+                guard let pages = readChords(item), let theirs = message.digest,
+                      theirs != Self.digest(pages), RehearsalLink.shared.me_ > message.sender else { continue }
+                send(.want, item, to: message.sender)
                 continue
             case .chords:
                 guard let document = message.xfdf.flatMap(XFDF.decode) else { continue }
@@ -2234,9 +2253,20 @@ final class ScoreStandModel: ObservableObject {
         }
     }
 
-    private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, xfdf: String? = nil) {
+    private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, xfdf: String? = nil,
+                      digest: String? = nil, to: String? = nil) {
         RehearsalLink.shared.send(.init(kind: kind, fileId: item.attachment.fileId,
-                                        key: SharedEdits.key(pages: item.pages), xfdf: xfdf, from: nearbyName))
+                                        key: SharedEdits.key(pages: item.pages), xfdf: xfdf, digest: digest,
+                                        to: to, from: nearbyName))
+    }
+
+    /// A reading, as a few characters the same on every device that has
+    /// it: each chord's text and place, in order.
+    static func digest(_ pages: [[ScoreChord]]) -> String {
+        let text = pages.enumerated().map { page, chords in
+            chords.map { "\(page):\($0.original)@\(Int($0.box.midX * 200)),\(Int($0.box.midY * 200))" }.sorted().joined(separator: ";")
+        }.joined(separator: "|")
+        return SHA256.hash(data: Data(text.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Which page of the file each page of the chart is, and its size in
@@ -2354,9 +2384,17 @@ final class ScoreStandModel: ObservableObject {
     /// fixing the bridge and the people reading it are looking at it at
     /// the same moment.
     func watchTeam() async {
+        var misses = 0
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, let team, let ids = await team.correctionRevisions() else { continue }
+            // Every 3 seconds alone; every 10 with the room connected, whose
+            // changes come straight from the stands nearby. Further apart
+            // after a failed look — Google refuses a team of ten looking
+            // every 3 seconds at once — and back once one goes through.
+            let pace: Double = RehearsalLink.shared.peers.isEmpty ? 3 : 10
+            try? await Task.sleep(for: .seconds(min(30, pace * pow(2, Double(misses)))))
+            guard !Task.isCancelled, let team else { continue }
+            guard let ids = await team.correctionRevisions() else { misses = min(misses + 1, 4); continue }
+            misses = 0
             for (id, item) in knownItems where states[id]?.isReady == true {
                 let part = SharedEdits.key(pages: item.pages)
                 guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)]
@@ -2371,13 +2409,13 @@ final class ScoreStandModel: ObservableObject {
                     if var kept = saved { kept.sharedFrom = remote; ScoreEditStore.write(kept, for: id) }
                     continue
                 }
-                receive(item, entry: fetched.entry, revision: fetched.revision, saved: saved)
+                receive(item, entry: fetched.entry, revision: fetched.revision, by: fetched.by, saved: saved)
             }
         }
     }
 
     private func receive(_ item: ScoreStandItem, entry: SharedEdits.Entry, revision fileId: String,
-                         saved: ScoreEditStore.Saved?) {
+                         by who: String? = nil, saved: ScoreEditStore.Saved?) {
         guard let pages = entry.chords else {
             if var kept = saved { kept.sharedFrom = fileId; ScoreEditStore.write(kept, for: item.id) }
             return
@@ -2393,10 +2431,11 @@ final class ScoreStandModel: ObservableObject {
         adopt(item, pages: pages)
         // Already had from the room: the sheet's copy only settles the ids.
         if let heard = heardNearby[item.id], Date().timeIntervalSince(heard) < 30 { return }
-        shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
+        let name = who ?? "팀원"
+        shareStatus[item.id] = "\(name) 님이 고친 코드를 받았습니다"
         let song = item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension
                                      : PlanSongTitle.split(item.song).title
-        Toast.shared.show("「\(song)」 팀원이 고친 악보를 받았습니다", symbol: "arrow.down.circle.fill", tint: .blue)
+        Toast.shared.show("「\(song)」 \(name) 님이 고친 악보를 받았습니다", symbol: "arrow.down.circle.fill", tint: .blue)
     }
 
     private func update(_ item: ScoreStandItem, _ change: (inout State) -> Void) {

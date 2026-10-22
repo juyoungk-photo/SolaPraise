@@ -1995,6 +1995,18 @@ final class TeamStore: ObservableObject {
         if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
             return CorrectionsTab.token(row.revision)
         }
+        // Pages assigned again since: the rows that hold them, as one
+        // writing (fetchCorrection puts them together).
+        if let wanted = Self.pageList(part) {
+            let held = correctionRows.filter { key, _ in
+                key.hasPrefix(fileId + "|pages:")
+                    && !Set(Self.pageList(String(key.dropFirst(fileId.count + 1))) ?? []).isDisjoint(with: wanted)
+            }
+            if !held.isEmpty {
+                return "remap#" + wanted.map(String.init).joined(separator: ",") + "@"
+                    + held.values.map { "\($0.row).\($0.revision)" }.sorted().joined(separator: ",")
+            }
+        }
         return attachment(fileId: fileId)?.editsFileId
     }
 
@@ -2047,15 +2059,30 @@ final class TeamStore: ObservableObject {
     /// A chart part's corrections and the writing they are: its row of the
     /// tab, else the Drive file of before — which is then moved into the
     /// tab, so the next reader finds it there.
-    func fetchCorrection(fileId: String, part: String) async -> (revision: String, entry: SharedEdits.Entry)? {
+    func fetchCorrection(fileId: String, part: String) async -> (revision: String, entry: SharedEdits.Entry, by: String?)? {
         guard let client, let sheetId = TeamSheetSource.current else { return nil }
         if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
-            let layout = CorrectionsTab.Layout.standard
-            let column = TeamSheet.columnLetter(layout.body)
-            guard let cell = try? await client.read(sheetId: sheetId, range: "\(CorrectionsTab.tab)!\(column)\(row.row)"),
-                  let text = cell.first?.first,
-                  let entry = CorrectionsBody.decode(text) else { return nil }
-            return (CorrectionsTab.token(row.revision), entry)
+            guard let read = await correctionRow(row.row, sheetId: sheetId, client: client) else { return nil }
+            return (CorrectionsTab.token(row.revision), read.entry, read.by)
+        }
+        // A song of a 콘티 file whose pages were assigned again since it was
+        // corrected: its corrections are under the old page list. Taken page
+        // by page from whichever rows hold them, rather than lost.
+        if let wanted = Self.pageList(part) {
+            var byPage: [Int: [ScoreChord]] = [:]
+            var who: String?
+            for (key, row) in correctionRows where key.hasPrefix(fileId + "|pages:") {
+                guard let theirs = Self.pageList(String(key.dropFirst(fileId.count + 1))),
+                      !Set(theirs).isDisjoint(with: wanted),
+                      let read = await correctionRow(row.row, sheetId: sheetId, client: client),
+                      let chords = read.entry.chords else { continue }
+                for (index, page) in theirs.enumerated() where chords.indices.contains(index) { byPage[page] = chords[index] }
+                who = read.by
+            }
+            if !byPage.isEmpty {
+                return (knownRevision(fileId: fileId, part: part) ?? "remap",
+                        SharedEdits.Entry(chords: wanted.map { byPage[$0] ?? [] }), who)
+            }
         }
         guard let token = attachment(fileId: fileId)?.editsFileId,
               let file = await SharedEdits.fetch(token),
@@ -2063,7 +2090,24 @@ final class TeamStore: ObservableObject {
         if !isReadOnly {
             Task { _ = await self.shareCorrection(fileId: fileId, part: part) { $0 = $0.chords == nil && $0.pages == nil ? entry : $0 } }
         }
-        return (token, entry)
+        return (token, entry, nil)
+    }
+
+    /// A row's corrections and who wrote them.
+    private func correctionRow(_ row: Int, sheetId: String, client: SheetsClient) async -> (entry: SharedEdits.Entry, by: String?)? {
+        let layout = CorrectionsTab.Layout.standard
+        let range = "\(CorrectionsTab.tab)!\(TeamSheet.columnLetter(layout.body))\(row):\(TeamSheet.columnLetter(layout.by))\(row)"
+        guard let cells = (try? await client.read(sheetId: sheetId, range: range))?.first,
+              let text = cells.first, let entry = CorrectionsBody.decode(text) else { return nil }
+        let by = cells.count > layout.by - layout.body ? cells[layout.by - layout.body] : ""
+        return (entry, by.isEmpty ? nil : by)
+    }
+
+    /// 「pages:2,3」 → [2, 3].
+    private static func pageList(_ part: String) -> [Int]? {
+        guard part.hasPrefix("pages:") else { return nil }
+        let pages = part.dropFirst(6).split(separator: ",").compactMap { Int($0) }
+        return pages.isEmpty ? nil : pages
     }
 
     /// The tab, made the first time and hidden: it is the app's, written
@@ -2156,6 +2200,21 @@ final class TeamStore: ObservableObject {
         }
     }
 
+    /// A chart taken off: its rows of the 교정 tab go with it, rather than
+    /// staying as corrections to a file nobody can open.
+    private func clearCorrections(of fileId: String, sheetId: String, client: SheetsClient) async {
+        guard hasCorrectionsTab else { return }
+        _ = await correctionRevisions()
+        let width = CorrectionsTab.header.count
+        let last = TeamSheet.columnLetter(width - 1)
+        let rows = correctionRows.filter { $0.key.hasPrefix(fileId + "|") }
+        guard !rows.isEmpty else { return }
+        try? await client.batchWrite(sheetId: sheetId, updates: rows.values.map { row in
+            ("\(CorrectionsTab.tab)!A\(row.row):\(last)\(row.row)", [[String](repeating: "", count: width)])
+        })
+        for key in rows.keys { correctionRows[key] = nil }
+    }
+
     /// Which page of a 콘티 file is which song, as set by hand, for the team.
     func sharePageAssignment(fileId: String, pages: [Int: String]) async -> Result<String, ShareEditsError> {
         await shareCorrection(fileId: fileId, part: CorrectionsTab.pageMapPart) { entry in
@@ -2228,6 +2287,7 @@ final class TeamStore: ObservableObject {
             try? await drive?.delete(fileId: item.fileId)
             let day = Calendar.current.startOfDay(for: item.date)
             attachments[day]?.removeAll { $0.fileId == item.fileId }
+            await clearCorrections(of: item.fileId, sheetId: sheetId, client: client)
             return nil
         } catch {
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
