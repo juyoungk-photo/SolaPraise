@@ -124,8 +124,26 @@ enum MorningAlarm {
     }
 
     /// Replaces whatever was scheduled with the current settings.
+    ///
+    /// One at a time. The settings screen reschedules on every change, and
+    /// turning the alarm on changes three things at once — each call
+    /// cancelled the one id it remembered and scheduled its own, so two or
+    /// three alarms ended up set where one was asked for, and only the last
+    /// could be turned off from here. The rest rang every morning.
+    @MainActor
     @discardableResult
     static func reschedule() async -> ScheduleResult {
+        let previous = running
+        let task = Task { @MainActor () -> ScheduleResult in
+            _ = await previous?.value
+            return await rescheduleNow()
+        }
+        running = task
+        return await task.value
+    }
+    @MainActor private static var running: Task<ScheduleResult, Never>?
+
+    private static func rescheduleNow() async -> ScheduleResult {
         await cancelAll()
         guard isEnabled, !weekdays.isEmpty else { return .off }
 
@@ -135,10 +153,16 @@ enum MorningAlarm {
         return await scheduleNotifications()
     }
 
+    /// Every alarm this app has set — not only the one it remembers, so an
+    /// alarm left by an earlier version, or by two changes at once, goes too.
     private static func cancelAll() async {
         #if canImport(AlarmKit)
-        if #available(iOS 26.0, *), let raw = defaults.string(forKey: Key.alarmId), let id = UUID(uuidString: raw) {
-            try? AlarmManager.shared.cancel(id: id)
+        if #available(iOS 26.0, *) {
+            let manager = AlarmManager.shared
+            for alarm in (try? manager.alarms) ?? [] { try? manager.cancel(id: alarm.id) }
+            if let raw = defaults.string(forKey: Key.alarmId), let id = UUID(uuidString: raw) {
+                try? manager.cancel(id: id)
+            }
             defaults.removeObject(forKey: Key.alarmId)
         }
         #endif

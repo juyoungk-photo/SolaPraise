@@ -97,6 +97,15 @@ struct SolaPraiseApp: App {
                 .environmentObject(morning)
                 .preferredColorScheme(appearance.colorScheme)
                 .onAppear { recordPlays() }
+                // The alarms set match the settings: an alarm left over —
+                // by an earlier version, or two set at once — is cleared,
+                // and one turned off stays off.
+                .task {
+                    #if DEBUG
+                    if DebugHarness.morningSettings { return }
+                    #endif
+                    await MorningAlarm.reschedule()
+                }
                 .onOpenURL { url in
                     #if canImport(GoogleSignIn)
                     GIDSignIn.sharedInstance.handle(url)

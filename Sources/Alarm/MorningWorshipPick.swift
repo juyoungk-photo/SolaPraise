@@ -43,9 +43,26 @@ enum MorningWorshipPick {
     /// alarm set a little early and a stream that starts a little late.
     static let longestWait: TimeInterval = 20 * 60
 
-    static func decide(_ candidates: [Candidate], waitingSince: Date, now: Date = Date()) -> Decision {
+    /// Waiting is for the morning: before this hour the stream may not
+    /// even be scheduled yet.
+    static let morningEnds = 12
+
+    static func decide(_ candidates: [Candidate], waitingSince: Date, now: Date = Date(),
+                       calendar: Calendar = .current) -> Decision {
         if let live = candidates.first(where: { $0.broadcast == "live" }) { return .live(live.id) }
-        if now.timeIntervalSince(waitingSince) < longestWait { return .wait }
+        // Wait only when there is a service to wait for: one scheduled, or
+        // a morning whose service is not up yet. Otherwise — an alarm tried
+        // in the evening, a Saturday, a service already over — waiting
+        // twenty minutes for a stream that is not coming looked like an
+        // alarm that did nothing.
+        let scheduled = candidates.contains { $0.broadcast == "upcoming" }
+        let todayIsUp = candidates.contains { video in
+            video.broadcast == "none" && DailySeries.key(of: video.title) == "모닝워십"
+                && EpisodeDate.inTitle(video.title, now: now).map { calendar.isDate($0, inSameDayAs: now) } == true
+        }
+        let isMorning = calendar.component(.hour, from: now) < morningEnds
+        let worthWaiting = scheduled || (isMorning && !todayIsUp)
+        if worthWaiting, now.timeIntervalSince(waitingSince) < longestWait { return .wait }
         return recent(in: candidates, now: now).map(Decision.recent) ?? .nothing
     }
 

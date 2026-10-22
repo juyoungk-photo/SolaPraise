@@ -67,6 +67,17 @@ struct CheckMorningAlarm {
         check("nothing at all after waiting: nothing",
               MorningWorshipPick.decide([], waitingSince: alarm, now: late) == .nothing)
 
+        // Nothing to wait for: played at once.
+        let evening = calendar.date(from: DateComponents(year: 2026, month: 10, day: 13, hour: 21, minute: 30))!
+        check("tried in the evening, nothing scheduled: the latest at once, no wait",
+              MorningWorshipPick.decide([sunday, yesterday], waitingSince: evening, now: evening) == .recent("mon"))
+        let todayDone = C(id: "tue", title: "[모닝워십] 화, 10.13.2026 「빛」", broadcast: "none",
+                          publishedAt: now.addingTimeInterval(-600))
+        check("today's service already up: it, at once",
+              MorningWorshipPick.decide([todayDone, yesterday], waitingSince: now, now: now) == .recent("tue"))
+        check("evening but a stream is scheduled: wait for it",
+              MorningWorshipPick.decide([scheduled, yesterday], waitingSince: evening, now: evening) == .wait)
+
         print(failures == 0 ? "\nall morning alarm checks passed" : "\n\(failures) failure(s)")
         exit(failures == 0 ? 0 : 1)
     }
