@@ -8,8 +8,10 @@
 //  still showed the misreading — corrections lived on the device that made
 //  them. Now they go to a small JSON file in Drive, its id written in the
 //  chart's Edits cell on the Attachments tab; any member opening the chart
-//  takes them up. Last one shared wins, and a member's own unshared edits
-//  are never overwritten by someone else's.
+//  takes them up — and a chart already open takes them up within seconds
+//  (ScoreStandModel.watchTeam). Two members' fixes are put together, not
+//  the last one's whole chart over the other's (EditMerge), and a member's
+//  own unshared edits are never overwritten by someone else's.
 //
 //  The file is a map from a key — 「all」 for a whole chart, the page list
 //  for one song's pages of a 콘티 file — to that chart's pages of chords.
@@ -31,6 +33,9 @@ enum SharedEdits {
         /// For a 콘티 file: page index → the song it is, as someone set it
         /// by hand; "" for a page that is no song.
         var pages: [String: String]? = nil
+        /// Key → that chart's 코드표 lyrics corrected by hand (LyricFixes).
+        /// Optional: files shared before lyrics were shared have none.
+        var lyrics: [String: [LyricFix]]? = nil
     }
 
     /// The shared file, or nil when there is none or it cannot be read.

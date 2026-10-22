@@ -350,6 +350,8 @@ struct ScoreStandView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             model.team = team
         }
+        // The team's corrections, as they are made, while this is open.
+        .task { await model.watchTeam() }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             // Corrections waiting to be shared go now, not lost with the stand.
@@ -1513,10 +1515,13 @@ final class ScoreStandModel: ObservableObject {
             // Marked when the sender's app marks corrections: any chord
             // carrying the field at all.
             let marked = pages.joined().contains { $0.corrected != nil }
+            let lyrics = file.lyrics?[SharedEdits.key(pages: item.pages)] ?? []
             let shared = ScoreEditStore.Saved(pages: pages, edited: true, version: ScoreRecognition.version,
                                               sharedFrom: remoteId, dirty: false,
-                                              marksCorrections: marked ? true : nil)
+                                              marksCorrections: marked ? true : nil,
+                                              base: pages, lyricBase: lyrics)
             ScoreEditStore.write(shared, for: item.id)
+            ScoreLyricFixStore.save(lyrics, for: item.id)
             saved = shared
             shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
         }
@@ -1551,6 +1556,10 @@ final class ScoreStandModel: ObservableObject {
         states[item.id] = state
         Self.cache[item.id] = state
         if state.isRead { recordKey(item) }
+        // Fixed here and never shared — the stand closed, the app was
+        // quit, the network was down: sent now, merged with whatever the
+        // team shared meanwhile. It used to wait for the next edit.
+        if saved?.dirty == true { scheduleShare(item) }
         // After 다시 읽기, read again now: that is what was asked.
         if rereading.contains(item.id) { await ensureRead(item) }
         // Corrections kept before they were marked: found by reading the
@@ -1982,7 +1991,7 @@ final class ScoreStandModel: ObservableObject {
         ScoreChartStore.save(systems, for: item.id, signature: signature)
     }
 
-    /// A 코드표 line's lyrics, corrected by hand. Kept on this device.
+    /// A 코드표 line's lyrics, corrected by hand — and shared with the team.
     func fixLyrics(_ item: ScoreStandItem, line index: Int, edited: ScoreChart.System) {
         guard var systems = charts[item.id], systems.indices.contains(index) else { return }
         let fixes = LyricFixes.merge(ScoreLyricFixStore.load(item.id), system: index,
@@ -1990,6 +1999,12 @@ final class ScoreStandModel: ObservableObject {
         ScoreLyricFixStore.save(fixes, for: item.id)
         systems[index] = edited
         charts[item.id] = systems
+        // Shared with the chords: the team reads the same words.
+        if var saved = ScoreEditStore.load(item.id) {
+            saved.dirty = true
+            ScoreEditStore.write(saved, for: item.id)
+            scheduleShare(item)
+        }
     }
 
     /// Forgets every hand edit and reads the chart again.
@@ -2023,7 +2038,8 @@ final class ScoreStandModel: ObservableObject {
         guard let state = states[item.id] else { return }
         let before = ScoreEditStore.load(item.id)
         ScoreEditStore.save(state.pages.map(\.chords), edited: true, for: item.id,
-                            sharedFrom: before?.sharedFrom, dirty: true)
+                            sharedFrom: before?.sharedFrom, dirty: true,
+                            base: before?.base, lyricBase: before?.lyricBase)
         scheduleShare(item)
     }
 
@@ -2067,21 +2083,100 @@ final class ScoreStandModel: ObservableObject {
             shareStatus[item.id] = "이 기기에만 저장됨"
             return
         }
-        switch await team.shareEdits(fileId: item.attachment.fileId,
-                                     key: SharedEdits.key(pages: item.pages), pages: saved.pages) {
-        case .success(let id):
-            var shared = saved
-            shared.sharedFrom = id
-            shared.dirty = false
-            ScoreEditStore.write(shared, for: item.id)
-            shareStatus[item.id] = "고친 코드를 팀과 공유했습니다"
+        let key = SharedEdits.key(pages: item.pages)
+        let lyrics = ScoreLyricFixStore.load(item.id)
+        switch await team.shareEdits(fileId: item.attachment.fileId, key: key,
+                                     pages: saved.pages, base: saved.base,
+                                     lyrics: lyrics, lyricBase: saved.lyricBase) {
+        case .success(let result):
+            // What the team has now — this device's fixes and anyone
+            // else's since, put together — is what this device shows.
+            let merged = result.file.charts[key] ?? saved.pages
+            let mergedLyrics = result.file.lyrics?[key] ?? lyrics
+            var now = ScoreEditStore.load(item.id) ?? saved
+            // Fixed again while this was being sent: kept, on top.
+            let editedMeanwhile = now.pages != saved.pages
+            now.pages = editedMeanwhile ? EditMerge.pages(base: saved.pages, local: now.pages, remote: merged) : merged
+            now.sharedFrom = result.fileId
+            now.base = merged
+            now.lyricBase = mergedLyrics
+            now.dirty = editedMeanwhile
+            ScoreEditStore.write(now, for: item.id)
+            if now.pages != states[item.id]?.pages.map(\.chords) { adopt(item, pages: now.pages) }
+            if mergedLyrics != lyrics {
+                ScoreLyricFixStore.save(mergedLyrics, for: item.id)
+                charts[item.id] = nil
+            }
+            shareStatus[item.id] = merged != saved.pages
+                ? "공유했습니다 — 팀원이 고친 곳도 함께 들어왔습니다"
+                : "고친 코드를 팀과 공유했습니다"
+            if editedMeanwhile { scheduleShare(item) }
         case .failure(.noAccess):
-            shareStatus[item.id] = "이 기기에만 저장됨 — 공유하려면 드라이브 권한을 연결하세요"
+            shareStatus[item.id] = "이 기기에만 저장됨 — 공유하려면 교회 계정을 연결하세요"
         case .failure(.moved), .failure(.notFound):
             shareStatus[item.id] = "이 기기에만 저장됨 — 시트를 새로 고친 뒤 다시 고치면 공유됩니다"
         case .failure(.failed(let reason)):
-            shareStatus[item.id] = "공유하지 못했습니다: \(reason)"
+            shareStatus[item.id] = "공유하지 못했습니다: \(reason) — 다음에 열 때 다시 보냅니다"
         }
+    }
+
+    /// Chords from the team on the page as it stands: the key, the
+    /// position, everything else kept.
+    private func adopt(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
+        guard var state = states[item.id], state.pages.count == pages.count else { return }
+        for index in pages.indices { state.pages[index].chords = pages[index] }
+        state.isEdited = true
+        state.isRead = true
+        applyKeys(&state, item)
+        states[item.id] = state
+        Self.cache[item.id] = state
+        charts[item.id] = nil
+    }
+
+    /// While the stand is open: the team's newer corrections, taken up as
+    /// they are shared — every 12 seconds, one read of the Attachments
+    /// tab, and a download only when a chart's file changed.
+    ///
+    /// WHY: corrections reached another member only when they closed the
+    /// chart and opened it again after a reload. In a rehearsal the person
+    /// fixing the bridge and the people reading it are looking at it at
+    /// the same moment.
+    func watchTeam() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled, let team, let ids = await team.editsIds() else { continue }
+            for (id, item) in knownItems where states[id]?.isReady == true {
+                guard let remote = ids[item.attachment.fileId], !remote.isEmpty else { continue }
+                let saved = ScoreEditStore.load(id)
+                guard remote != saved?.sharedFrom else { continue }
+                // Fixes of its own waiting: sharing merges the two.
+                if saved?.dirty == true { scheduleShare(item); continue }
+                guard let file = await SharedEdits.fetch(remote) else { continue }
+                receive(item, file: file, fileId: remote, saved: saved)
+            }
+        }
+    }
+
+    private func receive(_ item: ScoreStandItem, file: SharedEdits.File, fileId: String, saved: ScoreEditStore.Saved?) {
+        let key = SharedEdits.key(pages: item.pages)
+        guard let pages = file.charts[key] else {
+            // A change to another song's pages of this file: nothing here.
+            if var kept = saved { kept.sharedFrom = fileId; ScoreEditStore.write(kept, for: item.id) }
+            return
+        }
+        let lyrics = file.lyrics?[key] ?? []
+        let changed = pages != saved?.pages || lyrics != ScoreLyricFixStore.load(item.id)
+        ScoreEditStore.write(.init(pages: pages, edited: true, version: ScoreRecognition.version,
+                                   sharedFrom: fileId, dirty: false,
+                                   marksCorrections: pages.joined().contains { $0.corrected != nil } ? true : nil,
+                                   base: pages, lyricBase: lyrics), for: item.id)
+        ScoreLyricFixStore.save(lyrics, for: item.id)
+        guard changed else { return }
+        adopt(item, pages: pages)
+        shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
+        let song = item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension
+                                     : PlanSongTitle.split(item.song).title
+        Toast.shared.show("「\(song)」 팀원이 고친 악보를 받았습니다", symbol: "arrow.down.circle.fill", tint: .blue)
     }
 
     private func update(_ item: ScoreStandItem, _ change: (inout State) -> Void) {
@@ -2388,6 +2483,11 @@ enum ScoreEditStore {
         /// kept before the mark existed, or received from a teammate's
         /// older app — marked once, by reading the page again.
         var marksCorrections: Bool? = nil
+        /// The chords and lyric fixes as of `sharedFrom` — what this device
+        /// and the team last agreed on, which a merge measures changes
+        /// from (EditMerge).
+        var base: [[ScoreChord]]? = nil
+        var lyricBase: [LyricFix]? = nil
     }
 
     private static var folder: URL? {
@@ -2410,9 +2510,11 @@ enum ScoreEditStore {
     }
 
     static func save(_ pages: [[ScoreChord]], edited: Bool, for id: String,
-                     sharedFrom: String? = nil, dirty: Bool = false) {
+                     sharedFrom: String? = nil, dirty: Bool = false,
+                     base: [[ScoreChord]]? = nil, lyricBase: [LyricFix]? = nil) {
         write(Saved(pages: pages, edited: edited, version: ScoreRecognition.version,
-                    sharedFrom: sharedFrom, dirty: dirty, marksCorrections: true), for: id)
+                    sharedFrom: sharedFrom, dirty: dirty, marksCorrections: true,
+                    base: base, lyricBase: lyricBase), for: id)
     }
 
     static func write(_ saved: Saved, for id: String) {

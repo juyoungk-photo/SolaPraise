@@ -1960,19 +1960,59 @@ final class TeamStore: ObservableObject {
     /// holds several songs, so the file is a map — one entry per song's
     /// pages — and an update keeps the other entries. Returns the new
     /// file's id, or a sentence on failure.
-    func shareEdits(fileId: String, key: String, pages: [[ScoreChord]]) async -> Result<String, ShareEditsError> {
-        await updateShared(fileId: fileId) { $0.charts[key] = pages }
+    /// What was shared, as the team now has it: this device's corrections
+    /// put together with anyone else's since `base` (EditMerge).
+    struct SharedResult {
+        let fileId: String
+        let file: SharedEdits.File
+    }
+
+    func shareEdits(fileId: String, key: String, pages: [[ScoreChord]], base: [[ScoreChord]]?,
+                    lyrics: [LyricFix], lyricBase: [LyricFix]?) async -> Result<SharedResult, ShareEditsError> {
+        await updateShared(fileId: fileId) { file in
+            file.charts[key] = EditMerge.pages(base: base, local: pages, remote: file.charts[key])
+            let words = EditMerge.list(base: lyricBase, local: lyrics, remote: file.lyrics?[key],
+                                       same: { $0.samePlace($1) })
+            var all = file.lyrics ?? [:]
+            all[key] = words.isEmpty ? nil : words
+            file.lyrics = all.isEmpty ? nil : all
+        }
     }
 
     /// Which page of a 콘티 file is which song, as set by hand, for the team.
     func sharePageAssignment(fileId: String, pages: [Int: String]) async -> Result<String, ShareEditsError> {
         await updateShared(fileId: fileId) { file in
             file.pages = Dictionary(uniqueKeysWithValues: pages.map { (String($0.key), $0.value) })
+        }.map(\.fileId)
+    }
+
+    /// Every chart's Edits file id, read fresh — one read of the
+    /// Attachments tab — and kept, so a chart opened next starts from it.
+    /// Nil when the sheet cannot be read.
+    func editsIds() async -> [String: String]? {
+        guard let client, let sheetId = TeamSheetSource.current,
+              let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab),
+              let header = rows.first,
+              let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
+              let editsCol = TeamSheet.column(header, ["edits", "교정"]) else { return nil }
+        var out: [String: String] = [:]
+        for row in rows.dropFirst() where row.indices.contains(idCol) {
+            let id = row[idCol].trimmingCharacters(in: .whitespaces)
+            guard !id.isEmpty else { continue }
+            out[id] = row.indices.contains(editsCol) ? row[editsCol].trimmingCharacters(in: .whitespaces) : ""
         }
+        for (day, list) in attachments {
+            for (index, item) in list.enumerated() {
+                if let edits = out[item.fileId], !edits.isEmpty, edits != item.editsFileId {
+                    attachments[day]?[index].editsFileId = edits
+                }
+            }
+        }
+        return out
     }
 
     private func updateShared(fileId: String,
-                              _ change: (inout SharedEdits.File) -> Void) async -> Result<String, ShareEditsError> {
+                              _ change: (inout SharedEdits.File) -> Void) async -> Result<SharedResult, ShareEditsError> {
         guard let client, let drive, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
         guard let item = attachment(fileId: fileId) else { return .failure(.notFound) }
         do {
@@ -1985,28 +2025,56 @@ final class TeamStore: ObservableObject {
                 row = try await registerRow(for: item, sheetId: sheetId, client: client, header: header)
             }
             guard let column = TeamSheet.column(header, ["edits", "교정"]) else { return .failure(.notFound) }
-            guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [fileId],
-                                sheetId: sheetId, client: client) else { return .failure(.moved) }
-            // Whatever another member shared since, then this song's entry.
-            var file = await SharedEdits.fetch(item.editsFileId) ?? SharedEdits.File()
-            change(&file)
-            let data = try JSONEncoder().encode(file)
-            let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
-                                                  mimeType: "application/json")
             let cell = "\(TeamSheet.attachmentsTab)!\(TeamSheet.columnLetter(column))\(row)"
-            do {
-                try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [uploaded.fileId])
-            } catch {
-                try? await drive.delete(fileId: uploaded.fileId)
-                throw error
+            func edits(in row: [String]) -> String? {
+                let id = row.indices.contains(column) ? row[column].trimmingCharacters(in: .whitespaces) : ""
+                return id.isEmpty ? nil : id
             }
-            if let old = item.editsFileId { try? await drive.delete(fileId: old) }
-            for (day, list) in attachments {
-                if let i = list.firstIndex(where: { $0.fileId == fileId }) {
-                    attachments[day]?[i].editsFileId = uploaded.fileId
+            // The row as it is now: still this chart, and the Edits file the
+            // team has NOW. Started from the id this device last loaded, a
+            // share made on top of an older file than another member's
+            // latest, and threw their corrections — and other songs' pages
+            // of a 콘티 file — away.
+            var current = (try? await client.read(sheetId: sheetId,
+                                                  range: "\(TeamSheet.attachmentsTab)!A\(row):AZ\(row)"))?.first ?? []
+            guard current.contains(where: { $0.trimmingCharacters(in: .whitespaces) == fileId }) else {
+                return .failure(.moved)
+            }
+            var previous = edits(in: current) ?? item.editsFileId
+            // Two members sharing in the same moment both start from the same
+            // file, and the second write would erase the first's fixes. So
+            // the cell is read back: if someone else's file is in it, ours is
+            // made again on top of theirs.
+            for attempt in 0..<3 {
+                // Whatever another member shared since, then this song's entry.
+                var file = await SharedEdits.fetch(previous) ?? SharedEdits.File()
+                change(&file)
+                let data = try JSONEncoder().encode(file)
+                let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
+                                                      mimeType: "application/json")
+                do {
+                    try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [uploaded.fileId])
+                } catch {
+                    try? await drive.delete(fileId: uploaded.fileId)
+                    throw error
                 }
+                try? await Task.sleep(for: .milliseconds(600))
+                current = (try? await client.read(sheetId: sheetId, range: "\(cell):\(cell)"))?.first ?? []
+                let now = current.first?.trimmingCharacters(in: .whitespaces)
+                if now == nil || now == uploaded.fileId || attempt == 2 {
+                    if let old = previous { try? await drive.delete(fileId: old) }
+                    for (day, list) in attachments {
+                        if let i = list.firstIndex(where: { $0.fileId == fileId }) {
+                            attachments[day]?[i].editsFileId = uploaded.fileId
+                        }
+                    }
+                    return .success(SharedResult(fileId: uploaded.fileId, file: file))
+                }
+                // Someone else's landed after ours: ours, made again on theirs.
+                try? await drive.delete(fileId: uploaded.fileId)
+                previous = now
             }
-            return .success(uploaded.fileId)
+            return .failure(.failed("다른 팀원과 동시에 고쳐 공유하지 못했습니다"))
         } catch {
             return .failure(.failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
         }
