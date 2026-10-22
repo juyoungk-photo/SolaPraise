@@ -84,15 +84,17 @@ struct WorshipFilterRow: View {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "clock")
-                Text(length == .all ? "길이" : length.title)
+                Text(length.title)
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold))
             }
+            // Plain on 곡, the usual; filled when it is set to something
+            // else, so a feed of only long sets says why.
             .font(.caption2.weight(.medium))
-            .foregroundStyle(length == .all ? Color.primary : Color.white)
+            .foregroundStyle(length == .song ? Color.primary : Color.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Capsule().fill(length == .all ? Color(.secondarySystemBackground) : Color.accentColor))
-            .overlay(Capsule().strokeBorder(length == .all ? Color.primary.opacity(0.12) : .clear, lineWidth: 0.5))
+            .background(Capsule().fill(length == .song ? Color(.secondarySystemBackground) : Color.accentColor))
+            .overlay(Capsule().strokeBorder(length == .song ? Color.primary.opacity(0.12) : .clear, lineWidth: 0.5))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -113,8 +115,8 @@ enum WorshipLength: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .all:  return "전체"
-        case .song: return "한 곡"
+        case .all:  return "모든 길이"
+        case .song: return "곡"
         case .set:  return "긴 묶음"
         }
     }
@@ -126,8 +128,9 @@ enum WorshipLength: String, CaseIterable, Identifiable {
         case .all:  return true
         // Unknown length counts as a song: a missing duration usually means
         // the metadata fetch has not caught up, and hiding it would make the
-        // feed look emptier than it is.
-        case .song: return (seconds ?? 0) <= 20 * 60
+        // feed look emptier than it is. A minute or less is a clip — a
+        // Short cut from a song, an invitation — not a song to sing.
+        case .song: return (seconds ?? 61) > FeedFilter.shortsSeconds && (seconds ?? 0) <= 20 * 60
         case .set:  return (seconds ?? 0) > 20 * 60
         }
     }

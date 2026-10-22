@@ -73,7 +73,9 @@ struct WorshipFeedView: View {
     @State private var showSettings = false
     @State private var showAddTopic = false
     @State private var addTarget: PlayableVideo?
-    @State private var length: WorshipLength = .all
+    /// 곡 by default — the tab is for finding a song to sing; a three-hour
+    /// set and a 20-second clip are a choice away. Kept as last chosen.
+    @AppStorage("worship.length") private var length: WorshipLength = .song
     /// videoId → (duration, views), filled by one videos.list after a search.
     @State private var resultDetail: [String: (Int?, Int?)] = [:]
 
@@ -691,6 +693,8 @@ struct WorshipFeedView: View {
                     || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
             }
             .filter { length.matches(seconds: $0.durationSeconds) }
+            // 안내 · 공지 · 예고편 out, as 설정 › 피드·찬양 검색 says.
+            .filter { !(FeedFilter.skipsNotices && FeedFilter.isNotice($0.title)) }
             .filter { !$0.isPinned }
             .prefix(Self.browseCap)
             .map { $0 }
@@ -818,30 +822,78 @@ private struct ResultSection: View {
             }
             .padding(.horizontal, 16)
 
-            ForEach(videos) { video in
-                HStack(spacing: 10) {
-                    Button { onSelect(video) } label: {
-                        HStack(spacing: 10) {
-                            Thumbnail(url: video.thumbnailURL, width: 88, height: 50)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(video.title).font(.footnote).lineLimit(2)
-                                if let channel = video.channelTitle {
-                                    Text(channel).font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { onAdd(video) } label: {
-                        Image(systemName: "plus.circle")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
+            // By song: one row each, its other uploads folded under it.
+            ForEach(Array(SongGroups.group(videos, title: \.title, channel: \.channelTitle).enumerated()),
+                    id: \.offset) { _, group in
+                VersionGroup(count: group.items.count) {
+                    row(group.items[0])
+                } others: {
+                    ForEach(group.items.dropFirst()) { row($0) }
                 }
-                .padding(.horizontal, 16)
+            }
+        }
+    }
+
+    private func row(_ video: CachedVideo) -> some View {
+        HStack(spacing: 10) {
+            Button { onSelect(video) } label: {
+                HStack(spacing: 10) {
+                    Thumbnail(url: video.thumbnailURL, width: 88, height: 50)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(video.title).font(.footnote).lineLimit(2)
+                        if let channel = video.channelTitle {
+                            Text(channel).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button { onAdd(video) } label: {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 16)
+    }
+}
+
+/// One song's uploads: the first as a row, the rest behind 「다른 버전 N개」,
+/// opened in place — compared side by side, not hunted for down the list.
+private struct VersionGroup<First: View, Others: View>: View {
+    let count: Int
+    @ViewBuilder let first: First
+    @ViewBuilder let others: Others
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            first
+            if count > 1 {
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) { open.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.stack")
+                        Text(open ? "버전 접기" : "다른 버전 \(count - 1)개")
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .rotationEffect(.degrees(open ? 180 : 0))
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tint)
+                    .padding(.leading, 16 + 88 + 10)
+                }
+                .buttonStyle(.plain)
+                if open {
+                    VStack(alignment: .leading, spacing: 8) { others }
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.04))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
     }
@@ -854,58 +906,67 @@ private struct RemoteResultSection: View {
     let onAdd: (YTSearchResult) -> Void
 
     var body: some View {
+        let groups = SongGroups.group(results, title: \.title, channel: { $0.snippet?.channelTitle })
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text("YouTube 전체 검색 결과").font(.subheadline.weight(.semibold))
-                Text("\(results.count)개")
+                Text(groups.count == results.count ? "\(results.count)개" : "\(groups.count)곡 · 영상 \(results.count)개")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
 
-            ForEach(results) { result in
-                HStack(spacing: 10) {
-                    Button { onSelect(result) } label: {
-                        HStack(spacing: 10) {
-                            Thumbnail(url: result.snippet?.thumbnails?.best, width: 88, height: 50)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(result.title).font(.footnote).lineLimit(2)
-                                if let channel = result.snippet?.channelTitle {
-                                    Text(channel).font(.caption2).foregroundStyle(.secondary)
-                                }
-                                // Publish date, length and views — the three
-                                // things that separate one upload of a song
-                                // from another.
-                                HStack(spacing: 5) {
-                                    if let published = result.snippet?.publishedAt {
-                                        Text(published, format: .dateTime.year().month())
-                                    }
-                                    let info = result.videoId.flatMap { detail[$0] }
-                                    if let secs = info?.0 {
-                                        Text("·")
-                                        Text(ISO8601Duration.format(secs)).monospacedDigit()
-                                    }
-                                    if let views = info?.1 {
-                                        Text("·")
-                                        Text(WatchScreen.compactCount(views)).monospacedDigit()
-                                    }
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { onAdd(result) } label: { Image(systemName: "plus.circle") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
+            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                VersionGroup(count: group.items.count) {
+                    row(group.items[0])
+                } others: {
+                    ForEach(group.items.dropFirst()) { row($0) }
                 }
-                .padding(.horizontal, 16)
             }
         }
+    }
+
+    private func row(_ result: YTSearchResult) -> some View {
+        HStack(spacing: 10) {
+            Button { onSelect(result) } label: {
+                HStack(spacing: 10) {
+                    Thumbnail(url: result.snippet?.thumbnails?.best, width: 88, height: 50)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(result.title).font(.footnote).lineLimit(2)
+                        if let channel = result.snippet?.channelTitle {
+                            Text(channel).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        // Publish date, length and views — the three
+                        // things that separate one upload of a song
+                        // from another.
+                        HStack(spacing: 5) {
+                            if let published = result.snippet?.publishedAt {
+                                Text(published, format: .dateTime.year().month())
+                            }
+                            let info = result.videoId.flatMap { detail[$0] }
+                            if let secs = info?.0 {
+                                Text("·")
+                                Text(ISO8601Duration.format(secs)).monospacedDigit()
+                            }
+                            if let views = info?.1 {
+                                Text("·")
+                                Text(WatchScreen.compactCount(views)).monospacedDigit()
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button { onAdd(result) } label: { Image(systemName: "plus.circle") }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+        }
+        .padding(.horizontal, 16)
     }
 }
 
