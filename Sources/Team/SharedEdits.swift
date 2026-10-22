@@ -40,11 +40,34 @@ enum SharedEdits {
 
     /// The shared file, or nil when there is none or it cannot be read.
     /// Shared by link like every attachment, so no account is needed.
-    static func fetch(_ fileId: String?) async -> File? {
-        guard let fileId,
-              let url = URL(string: "https://drive.google.com/uc?export=download&id=\(fileId)"),
-              let (data, response) = try? await URLSession.shared.data(from: url),
+    /// `cell` is the Edits cell as written (EditsToken): the file, and which
+    /// writing of it.
+    static func fetch(_ cell: String?) async -> File? {
+        guard let token = EditsToken(cell),
+              let url = URL(string: "https://drive.google.com/uc?export=download&id=\(token.fileId)&v=\(token.revision)")
+        else { return nil }
+        // Never from a cache: a file written over keeps its address.
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONDecoder().decode(File.self, from: data)
     }
+
+    /// This account's own corrections file for each chart (by the chart's
+    /// file id) and its last writing: written over rather than made anew.
+    /// Kept per device and account; a file another account made is never
+    /// written over.
+    static func mine(for chart: String, account: String) -> EditsToken? {
+        let all = UserDefaults.standard.dictionary(forKey: mineKey) as? [String: String] ?? [:]
+        return EditsToken(all["\(account)|\(chart)"])
+    }
+
+    static func setMine(_ token: EditsToken?, for chart: String, account: String) {
+        var all = UserDefaults.standard.dictionary(forKey: mineKey) as? [String: String] ?? [:]
+        all["\(account)|\(chart)"] = token?.cell
+        UserDefaults.standard.set(all, forKey: mineKey)
+    }
+
+    private static let mineKey = "sharedEdits.mine"
 }

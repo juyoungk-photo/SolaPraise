@@ -608,6 +608,27 @@ actor SheetsClient {
         return (try? JSONDecoder().decode(Response.self, from: data))?.values ?? []
     }
 
+    /// Whole columns in one request — 「Attachments!E:E」 and its like — each
+    /// top to bottom, empty cells as "". For a look every few seconds at the
+    /// two columns that say what changed, not the whole tab.
+    func readColumns(sheetId: String, ranges: [String]) async throws -> [[String]] {
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { throw SheetsError.badRange("batchGet") }
+        comps.path = trimmedRoot(comps.path) + "/\(sheetId)/values:batchGet"
+        comps.queryItems = ranges.map { URLQueryItem(name: "ranges", value: $0) } + [
+            .init(name: "majorDimension", value: "COLUMNS"),
+            .init(name: "valueRenderOption", value: "FORMATTED_VALUE")
+        ]
+        guard let url = comps.url else { throw SheetsError.badRange("batchGet") }
+        struct Response: Decodable {
+            struct Range: Decodable { let values: [[String]]? }
+            let valueRanges: [Range]?
+        }
+        let data = try await send(url: url, method: "GET", rawBody: nil)
+        let ranges = (try JSONDecoder().decode(Response.self, from: data).valueRanges ?? [])
+        return ranges.map { $0.values?.first ?? [] }
+    }
+
     /// Appends and reports which row it landed on.
     ///
     /// The row number matters: without it the next edit to the same entry has

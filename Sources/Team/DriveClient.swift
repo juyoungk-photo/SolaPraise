@@ -244,6 +244,21 @@ actor DriveClient {
         )
     }
 
+    /// Writes over a file the app put there, keeping its id and its link.
+    /// Refused for another account's file — the drive.file grant reaches
+    /// only what this account made — and then the caller makes its own.
+    func overwrite(fileId: String, data: Data, mimeType: String) async throws {
+        var components = URLComponents(
+            string: "https://www.googleapis.com/upload/drive/v3/files/\(fileId)")!
+        components.queryItems = [
+            .init(name: "uploadType", value: "media"),
+            .init(name: "fields", value: "id"),
+            .init(name: "supportsAllDrives", value: "true")
+        ]
+        struct Updated: Decodable { let id: String }
+        let _: Updated = try await send(url: components.url!, method: "PATCH", body: data, contentType: mimeType)
+    }
+
     /// Removes a file the app put there.
     func delete(fileId: String) async throws {
         var components = URLComponents(

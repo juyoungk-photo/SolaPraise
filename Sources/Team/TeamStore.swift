@@ -459,8 +459,12 @@ final class TeamStore: ObservableObject {
         drive = planning.isSignedIn
             ? DriveClient { try await planning.token() }
             : nil
+        driveAccount = planning.email
         lastActingEmail = actingEmail(auth: auth, planning: planning)
     }
+
+    /// Whose Drive `drive` writes to: whose corrections files are whose.
+    private var driveAccount: String?
 
     /// Who writes, as of the last configure — for rows written outside a
     /// view that knows the accounts.
@@ -1639,10 +1643,15 @@ final class TeamStore: ObservableObject {
     /// Optional like Plan: a team that has never attached anything has no
     /// such tab, and that is not an error. The tab is created on the first
     /// upload rather than demanded up front.
+    /// The Attachments tab's header as last read: where its columns are,
+    /// for a read of two of them (editsIds).
+    private var attachmentsHeader: [String]?
+
     private func applyAttachments(_ read: [[String]]?) {
         guard let rows = read, rows.count > 1 else { attachments = [:]; return }
 
         let header = rows[0]
+        attachmentsHeader = header
         let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? TeamSheet.Attachments.date
         let songCol = TeamSheet.column(header, ["song", "곡", "찬양"]) ?? TeamSheet.Attachments.song
         let nameCol = TeamSheet.column(header, ["name", "이름", "파일"]) ?? TeamSheet.Attachments.name
@@ -1990,16 +1999,38 @@ final class TeamStore: ObservableObject {
     /// Attachments tab — and kept, so a chart opened next starts from it.
     /// Nil when the sheet cannot be read.
     func editsIds() async -> [String: String]? {
-        guard let client, let sheetId = TeamSheetSource.current,
-              let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab),
-              let header = rows.first,
-              let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
-              let editsCol = TeamSheet.column(header, ["edits", "교정"]) else { return nil }
+        guard let client, let sheetId = TeamSheetSource.current else { return nil }
+        var pairs: [(id: String, edits: String)] = []
+        // Two columns, in one request — not the whole tab every few seconds,
+        // which grows by a row with every chart ever put up. Where the
+        // columns are comes from the last full read of the tab.
+        if let header = attachmentsHeader,
+           let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
+           let editsCol = TeamSheet.column(header, ["edits", "교정"]) {
+            let tab = TeamSheet.attachmentsTab
+            let ids = TeamSheet.columnLetter(idCol), edits = TeamSheet.columnLetter(editsCol)
+            guard let columns = try? await client.readColumns(sheetId: sheetId,
+                                                              ranges: ["\(tab)!\(ids):\(ids)", "\(tab)!\(edits):\(edits)"]),
+                  columns.count == 2 else { return nil }
+            for (index, id) in columns[0].enumerated() {
+                pairs.append((id, columns[1].indices.contains(index) ? columns[1][index] : ""))
+            }
+        } else {
+            guard let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab),
+                  let header = rows.first,
+                  let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
+                  let editsCol = TeamSheet.column(header, ["edits", "교정"]) else { return nil }
+            attachmentsHeader = header
+            for row in rows.dropFirst() where row.indices.contains(idCol) {
+                pairs.append((row[idCol], row.indices.contains(editsCol) ? row[editsCol] : ""))
+            }
+        }
         var out: [String: String] = [:]
-        for row in rows.dropFirst() where row.indices.contains(idCol) {
-            let id = row[idCol].trimmingCharacters(in: .whitespaces)
-            guard !id.isEmpty else { continue }
-            out[id] = row.indices.contains(editsCol) ? row[editsCol].trimmingCharacters(in: .whitespaces) : ""
+        for pair in pairs {
+            let id = pair.id.trimmingCharacters(in: .whitespaces)
+            // The header's own label, read as a cell of the column.
+            guard !id.isEmpty, TeamSheet.column([id], ["fileid", "파일id"]) == nil else { continue }
+            out[id] = pair.edits.trimmingCharacters(in: .whitespaces)
         }
         for (day, list) in attachments {
             for (index, item) in list.enumerated() {
@@ -2041,37 +2072,49 @@ final class TeamStore: ObservableObject {
                 return .failure(.moved)
             }
             var previous = edits(in: current) ?? item.editsFileId
+            let account = driveAccount ?? ""
             // Two members sharing in the same moment both start from the same
             // file, and the second write would erase the first's fixes. So
             // the cell is read back: if someone else's file is in it, ours is
             // made again on top of theirs.
-            for attempt in 0..<3 {
-                // Whatever another member shared since, then this song's entry.
+            for _ in 0..<3 {
+                // Whatever the team has now, then this device's change.
                 var file = await SharedEdits.fetch(previous) ?? SharedEdits.File()
                 change(&file)
                 let data = try JSONEncoder().encode(file)
-                let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
-                                                      mimeType: "application/json")
-                do {
-                    try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [uploaded.fileId])
-                } catch {
-                    try? await drive.delete(fileId: uploaded.fileId)
-                    throw error
+                // Into this account's own file for the chart, written over —
+                // one file per member per chart, not a new one per fix. Made
+                // the first time, or when the one remembered is refused.
+                let pointing = EditsToken(previous)
+                var written: EditsToken?
+                if let mine = SharedEdits.mine(for: fileId, account: account) {
+                    if (try? await drive.overwrite(fileId: mine.fileId, data: data, mimeType: "application/json")) != nil {
+                        // The next writing of whichever is higher: the cell may
+                        // already hold this file at a later writing.
+                        let last = pointing?.fileId == mine.fileId ? max(mine.revision, pointing!.revision) : mine.revision
+                        written = EditsToken(fileId: mine.fileId, revision: last + 1)
+                    }
                 }
+                if written == nil {
+                    let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
+                                                          mimeType: "application/json")
+                    written = EditsToken(fileId: uploaded.fileId, revision: 1)
+                }
+                guard let token = written else { break }
+                SharedEdits.setMine(token, for: fileId, account: account)
+                try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [token.cell])
                 try? await Task.sleep(for: .milliseconds(600))
                 current = (try? await client.read(sheetId: sheetId, range: "\(cell):\(cell)"))?.first ?? []
                 let now = current.first?.trimmingCharacters(in: .whitespaces)
-                if now == nil || now == uploaded.fileId || attempt == 2 {
-                    if let old = previous { try? await drive.delete(fileId: old) }
+                if now == nil || now == token.cell {
                     for (day, list) in attachments {
                         if let i = list.firstIndex(where: { $0.fileId == fileId }) {
-                            attachments[day]?[i].editsFileId = uploaded.fileId
+                            attachments[day]?[i].editsFileId = token.cell
                         }
                     }
-                    return .success(SharedResult(fileId: uploaded.fileId, file: file))
+                    return .success(SharedResult(fileId: token.cell, file: file))
                 }
                 // Someone else's landed after ours: ours, made again on theirs.
-                try? await drive.delete(fileId: uploaded.fileId)
                 previous = now
             }
             return .failure(.failed("다른 팀원과 동시에 고쳐 공유하지 못했습니다"))
