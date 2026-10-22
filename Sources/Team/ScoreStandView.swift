@@ -96,6 +96,8 @@ struct ScoreStandView: View {
     /// Edit mode: drag a chord, tap it to correct or remove it, press and
     /// hold on the page to add one recognition missed.
     @State private var editing = false
+    /// 그리기: the drawer's own layer open to Pencil or finger.
+    @State private var drawing = false
     /// The page alone: header, buttons and ✕ out of the way. A one-page
     /// chart on iPad lost its last staff and lyrics under the buttons. A tap
     /// on the page toggles it; editing brings everything back, since a tap
@@ -632,8 +634,8 @@ struct ScoreStandView: View {
                 // takes its look from the environment, and on iPad it
                 // came out light with 「악보」 unreadable.
                 .environment(\.colorScheme, .dark)
-                .opacity(editing ? 0 : 1)
-                .allowsHitTesting(!editing)
+                .opacity(editing || drawing ? 0 : 1)
+                .allowsHitTesting(!editing && !drawing)
             }
             // Both states laid over each other, in the same space: entering
             // 편집 must not move the page — a chord is checked against the
@@ -669,9 +671,35 @@ struct ScoreStandView: View {
                             .lineLimit(2, reservesSpace: true)
                     }
                 }
-                .opacity(editing ? 0 : 1)
-                .allowsHitTesting(!editing)
-                .accessibilityHidden(editing)
+                .opacity(editing || drawing ? 0 : 1)
+                .allowsHitTesting(!editing && !drawing)
+                .accessibilityHidden(editing || drawing)
+
+                // Up here, not in the bar below: the pen tools cover the
+                // bar while drawing — on a phone all of it.
+                if drawing {
+                    // Two lines, as 편집's: entering 그리기 must not move the
+                    // page. Beside the hint on an iPad, whose header is a line
+                    // shorter; under it on a phone.
+                    let hint = Text("펜이나 손가락으로 그리세요. 근처 팀원에게 그린 그대로 보입니다. 페이지는 두 손가락으로 넘깁니다.")
+                        .font(.footnote)
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(2, reservesSpace: true)
+                    let done = Button { drawing = false } label: {
+                        Label("그리기 끝내기", systemImage: "checkmark")
+                            .font(.footnote.weight(.semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .overlay(Capsule().stroke(Color.accentColor, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .fixedSize()
+                    if sizeClass == .regular {
+                        HStack(alignment: .top, spacing: 12) { done; hint }
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) { hint; done }
+                    }
+                }
 
                 if editing {
                     VStack(alignment: .leading, spacing: 4) {
@@ -746,6 +774,13 @@ struct ScoreStandView: View {
 
     // MARK: - Pages
 
+    /// A page's drawing: everyone else's strokes, and this member's own.
+    private func inkFor(_ item: ScoreStandItem, page: Int) -> PageInk {
+        let layers = model.inks[item.id] ?? ScoreInkStore.Layers()
+        let others = layers.byAuthor.filter { $0.key != ScoreInkStore.mine }.values.joined().filter { $0.part == page }
+        return ScoreStandModel.pageInk(layers, page: page)
+    }
+
     @ViewBuilder
     private func pages(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
@@ -765,7 +800,7 @@ struct ScoreStandView: View {
                             // 원본 while editing is a check: the page as
                             // printed, nothing drawn or editable on it.
                             original: state.showsOriginal,
-                            editing: editing,
+                            editing: editing && !drawing,
                             removed: editing ? model.removedChords(item, page: pageIndex) : [],
                             onMove: { id, offset in model.move(item, page: pageIndex, chord: id, to: offset) },
                             onTapChord: { id in chordAction = ChordAction(page: pageIndex, chord: id) },
@@ -773,7 +808,10 @@ struct ScoreStandView: View {
                             onTapPage: { point in probe(item, page: pageIndex, at: point) },
                             popoverAt: sizeClass == .regular && entry?.page == pageIndex ? entry?.point : nil,
                             popover: { entry.map { AnyView(chordEntryView($0)) } ?? AnyView(EmptyView()) },
-                            onPopoverDismiss: { entry = nil })
+                            onPopoverDismiss: { entry = nil },
+                            ink: inkFor(item, page: pageIndex),
+                            drawing: drawing,
+                            onInk: { data, strokes in model.setMyInk(item, page: pageIndex, drawing: data, strokes: strokes) })
                     }
                 }
                 .padding(.horizontal, 12)
@@ -783,7 +821,7 @@ struct ScoreStandView: View {
                 // chart taller than the screen could not be edited below
                 // the fold; with one-finger scrolling, a drag that missed a
                 // chord by a little moved the page instead.
-                .background(ScrollTouches(minimum: editing ? 2 : 1))
+                .background(ScrollTouches(minimum: editing || drawing ? 2 : 1))
             }
             // Reading the chords takes seconds a page: said over the page,
             // where the eye is, not in a line at the top.
@@ -835,7 +873,7 @@ struct ScoreStandView: View {
     /// sideways drag there moves a chord.
     @ViewBuilder
     private var songPager: some View {
-        if editing || items.count < 2, let item {
+        if editing || drawing || items.count < 2, let item {
             songContent(item)
         } else {
             TabView(selection: $index) {
@@ -1119,12 +1157,23 @@ struct ScoreStandView: View {
             .accessibilityLabel("가사 간격")
         } else {
             Button {
-                if editing { editing = false } else { Task { await model.ensureRead(item); editing = true } }
+                if editing { editing = false } else { drawing = false; Task { await model.ensureRead(item); editing = true } }
             } label: {
                 pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
             }
-            .disabled(!(state?.isReady ?? false))
+            .disabled(!(state?.isReady ?? false) || drawing)
             .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
+            // 그리기: Pencil or finger on the page — this member's own marks,
+            // seen by the team.
+            Button {
+                drawing.toggle()
+                if drawing { editing = false }
+            } label: {
+                pill(drawing ? AnyView(Text("완료")) : AnyView(Image(systemName: "pencil.tip.crop.circle")),
+                     active: drawing)
+            }
+            .disabled(!(state?.isReady ?? false) || editing)
+            .accessibilityLabel(drawing ? "그리기 끝내기" : "그리기")
         }
 
         // Not while editing — sharing an edit in progress is what 완료 then
@@ -1291,6 +1340,10 @@ private struct ScorePageView: View {
     var popoverAt: CGPoint? = nil
     var popover: () -> AnyView = { AnyView(EmptyView()) }
     var onPopoverDismiss: () -> Void = {}
+    /// The page's drawing (ScoreInk), and whether this member is drawing.
+    var ink = PageInk()
+    var drawing = false
+    var onInk: (RichPage, [XFDF.Ink]) -> Void = { _, _ in }
 
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
@@ -1347,6 +1400,22 @@ private struct ScorePageView: View {
                         }
                     }
                 }
+                }
+            }
+            // The marks drawn by hand, over everything: the team's, then this
+            // member's own — on their canvas, to draw on while 그리기 is on.
+            .overlay {
+                if !original {
+                    ZStack {
+                        InkLayerView(strokes: ink.others)
+                        ForEach(Array(ink.othersRich.enumerated()), id: \.offset) { _, rich in
+                            InkRichView(page: rich)
+                        }
+                        if drawing || !ink.mine.isEmpty || ink.mineDrawing != nil {
+                            InkCanvas(part: 0, drawing: ink.mineDrawing, strokes: ink.mine,
+                                      active: drawing, onChange: onInk)
+                        }
+                    }
                 }
             }
             .background(Color.white)
@@ -1515,6 +1584,7 @@ final class ScoreStandModel: ObservableObject {
     func load(_ item: ScoreStandItem) async {
         knownItems[item.id] = item
         onScreen = item
+        if inks[item.id] == nil { inks[item.id] = ScoreInkStore.load(item.id) }
         defer { readIfInRoom() }
         if states[item.id] != nil { return }
         if let cached = Self.cache[item.id] {
@@ -2097,6 +2167,146 @@ final class ScoreStandModel: ObservableObject {
         scheduleShare(item)
     }
 
+    // MARK: 그리기
+
+    /// Every layer of each chart on this device (ScoreInkStore).
+    @Published var inks: [String: ScoreInkStore.Layers] = [:]
+    private var inkTasks: [String: Task<Void, Never>] = [:]
+    /// When a layer last came from the room, by chart and author — every
+    /// point; the sheet's thinned copy of it does not replace it then.
+    private var heardInk: [String: Date] = [:]
+
+    /// This member, as their layers are named: the same on all their
+    /// devices, and no address on the sheet.
+    var inkAuthor: String {
+        let who = team?.lastActingEmail ?? nearbyName
+        return SHA256.hash(data: Data(who.lowercased().utf8)).prefix(5).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func inkLayers(_ item: ScoreStandItem) -> ScoreInkStore.Layers {
+        inks[item.id] ?? ScoreInkStore.load(item.id)
+    }
+
+    /// A page's drawing: everyone else's — as drawn where the room sent it,
+    /// as strokes otherwise — and this member's own.
+    static func pageInk(_ layers: ScoreInkStore.Layers, page: Int) -> PageInk {
+        var others: [XFDF.Ink] = [], othersRich: [RichPage] = []
+        for (author, strokes) in layers.byAuthor where author != ScoreInkStore.mine {
+            if let rich = layers.rich[author]?[String(page)] { othersRich.append(rich) }
+            else { others += strokes.filter { $0.part == page } }
+        }
+        return PageInk(others: others, othersRich: othersRich,
+                       mine: (layers.byAuthor[ScoreInkStore.mine] ?? []).filter { $0.part == page },
+                       mineDrawing: layers.mineDrawings[String(page)])
+    }
+
+    /// The pages with their drawings laid on, for a PDF or photos.
+    private func inked(_ item: ScoreStandItem, _ pages: [ScoreTransposer.Page]) -> [ScoreTransposer.Page] {
+        let layers = inkLayers(item)
+        return pages.enumerated().map { index, page in
+            var page = page
+            page.ink = InkRender.image(Self.pageInk(layers, page: index), size: page.pointSize)
+            return page
+        }
+    }
+
+    /// The drawer's own page changed on their canvas.
+    func setMyInk(_ item: ScoreStandItem, page: Int, drawing: RichPage, strokes: [XFDF.Ink]) {
+        var layers = inkLayers(item)
+        layers.mineDrawings[String(page)] = drawing
+        let others = (layers.byAuthor[ScoreInkStore.mine] ?? []).filter { $0.part != page }
+        layers.byAuthor[ScoreInkStore.mine] = others + strokes.enumerated().map { index, stroke in
+            var ink = stroke
+            ink.part = page
+            ink.name = "p\(page)s\(index)"
+            return ink
+        }
+        layers.dirty = true
+        inks[item.id] = layers
+        ScoreInkStore.save(layers, for: item.id)
+        // The room at once, every point.
+        let mine = layers.byAuthor[ScoreInkStore.mine] ?? []
+        let (pdfPages, sizes) = placement(item, count: states[item.id]?.pages.count ?? 1)
+        RehearsalLink.shared.send(.init(kind: .ink, fileId: item.attachment.fileId, key: SharedEdits.key(pages: item.pages),
+                                        xfdf: XFDF.encode(XFDF.Document(pages: [], inks: mine, author: nearbyName),
+                                                          pdfPages: pdfPages, sizes: sizes),
+                                        author: inkAuthor, page: page, rich: drawing, from: nearbyName))
+        // The sheet a moment after the pen lifts for good.
+        inkTasks[item.id]?.cancel()
+        inkTasks[item.id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            await self?.shareInk(item)
+        }
+    }
+
+    private func shareInk(_ item: ScoreStandItem) async {
+        guard let team else { return }
+        var layers = inkLayers(item)
+        guard layers.dirty else { return }
+        let mine = layers.byAuthor[ScoreInkStore.mine] ?? []
+        let part = SharedEdits.inkPart(SharedEdits.key(pages: item.pages), author: inkAuthor)
+        let (pdfPages, sizes) = placement(item, count: states[item.id]?.pages.count ?? 1)
+        let name = nearbyName
+        switch await team.shareCorrection(fileId: item.attachment.fileId, part: part, pdfPages: pdfPages, sizes: sizes, { entry in
+            entry = SharedEdits.Entry(inks: mine, author: name)
+        }) {
+        case .success(let result):
+            layers = inkLayers(item)
+            layers.seen[part] = result.revision
+            layers.dirty = layers.byAuthor[ScoreInkStore.mine] != mine
+            inks[item.id] = layers
+            ScoreInkStore.save(layers, for: item.id)
+        case .failure(.failed(let reason)):
+            shareStatus[item.id] = "그림을 공유하지 못했습니다: \(reason)"
+        case .failure:
+            shareStatus[item.id] = "그림은 이 기기와 근처 기기에만 — 팀 시트에 쓸 수 있는 계정이 필요합니다"
+        }
+    }
+
+    /// A layer from the room or the sheet. This member's own, drawn on
+    /// another of their devices, replaces this device's — unless this one
+    /// has strokes the sheet has not had yet.
+    private func takeInk(_ item: ScoreStandItem, author: String, strokes: [XFDF.Ink], full: Bool,
+                         page: Int? = nil, rich: RichPage? = nil) {
+        var layers = inkLayers(item)
+        if author == inkAuthor {
+            guard !layers.dirty else { return }
+            layers.byAuthor[ScoreInkStore.mine] = strokes
+            if let page, let rich { layers.mineDrawings[String(page)] = rich } else { layers.mineDrawings = [:] }
+        } else {
+            let key = "\(item.id)|\(author)"
+            if !full, let heard = heardInk[key], Date().timeIntervalSince(heard) < 60 { return }
+            if full { heardInk[key] = Date() }
+            layers.byAuthor[author] = strokes
+            if let page, let rich {
+                layers.rich[author, default: [:]][String(page)] = rich
+            } else if !full {
+                // From the sheet, drawn since they left the room: their
+                // strokes now, not an older page as drawn.
+                layers.rich[author] = nil
+            }
+        }
+        inks[item.id] = layers
+        ScoreInkStore.save(layers, for: item.id)
+    }
+
+    /// The sheet's ink rows for this chart that changed since last taken.
+    private func takeSheetInk(_ item: ScoreStandItem, ids: [String: String]) async {
+        guard let team else { return }
+        let prefix = CorrectionsTab.key(fileId: item.attachment.fileId, part: SharedEdits.key(pages: item.pages) + "~ink~")
+        for (key, revision) in ids where key.hasPrefix(prefix) {
+            let part = String(key.dropFirst(item.attachment.fileId.count + 1))
+            guard inkLayers(item).seen[part] != revision,
+                  let fetched = await team.fetchCorrection(fileId: item.attachment.fileId, part: part) else { continue }
+            takeInk(item, author: String(key.dropFirst(prefix.count)), strokes: fetched.entry.inks ?? [], full: false)
+            var layers = inkLayers(item)
+            layers.seen[part] = revision
+            inks[item.id] = layers
+            ScoreInkStore.save(layers, for: item.id)
+        }
+    }
+
     // MARK: The room
 
     /// The name shown to the devices nearby.
@@ -2167,6 +2377,10 @@ final class ScoreStandModel: ObservableObject {
                     send(.chords, item, xfdf: XFDF.encode(CorrectionsBody.document(pages), pdfPages: pdfPages, sizes: sizes),
                          to: message.sender)
                 }
+                continue
+            case .ink:
+                guard let author = message.author, let document = message.xfdf.flatMap(XFDF.decode) else { continue }
+                takeInk(item, author: author, strokes: document.inks, full: true, page: message.page, rich: message.rich)
                 continue
             case .digest:
                 // Two readings of one chart in the room: the device that
@@ -2436,6 +2650,7 @@ final class ScoreStandModel: ObservableObject {
             guard !Task.isCancelled, let team else { continue }
             guard let ids = await team.correctionRevisions() else { misses = min(misses + 1, 4); continue }
             misses = 0
+            for item in knownItems.values where states[item.id]?.isReady == true { await takeSheetInk(item, ids: ids) }
             for (id, item) in knownItems where states[id]?.isReady == true {
                 let part = SharedEdits.key(pages: item.pages)
                 guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)],
@@ -2503,7 +2718,7 @@ final class ScoreStandModel: ObservableObject {
 
     private func pdf(_ item: ScoreStandItem, caption: String? = nil, notice: String? = nil) async -> Data? {
         guard let state = states[item.id] else { return nil }
-        let pages = state.pages
+        let pages = inked(item, state.pages)
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
         let scale = chordScale
@@ -2519,7 +2734,7 @@ final class ScoreStandModel: ObservableObject {
         guard let state = states[item.id] else { return }
         isExporting = true
         defer { isExporting = false }
-        let pages = state.pages
+        let pages = inked(item, state.pages)
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
         let scale = chordScale
@@ -2623,6 +2838,26 @@ final class ScoreStandModel: ObservableObject {
                 annotation.userName = "SolaPraise"
                 page.addAnnotation(annotation)
             }
+            // The marks drawn by hand, as ink annotations — one width a
+            // stroke, which is what a PDF's ink can say.
+            let layers = inkLayers(item)
+            let strokes = layers.byAuthor.values.joined().filter { $0.part == part }
+            for stroke in strokes where stroke.points.count > 1 {
+                let annotation = PDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
+                let path = UIBezierPath()
+                func at(_ point: CGPoint) -> CGPoint {
+                    CGPoint(x: point.x * bounds.width, y: bounds.height - point.y * bounds.height)
+                }
+                path.move(to: at(stroke.points[0]))
+                for point in stroke.points.dropFirst() { path.addLine(to: at(point)) }
+                annotation.add(path)
+                annotation.color = InkBridge.color(stroke.color).withAlphaComponent(stroke.opacity)
+                let border = PDFBorder()
+                border.lineWidth = max(1, stroke.width * bounds.width)
+                annotation.border = border
+                annotation.userName = "SolaPraise"
+                page.addAnnotation(annotation)
+            }
             out.insert(page, at: out.pageCount)
         }
         guard let pdf = out.dataRepresentation() else {
@@ -2640,8 +2875,9 @@ final class ScoreStandModel: ObservableObject {
             return
         }
         let (pdfPages, sizes) = placement(item, count: pages.count)
-        let xml = XFDF.encode(CorrectionsBody.document(pages, lyrics: ScoreLyricFixStore.load(item.id)),
-                              pdfPages: pdfPages, sizes: sizes)
+        var document = CorrectionsBody.document(pages, lyrics: ScoreLyricFixStore.load(item.id))
+        document.inks = Array(inkLayers(item).byAuthor.values.joined())
+        let xml = XFDF.encode(document, pdfPages: pdfPages, sizes: sizes)
         share(Data(xml.utf8), named: baseName(item) + ".xfdf")
     }
 
@@ -2991,4 +3227,14 @@ private struct NearbyBadge: View {
                 .accessibilityLabel("근처 팀원 \(link.peers.count)명과 바로 연결됨: \(link.peers.joined(separator: ", "))")
         }
     }
+}
+
+/// One page's drawing: the team's strokes, and this member's own — as
+/// PencilKit kept them on this device, where it drew them.
+struct PageInk {
+    var others: [XFDF.Ink] = []
+    /// Others' pages as their PencilKit drew them, heard from the room.
+    var othersRich: [RichPage] = []
+    var mine: [XFDF.Ink] = []
+    var mineDrawing: RichPage? = nil
 }

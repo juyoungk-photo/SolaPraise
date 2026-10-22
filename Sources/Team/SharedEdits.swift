@@ -34,7 +34,16 @@ enum SharedEdits {
         var chords: [[ScoreChord]]? = nil
         var lyrics: [LyricFix]? = nil
         var pages: [String: String]? = nil
+        /// One member's drawing (a row of its own — `inkPart`), and whose.
+        var inks: [XFDF.Ink]? = nil
+        var author: String? = nil
     }
+
+    /// The row a member's drawing on a chart is kept in: theirs alone, so
+    /// two people drawing never write over each other — and an eraser
+    /// only ever takes the strokes of whoever holds it.
+    static func inkPart(_ part: String, author: String) -> String { "\(part)~ink~\(author)" }
+    static func isInk(_ part: String) -> Bool { part.contains("~ink~") }
 
 }
 
@@ -46,6 +55,13 @@ enum CorrectionsBody {
     static func encode(_ entry: SharedEdits.Entry, part: String, pdfPages: [Int], sizes: [CGSize]) -> String? {
         var document = document(entry.chords ?? [], lyrics: entry.lyrics ?? [])
         for (page, song) in entry.pages ?? [:] { document.fields["page.\(page)"] = song }
+        // Kept to the sheet's cell: each stroke's points thinned to its shape.
+        document.inks = (entry.inks ?? []).map { ink in
+            var thin = ink
+            thin.points = XFDF.simplify(ink.points)
+            return thin
+        }
+        document.author = entry.author
         return XFDF.encode(document, pdfPages: pdfPages, sizes: sizes)
     }
 
@@ -56,7 +72,9 @@ enum CorrectionsBody {
         })
         return SharedEdits.Entry(chords: document.pages.isEmpty ? nil : document.pages.map { $0.map(chord) },
                                  lyrics: document.lyrics.isEmpty ? nil : document.lyrics.map(lyric),
-                                 pages: pages.isEmpty ? nil : pages)
+                                 pages: pages.isEmpty ? nil : pages,
+                                 inks: document.inks.isEmpty ? nil : document.inks,
+                                 author: document.author)
     }
 
     static func document(_ pages: [[ScoreChord]], lyrics: [LyricFix] = []) -> XFDF.Document {

@@ -63,10 +63,28 @@ enum XFDF {
         var step: Int? = nil
     }
 
+    /// A stroke drawn by hand — pen or highlighter — as XFDF's <ink>.
+    struct Ink: Equatable, Codable {
+        var name: String
+        var part: Int
+        /// The stroke's points, as a share of the page, origin top-left.
+        var points: [CGPoint]
+        /// Width as a share of the page's width.
+        var width: CGFloat
+        /// 「#RRGGBB」.
+        var color: String
+        var opacity: Double = 1
+        var marker = false
+    }
+
     struct Document: Equatable {
         /// Per page of the chart, in order — empty pages included.
         var pages: [[Mark]]
         var lyrics: [Lyric] = []
+        /// Strokes drawn by hand, and whose they are (the standard's
+        /// `title`): one person's layer.
+        var inks: [Ink] = []
+        var author: String? = nil
         /// XFDF's form fields: name → value. For a 콘티 file, which page is
         /// which song — 「page.3」 → the song.
         var fields: [String: String] = [:]
@@ -91,6 +109,7 @@ enum XFDF {
             }
         }
         for lyric in document.lyrics { out += element(lyric) }
+        for ink in document.inks { out += element(ink, author: document.author, pdfPages: pdfPages, sizes: sizes) }
         return out + "</annots></xfdf>"
     }
 
@@ -137,6 +156,49 @@ enum XFDF {
         return "<freetext \(attributes.joined(separator: " "))><contents>\(escape(mark.text))</contents></freetext>"
     }
 
+    private static func element(_ ink: Ink, author: String?, pdfPages: [Int], sizes: [CGSize]) -> String {
+        let size = sizes.indices.contains(ink.part) ? sizes[ink.part] : CGSize(width: 612, height: 792)
+        let placed = ink.points.map { CGPoint(x: $0.x * size.width, y: (1 - $0.y) * size.height) }
+        let xs = placed.map(\.x), ys = placed.map(\.y)
+        let pad = ink.width * size.width
+        let rect = [(xs.min() ?? 0) - pad, (ys.min() ?? 0) - pad, (xs.max() ?? 0) + pad, (ys.max() ?? 0) + pad]
+        var attributes = [
+            "page=\"\(pdfPages.indices.contains(ink.part) ? pdfPages[ink.part] : ink.part)\"",
+            "rect=\"\(rect.map(points).joined(separator: ","))\"",
+            "name=\"\(escape(ink.name))\"",
+            "color=\"\(escape(ink.color))\"",
+            "width=\"\(points(ink.width * size.width))\"",
+            "opacity=\"\(number(CGFloat(ink.opacity)))\"",
+            "subject=\"\(ink.marker ? "highlight" : "ink")\"",
+            "sp:part=\"\(ink.part)\"",
+            "sp:size=\"\(points(size.width)),\(points(size.height))\""
+        ]
+        if let author { attributes.append("title=\"\(escape(author))\"") }
+        if ink.marker { attributes.append("sp:marker=\"1\"") }
+        let gesture = placed.map { "\(points($0.x)),\(points($0.y))" }.joined(separator: ";")
+        return "<ink \(attributes.joined(separator: " "))><inklist><gesture>\(gesture)</gesture></inklist></ink>"
+    }
+
+    /// A stroke with fewer points, its shape kept to within `tolerance`
+    /// (a share of the page) — Ramer–Douglas–Peucker. A hand's stroke comes
+    /// with a point every few pixels; most of them say nothing a line
+    /// between their neighbours does not.
+    static func simplify(_ points: [CGPoint], tolerance: CGFloat = 0.0008) -> [CGPoint] {
+        guard points.count > 2, let first = points.first, let last = points.last else { return points }
+        let dx = last.x - first.x, dy = last.y - first.y
+        let length = max(hypot(dx, dy), .ulpOfOne)
+        var farthest = 0, distance: CGFloat = 0
+        for index in 1..<(points.count - 1) {
+            let p = points[index]
+            let d = abs(dy * p.x - dx * p.y + last.x * first.y - last.y * first.x) / length
+            if d > distance { distance = d; farthest = index }
+        }
+        guard distance > tolerance else { return [first, last] }
+        let left = simplify(Array(points[...farthest]), tolerance: tolerance)
+        let right = simplify(Array(points[farthest...]), tolerance: tolerance)
+        return left.dropLast() + right
+    }
+
     private static func element(_ lyric: Lyric) -> String {
         "<freetext page=\"0\" rect=\"0,0,0,0\" flags=\"hidden\" subject=\"lyric\""
             + " sp:system=\"\(lyric.system)\" sp:bar=\"\(lyric.bar)\" sp:cell=\"\(lyric.cell)\" sp:verse=\"\(lyric.verse)\""
@@ -172,7 +234,7 @@ enum XFDF {
         guard reader.read(xml), reader.sawXFDF else { return nil }
         var pages = [[Mark]](repeating: [], count: max(reader.pageCount ?? 0, (reader.marks.map(\.part).max() ?? -1) + 1))
         for mark in reader.marks { pages[mark.part].append(mark) }
-        return Document(pages: pages, lyrics: reader.lyrics, fields: reader.fields)
+        return Document(pages: pages, lyrics: reader.lyrics, inks: reader.inks, author: reader.author, fields: reader.fields)
     }
 
     /// A command's three lists, or nil when the text is not XFDF.
@@ -185,8 +247,12 @@ enum XFDF {
     private final class Reader: NSObject, XMLParserDelegate {
         var marks: [Mark] = [], added: [Mark] = [], modified: [Mark] = [], deleted: [Mark] = []
         var lyrics: [Lyric] = []
+        var inks: [Ink] = []
+        var author: String?
         var fields: [String: String] = [:]
         private var field: String?
+        private var inkAttributes: [String: String]?
+        private var gesture: String?
         var pageCount: Int?
         var sawXFDF = false
         private var section = ""
@@ -216,6 +282,10 @@ enum XFDF {
             case "field":
                 field = attributes["name"]
                 text = ""
+            case "ink":
+                inkAttributes = attributes
+            case "gesture" where inkAttributes != nil:
+                gesture = ""
             case "value" where field != nil:
                 text = ""
             default: break
@@ -223,6 +293,7 @@ enum XFDF {
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
+            if gesture != nil { gesture! += string; return }
             if pending != nil || field != nil { text += string }
         }
 
@@ -233,6 +304,30 @@ enum XFDF {
             }
             if name == "field" {
                 field = nil
+                return
+            }
+            if name == "gesture", let attributes = inkAttributes, let drawn = gesture {
+                gesture = nil
+                let size = attributes["sp:size"].map { value -> CGSize in
+                    let parts = value.split(separator: ",").compactMap { Double($0) }
+                    return parts.count == 2 ? CGSize(width: parts[0], height: parts[1]) : CGSize(width: 612, height: 792)
+                } ?? CGSize(width: 612, height: 792)
+                let points = drawn.split(separator: ";").compactMap { pair -> CGPoint? in
+                    let xy = pair.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                    guard xy.count == 2 else { return nil }
+                    return CGPoint(x: xy[0] / size.width, y: 1 - xy[1] / size.height)
+                }
+                if author == nil { author = attributes["title"] }
+                inks.append(Ink(name: attributes["name"] ?? "", part: Int(attributes["sp:part"] ?? "") ?? 0,
+                                points: points,
+                                width: CGFloat(Double(attributes["width"] ?? "") ?? 1) / size.width,
+                                color: attributes["color"] ?? "#000000",
+                                opacity: Double(attributes["opacity"] ?? "") ?? 1,
+                                marker: attributes["sp:marker"] == "1"))
+                return
+            }
+            if name == "ink" {
+                inkAttributes = nil
                 return
             }
             guard name == pendingKind, let attributes = pending else { return }

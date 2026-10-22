@@ -60,6 +60,29 @@ struct CheckXFDF {
         let map = XFDF.Document(pages: [], fields: ["page.0": "빛의 노래", "page.2": "새벽 & 노래"])
         expect(XFDF.decode(XFDF.encode(map, pdfPages: [], sizes: [])), map, "fields read back as written")
 
+        // Strokes drawn by hand, one person's layer.
+        let stroke = XFDF.Ink(name: "s0", part: 1, points: [CGPoint(x: 0.1, y: 0.25), CGPoint(x: 0.2, y: 0.5)],
+                              width: 0.005, color: "#FF3B30", opacity: 1)
+        let mark = XFDF.Ink(name: "s1", part: 0, points: [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.6, y: 0.3)],
+                            width: 0.02, color: "#FFCC00", opacity: 0.35, marker: true)
+        let layer = XFDF.Document(pages: [[], []], inks: [stroke, mark], author: "가람")
+        let inkXML = XFDF.encode(layer, pdfPages: [0, 1], sizes: [CGSize(width: 600, height: 800), CGSize(width: 600, height: 800)])
+        guard let back = XFDF.decode(inkXML) else { print("FAIL: ink unread"); exit(1) }
+        expect(back.author, "가람", "whose strokes, as the standard's title")
+        expect(back.inks.count, 2, "both strokes")
+        expect(back.inks[0].points.map { (Double($0.x) * 1000).rounded() }, [100, 200], "points back across the page")
+        expect(back.inks[0].points.map { (Double($0.y) * 1000).rounded() }, [250, 500], "and down it")
+        expect((Double(back.inks[0].width) * 1000).rounded(), 5, "width as a share of the page")
+        expect(back.inks[1].marker && back.inks[1].opacity == 0.35, true, "a highlighter, see-through")
+        expect(inkXML.contains("<ink page=\"1\""), true, "the standard's ink, on its page")
+        expect(inkXML.contains("<gesture>60.00,600.00;120.00,400.00</gesture>"), true, "in PDF points, origin bottom-left")
+
+        // A hand's stroke: a point every few pixels, kept to its shape.
+        let wobble = (0...200).map { i in CGPoint(x: Double(i) / 400, y: 0.5 + (i % 2 == 0 ? 0.0001 : -0.0001)) }
+        expect(XFDF.simplify(wobble).count, 2, "a straight line, two points")
+        let corner = (0...100).map { CGPoint(x: Double($0) / 200, y: 0.2) } + (1...100).map { CGPoint(x: 0.5, y: 0.2 + Double($0) / 200) }
+        expect(XFDF.simplify(corner).count, 3, "an L, three points")
+
         if failures == 0 {
             print("all xfdf checks passed")
         } else {

@@ -54,6 +54,8 @@ final class RehearsalLink: NSObject, ObservableObject {
             /// chart each on their own before they met find out, and one
             /// takes the other's.
             case digest
+            /// One member's drawing on a chart, all of it (ScoreInk).
+            case ink
         }
         var kind: Kind
         /// The chart: the attachment's file id and which of its pages.
@@ -68,6 +70,12 @@ final class RehearsalLink: NSObject, ObservableObject {
         /// one device — the device it is for.
         var sender: String = ""
         var to: String? = nil
+        /// Whose drawing, for `ink`: the same on all of one member's devices.
+        var author: String? = nil
+        /// For `ink`: the page just drawn on, as PencilKit drew it — every
+        /// stand in the room shows it as drawn, not as the XFDF line.
+        var page: Int? = nil
+        var rich: RichPage? = nil
         /// Who fixed it, for the line that says so.
         var from: String
     }

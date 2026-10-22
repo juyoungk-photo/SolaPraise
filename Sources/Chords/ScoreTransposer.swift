@@ -42,6 +42,9 @@ enum ScoreTransposer {
         /// an image fitted to A4 width — so the export is the same shape of
         /// page, not one doubled by the rasterising scale.
         let pointSize: CGSize
+        /// Marks drawn by hand (ScoreInk), the page's size, laid over it in
+        /// what is exported — as drawn, pressure and texture and all.
+        var ink: UIImage? = nil
 
         init(image: UIImage, found: [Found], pointSize: CGSize) {
             self.image = image
@@ -194,6 +197,7 @@ enum ScoreTransposer {
                     chords: page.chords, chordHeight: page.chordHeight, shift: semitones,
                     useFlats: useFlats, scale: scale, in: bounds.size)
                 ScoreLayout.draw(labels, in: cg)
+                page.ink?.draw(in: bounds)
                 cg.restoreGState()
             }
         }
@@ -232,6 +236,7 @@ enum ScoreTransposer {
                     chords: page.chords, chordHeight: page.chordHeight, shift: semitones,
                     useFlats: useFlats, scale: scale, in: size)
                 ScoreLayout.draw(labels, in: context.cgContext)
+                page.ink?.draw(in: CGRect(origin: .zero, size: size))
             }
         }
     }
