@@ -148,7 +148,9 @@ struct ScoreStandView: View {
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          shareChoice: ((ScoreStandItem) async -> String?)? = nil,
          uploadSet: ((Data, String) async -> String)? = nil,
-         uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
+         uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil,
+         transport: PlayerCoordinator? = nil) {
+        self.transport = transport
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
         self.contiScope = contiScope
@@ -163,6 +165,10 @@ struct ScoreStandView: View {
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
     }
+
+    /// The player, when one is playing: its 연습 controls ride on the chart
+    /// (PracticeControls), since the video is under the stand.
+    let transport: PlayerCoordinator?
 
     private var item: ScoreStandItem? {
         items.indices.contains(index) ? items[index] : nil
@@ -301,6 +307,15 @@ struct ScoreStandView: View {
                         .accessibilityAction(named: fullPage ? "메뉴 보이기" : "악보만 크게 보기") {
                             fullPage.toggle()
                         }
+                    if showsChrome, let transport {
+                        PracticeControls(coordinator: transport, withTransport: true)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .tint(.white)
+                            .font(.caption)
+                            .padding(.vertical, 6)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     if showsChrome { controls(item).transition(.move(edge: .bottom).combined(with: .opacity)) }
                 }
                 .foregroundStyle(.white)

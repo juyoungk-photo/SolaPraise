@@ -360,6 +360,9 @@ final class PlayerCoordinator: NSObject, ObservableObject {
         isEmbedBlocked = false
         maxTimeReached = 0
         currentTime = 0
+        // A section belongs to the song it was marked in.
+        loopStart = nil
+        loopEnd = nil
         // This song is not playing until it says so. Left as they were, the
         // last song's `ready` and `playing` made the watchdog think a swap
         // that had failed was fine, so it never offered a way out.
@@ -399,6 +402,38 @@ final class PlayerCoordinator: NSObject, ObservableObject {
 
     func seek(to seconds: Double) {
         run("player.seekTo(\(seconds), true);")
+    }
+
+    // MARK: - 연습
+
+    /// The song again when it ends, instead of the next one.
+    @Published var repeatsSong = false
+    /// A section to play over and over: A, then B. With only A, the song
+    /// plays on from A and starts there again.
+    @Published private(set) var loopStart: Double?
+    @Published private(set) var loopEnd: Double?
+
+    /// A, then B, then off — one button, the way a practice loop is set
+    /// while playing along.
+    func markLoop() {
+        if loopStart == nil {
+            loopStart = max(currentTime - 0.5, 0)
+        } else if loopEnd == nil, let a = loopStart, currentTime > a + 1 {
+            loopEnd = currentTime
+            seek(to: a)
+            currentTime = a
+        } else {
+            clearLoop()
+        }
+    }
+
+    func clearLoop() {
+        loopStart = nil
+        loopEnd = nil
+    }
+
+    func togglePlay() {
+        if state == .playing { pause() } else { play() }
     }
 
     /// Which side was double-tapped, and when — the view draws the ripple
@@ -820,6 +855,13 @@ extension PlayerCoordinator: WKScriptMessageHandler {
             if let d = body["duration"] as? Double, d > 0 { duration = d }
 
             if state == .ended {
+                // 연습: the song, or the section, again — before anything
+                // moves on to the next one.
+                if repeatsSong || loopStart != nil {
+                    seek(to: loopEnd != nil ? (loopStart ?? 0) : 0)
+                    play()
+                    return
+                }
                 // In PiP the end card cannot be seen, and stopping would
                 // close the floating window. Carry on to the next song
                 // instead; YouTube's grid is drawn in the page, not in PiP.
@@ -837,6 +879,12 @@ extension PlayerCoordinator: WKScriptMessageHandler {
                 currentTime = t
                 maxTimeReached = max(maxTimeReached, t)
                 if t > 0 { noteAlive() }
+                // Past the section's end — reported once a second, so it
+                // turns back within a second of B.
+                if let a = loopStart, let b = loopEnd, t >= b {
+                    seek(to: a)
+                    currentTime = a
+                }
             }
             if let d = body["duration"] as? Double, d > 0 { duration = d }
 

@@ -354,7 +354,10 @@ struct ServicePrepView: View {
                                uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name in
                                    await team.uploadConti(data, name: name, service: service, sheetId: sheetId!,
                                                           by: team.actingEmail(auth: auth, planning: planning) ?? "")
-                               })
+                               },
+                               // Something playing — 찬양 이어 듣기 — is
+                               // played along to from the chart.
+                               transport: host.mode == .closed ? nil : host.coordinator)
             }
             .fullScreenCover(item: $standSong) { entry in
                 let versions = songVersions(entry.service)
@@ -368,7 +371,8 @@ struct ServicePrepView: View {
                                removeVersion: removeVersion,
                                shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
                                    await team.chooseForConti(item, service: entry.service, sheetId: sheetId!)
-                               })
+                               },
+                               transport: host.mode == .closed ? nil : host.coordinator)
             }
             .sheet(item: $responding) { ResponseSheet(service: $0) }
             .sheet(item: $reordering) { service in
