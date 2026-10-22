@@ -57,6 +57,10 @@ enum XFDF {
     struct Lyric: Equatable {
         var system: Int, bar: Int, cell: Int, verse: Int
         var from: String, to: String
+        /// Its place by the music: the chord before it and how many notes
+        /// after (LyricFix).
+        var chord: String? = nil
+        var step: Int? = nil
     }
 
     struct Document: Equatable {
@@ -127,6 +131,8 @@ enum XFDF {
     private static func element(_ lyric: Lyric) -> String {
         "<freetext page=\"0\" rect=\"0,0,0,0\" flags=\"hidden\" subject=\"lyric\""
             + " sp:system=\"\(lyric.system)\" sp:bar=\"\(lyric.bar)\" sp:cell=\"\(lyric.cell)\" sp:verse=\"\(lyric.verse)\""
+            + (lyric.chord.map { " sp:chord=\"\(escape($0))\"" } ?? "")
+            + (lyric.step.map { " sp:step=\"\($0)\"" } ?? "")
             + " sp:from=\"\(escape(lyric.from))\"><contents>\(escape(lyric.to))</contents></freetext>"
     }
 
@@ -215,7 +221,8 @@ enum XFDF {
             if attributes["subject"] == "lyric" {
                 lyrics.append(Lyric(system: int(attributes["sp:system"]), bar: int(attributes["sp:bar"]),
                                     cell: int(attributes["sp:cell"]), verse: int(attributes["sp:verse"]),
-                                    from: attributes["sp:from"] ?? "", to: text))
+                                    from: attributes["sp:from"] ?? "", to: text,
+                                    chord: attributes["sp:chord"], step: attributes["sp:step"].flatMap(Int.init)))
                 return
             }
             let offset = attributes["sp:offset"].map { value -> CGSize in

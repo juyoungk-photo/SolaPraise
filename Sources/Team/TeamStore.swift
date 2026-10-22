@@ -2158,7 +2158,14 @@ final class TeamStore: ObservableObject {
                     // Moved from the Drive file of before, with this change.
                     entry = before
                 }
+                let before = entry
                 change(&entry)
+                // Nothing new: the team has it already — the one who fixed it
+                // shared first, or a stand in the room is making sure. No
+                // writing, so ten stands making sure are not ten writes.
+                if let found, entry == before {
+                    return .success(SharedResult(revision: CorrectionsTab.token(found.revision), entry: entry))
+                }
                 guard let body = CorrectionsBody.encode(entry, part: part, pdfPages: pdfPages, sizes: sizes),
                       body.count <= CorrectionsTab.largestBody else {
                     return .failure(.failed("교정이 시트 한 칸보다 커서 공유하지 못했습니다"))

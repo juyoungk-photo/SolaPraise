@@ -115,7 +115,8 @@ enum CorrectionsBody {
     static func document(_ pages: [[ScoreChord]], lyrics: [LyricFix] = []) -> XFDF.Document {
         XFDF.Document(pages: pages.enumerated().map { part, chords in chords.map { mark($0, part: part) } },
                       lyrics: lyrics.map { .init(system: $0.system, bar: $0.bar, cell: $0.cell, verse: $0.verse,
-                                                 from: $0.from, to: $0.to) })
+                                                 from: $0.from, to: $0.to,
+                                                 chord: $0.chord?.uuidString, step: $0.step) })
     }
 
     static func mark(_ chord: ScoreChord, part: Int) -> XFDF.Mark {
@@ -133,7 +134,8 @@ enum CorrectionsBody {
     }
 
     static func lyric(_ fix: XFDF.Lyric) -> LyricFix {
-        LyricFix(system: fix.system, bar: fix.bar, cell: fix.cell, verse: fix.verse, from: fix.from, to: fix.to)
+        LyricFix(system: fix.system, bar: fix.bar, cell: fix.cell, verse: fix.verse, from: fix.from, to: fix.to,
+                 chord: fix.chord.map(id), step: fix.step)
     }
 
     /// The annotation's name as this app's chord id — the same every time

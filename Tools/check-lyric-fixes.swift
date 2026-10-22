@@ -94,6 +94,32 @@ struct CheckLyricFixes {
         fixes = LyricFixes.merge(other, system: 0, shown: read, edited: edited)
         expect(fixes.count == 2 && fixes.contains(other[0]), "other lines' fixes kept: \(fixes)")
 
+        // 7. Another device split the page differently — the second bar a
+        // line of its own, the first bar's notes in two bars — and the fix,
+        // kept by the chord before it, still lands on its syllable.
+        let x = UUID(), y = UUID()
+        func chorded(_ chord: UUID?, _ syllables: String...) -> ScoreChart.Cell {
+            ScoreChart.Cell(chord: chord, syllables: syllables)
+        }
+        let mine = line([[chorded(x, "가", "마"), chorded(nil, "나", "바")], [chorded(y, "타", "사"), chorded(nil, "라", "")]])
+        edited = mine
+        edited.bars[1].cells[1].syllables[0] = "러"
+        fixes = LyricFixes.merge([], system: 0, shown: mine, edited: edited)
+        expect(fixes.first?.chord == y && fixes.first?.step == 1, "kept by the chord before it: \(fixes)")
+        let theirs = [line([[chorded(x, "가", "마")], [chorded(nil, "나", "바")]]),
+                      line([[chorded(y, "타", "사"), chorded(nil, "라", "")]])]
+        let laid = LyricFixes.apply(fixes, to: theirs)
+        expect(text(laid[1], verse: 0) == "타|러", "found on the other device's own line: \(text(laid[1], verse: 0))")
+        expect(laid[0] == theirs[0], "nothing else touched")
+        // Words before a staff's first chord: counted back from it.
+        let lead = line([[chorded(nil, "오", ""), chorded(x, "가", "")]], verses: 1)
+        edited = lead
+        edited.bars[0].cells[0].syllables[0] = "우"
+        fixes = LyricFixes.merge([], system: 0, shown: lead, edited: edited)
+        expect(fixes.first?.chord == x && fixes.first?.step == -1, "before the first chord: \(fixes)")
+        let leadThere = [line([[chorded(nil, "아", "")]], verses: 1), line([[chorded(nil, "오", ""), chorded(x, "가", "")]], verses: 1)]
+        expect(text(LyricFixes.apply(fixes, to: leadThere)[1], verse: 0) == "우|가", "found before its chord on another line")
+
         if failures == 0 {
             print("all lyric fix checks passed")
         } else {

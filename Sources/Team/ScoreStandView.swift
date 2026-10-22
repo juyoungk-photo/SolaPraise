@@ -2195,7 +2195,8 @@ final class ScoreStandModel: ObservableObject {
                     continue
                 }
                 let laid = delta.applied(to: current, same: Self.samePrinted)
-                keep(item, pages: laid.pages)
+                keep(item, pages: laid.pages, pending: true)
+                makeSure(item)
                 // Fell partly on nothing: this copy was read differently.
                 // The whole chart, from the one who changed it.
                 if laid.missed > 0 { askRoom(item) }
@@ -2203,6 +2204,12 @@ final class ScoreStandModel: ObservableObject {
                 let fixes = message.xfdf.flatMap(XFDF.decode)?.lyrics.map(CorrectionsBody.lyric) ?? []
                 ScoreLyricFixStore.save(fixes, for: item.id)
                 charts[item.id] = nil
+                if var saved = ScoreEditStore.load(item.id) {
+                    if saved.dirty != true { saved.lyricBase = saved.lyricBase ?? [] }
+                    saved.dirty = true
+                    ScoreEditStore.write(saved, for: item.id)
+                    makeSure(item)
+                }
             }
             heardNearby[item.id] = Date()
             if message.kind != .chords {
@@ -2218,8 +2225,16 @@ final class ScoreStandModel: ObservableObject {
 
     /// Kept as this device's copy, not as its own fix: the sender shares it
     /// with the sheet, and this device's own unshared fixes stay marked.
-    private func keep(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
+    /// - pending: a fix heard from the room, not yet known to be on the
+    ///   sheet: marked as this device's to share until it is, with what the
+    ///   sheet had before as the base it is measured from — so the sheet's
+    ///   next writing is put together with it, not laid over it.
+    private func keep(_ item: ScoreStandItem, pages: [[ScoreChord]], pending: Bool = false) {
         var saved = ScoreEditStore.load(item.id) ?? .init(pages: pages, edited: true, version: ScoreRecognition.version)
+        if pending, saved.dirty != true {
+            saved.base = saved.base ?? saved.pages
+            saved.dirty = true
+        }
         saved.pages = pages
         saved.edited = true
         ScoreEditStore.write(saved, for: item.id)
@@ -2291,6 +2306,7 @@ final class ScoreStandModel: ObservableObject {
     /// the members not in the room.
     private func scheduleShare(_ item: ScoreStandItem) {
         shareTasks[item.id]?.cancel()
+        backstop.remove(item.id)
         shareStatus[item.id] = "고친 코드를 팀과 공유하는 중…"
         shareTasks[item.id] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
@@ -2298,6 +2314,27 @@ final class ScoreStandModel: ObservableObject {
             await self?.share(item)
         }
     }
+
+    /// A fix heard from a stand in the room, made sure of on the sheet a
+    /// few seconds later — by every stand that heard it, each after its own
+    /// wait — in case the one who made it could not share it (an account
+    /// that cannot write the sheet, the network). Where it is there
+    /// already, sharing writes nothing (TeamStore.shareCorrection).
+    private func makeSure(_ item: ScoreStandItem) {
+        guard shareTasks[item.id] == nil || backstop.contains(item.id) else { return }
+        shareTasks[item.id]?.cancel()
+        backstop.insert(item.id)
+        shareTasks[item.id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Double.random(in: 4...9)))
+            guard !Task.isCancelled else { return }
+            await self?.share(item)
+            self?.backstop.remove(item.id)
+            self?.shareTasks[item.id] = nil
+        }
+    }
+    /// Charts being made sure of: failing to share them says nothing — the
+    /// fix was someone else's.
+    private var backstop: Set<String> = []
 
     /// Shares now whatever is waiting — when the stand closes.
     func shareNow() {
@@ -2347,10 +2384,15 @@ final class ScoreStandModel: ObservableObject {
                 ScoreLyricFixStore.save(mergedLyrics, for: item.id)
                 charts[item.id] = nil
             }
-            shareStatus[item.id] = merged != saved.pages
-                ? "공유했습니다 — 팀원이 고친 곳도 함께 들어왔습니다"
-                : "고친 코드를 팀과 공유했습니다"
+            // Made sure of for someone else: theirs to announce, not this one's.
+            if !backstop.contains(item.id) {
+                shareStatus[item.id] = merged != saved.pages
+                    ? "공유했습니다 — 팀원이 고친 곳도 함께 들어왔습니다"
+                    : "고친 코드를 팀과 공유했습니다"
+            }
             if editedMeanwhile { scheduleShare(item) }
+        case .failure where backstop.contains(item.id):
+            break
         case .failure(.noAccess):
             shareStatus[item.id] = "이 기기에만 저장됨 — 팀 시트에 쓸 수 있는 계정이 필요합니다"
         case .failure(.moved), .failure(.notFound):
