@@ -132,6 +132,53 @@ class PlanningAuth: NSObject, ObservableObject {
         await exchange(code: code, verifier: verifier)
     }
 
+    /// Google's own picker, in the same sign-in sheet, to choose a folder of
+    /// the church's shared drive once — the folder the team's charts go
+    /// into (MusicSheetFolder). The grant stays drive.file: choosing a
+    /// folder there is what lets the app put files in it, where a folder
+    /// it did not make is otherwise closed to it. Returns the folder's id.
+    func pickFolder() async -> String? {
+        guard !clientId.isEmpty, let challenge = Self.challenge(for: Self.randomVerifier()) else { return nil }
+        var comps = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
+        comps.queryItems = [
+            .init(name: "client_id", value: clientId),
+            .init(name: "redirect_uri", value: redirectURI),
+            .init(name: "response_type", value: "code"),
+            // The picker takes this scope alone.
+            .init(name: "scope", value: "https://www.googleapis.com/auth/drive.file"),
+            .init(name: "code_challenge", value: challenge),
+            .init(name: "code_challenge_method", value: "S256"),
+            .init(name: "prompt", value: "consent"),
+            .init(name: "trigger_onepick", value: "true"),
+            .init(name: "allow_folder_selection", value: "true"),
+            .init(name: "mimetypes", value: "application/vnd.google-apps.folder"),
+            .init(name: "login_hint", value: email)
+        ]
+        guard let url = comps.url else { return nil }
+        let callbackScheme = String(redirectURI.split(separator: ":").first ?? "")
+        return await withCheckedContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callback, error in
+                if let error {
+                    let cancelled = (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin
+                    if !cancelled { self.lastError = error.localizedDescription }
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let items = callback.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+                if let problem = items.first(where: { $0.name == "error" })?.value {
+                    self.lastError = "폴더를 고르지 못했습니다 (\(problem))"
+                }
+                let picked = items.first { $0.name == "picked_file_ids" }?.value?
+                    .split(separator: ",").first.map(String.init)
+                continuation.resume(returning: picked)
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            self.session = session
+            session.start()
+        }
+    }
+
     func signOut() {
         Keychain.delete(keychainAccount)
         UserDefaults.standard.removeObject(forKey: emailKey)

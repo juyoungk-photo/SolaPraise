@@ -108,7 +108,7 @@ struct ContiPagesSheet: View {
         case .success:
             dismiss()
         case .failure(.noAccess):
-            note = "이 기기에 저장했습니다. 팀과 공유하려면 드라이브 권한을 연결하세요."
+            note = "이 기기에 저장했습니다. 팀과 공유하려면 팀 시트에 쓸 수 있는 계정이 필요합니다."
         case .failure:
             note = "이 기기에 저장했습니다. 팀과 공유하지는 못했습니다 — 시트를 새로 고친 뒤 다시 저장해 보세요."
         }

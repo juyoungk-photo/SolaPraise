@@ -22,6 +22,8 @@ struct SettingsView: View {
     private var channels: [Channel]
 
     @State private var addingFor: Purpose?
+    @State private var musicSheetName = MusicSheetFolder.name
+    @State private var musicSheetProblem = MusicSheetFolder.problem
     @AppStorage("app.appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(PlayerCoordinator.autoPictureInPictureKey) private var autoPictureInPicture = true
     @AppStorage("reading.opensOnLaunch") private var opensReadingOnLaunch = false
@@ -302,6 +304,7 @@ struct SettingsView: View {
 
         extraTranslationSection
         teamSheetSection
+        musicSheetSection
     }
 
     // MARK: - Team sheet
@@ -468,6 +471,59 @@ struct SettingsView: View {
                 Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다. 교회 계정으로 기록을 남기고 싶으면 「교회 계정 연결」을 쓰세요 — YouTube 계정은 그대로 둔 채 시트와 악보만 그 계정으로 씁니다.")
                 Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에는 앱에 로그인하는 주소를 적습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 「예배」 탭이 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
             }
+        }
+    }
+
+    // MARK: - The team's chart folder
+
+    /// 「MusicSheet」: the church shared drive's folder that charts for one
+    /// song go into, chosen once through Google's picker (MusicSheetFolder).
+    @ViewBuilder
+    private var musicSheetSection: some View {
+        Section {
+            if let name = musicSheetName {
+                LabeledContent("곡별 악보 폴더", value: name)
+                if musicSheetProblem {
+                    Label("이 폴더에 올리지 못했습니다 — 지워졌거나, 공유 드라이브 밖으로 옮겨졌거나, 권한이 없어졌습니다. 다시 골라 주세요. 그동안은 각자 드라이브에 올라갑니다.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            if planning.isSignedIn {
+                Button {
+                    Task {
+                        guard let id = await planning.pickFolder() else { return }
+                        let name = await team.folderName(id) ?? "고른 폴더"
+                        MusicSheetFolder.choose(id, name: name)
+                        musicSheetName = name
+                        musicSheetProblem = false
+                    }
+                } label: {
+                    Label(musicSheetName == nil ? "「MusicSheet」 폴더 고르기 (시험용)" : "다시 고르기",
+                          systemImage: "folder.badge.plus")
+                }
+                if musicSheetName != nil {
+                    Button("고른 폴더 해제", role: .destructive) {
+                        MusicSheetFolder.choose(nil, name: nil)
+                        musicSheetName = nil
+                        musicSheetProblem = false
+                    }
+                    .font(.caption)
+                }
+                if let message = planning.lastError {
+                    Text(message).font(.caption2).foregroundStyle(.orange)
+                }
+            } else {
+                AccountSignInButton(role: .church) {
+                    await planning.signIn()
+                    team.configure(auth: auth, planning: planning)
+                }
+            }
+        } header: {
+            Text("곡별 악보 폴더")
+        } footer: {
+            Text("📎로 올리는 곡별 악보와 전조해 올리는 악보가 교회 공유 드라이브의 이 폴더에 모입니다. 팀원마다 처음 한 번 구글 화면에서 그 폴더를 고르면 됩니다. 고르지 않으면 각자 드라이브의 「SolaPraise 악보」 폴더에 올라갑니다. 콘티 PDF는 지금처럼 콘티 폴더로 갑니다. 폴더 이름은 바꾸거나 공유 드라이브 안에서 옮겨도 됩니다.")
         }
     }
 

@@ -460,11 +460,16 @@ final class TeamStore: ObservableObject {
             ? DriveClient { try await planning.token() }
             : nil
         driveAccount = planning.email
+        TeamStore.current = self
         lastActingEmail = actingEmail(auth: auth, planning: planning)
     }
 
     /// Whose Drive `drive` writes to: whose corrections files are whose.
     private var driveAccount: String?
+
+    /// The app's one store, for code with no view to be handed it — a 콘티
+    /// file's page map read while splitting it (ContiPages).
+    static weak var current: TeamStore?
 
     /// Who writes, as of the last configure — for rows written outside a
     /// view that knows the accounts.
@@ -771,6 +776,7 @@ final class TeamStore: ObservableObject {
             rawSongMemos = memoRead ?? []
             songMemos = SongMemos.parse(rawSongMemos)
             hasWeekTab = titleRead?.contains(WeekTab.tab) ?? false
+            hasCorrectionsTab = titleRead?.contains(CorrectionsTab.tab) ?? false
             churchNotes = churchRead.notes
             churchSheetProblem = churchRead.problem
             applyAttachments(attachmentRead)
@@ -1692,6 +1698,11 @@ final class TeamStore: ObservableObject {
     /// attached. Only putting a new file up requires it.
     var canAttach: Bool { drive != nil }
 
+    /// A Drive folder's name as it is now, through the church account.
+    func folderName(_ id: String) async -> String? {
+        await drive?.name(of: id)
+    }
+
     func attachments(for service: TeamService) -> [Attachment] {
         attachments[Calendar.current.startOfDay(for: service.date)] ?? []
     }
@@ -1964,164 +1975,224 @@ final class TeamStore: ObservableObject {
         return written
     }
 
-    /// Puts this chart's hand corrections where the team reads them: a
-    /// small JSON file in Drive, named in the chart's Edits cell. A 콘티 file
-    /// holds several songs, so the file is a map — one entry per song's
-    /// pages — and an update keeps the other entries. Returns the new
-    /// file's id, or a sentence on failure.
-    /// What was shared, as the team now has it: this device's corrections
-    /// put together with anyone else's since `base` (EditMerge).
+    // MARK: - The 교정 tab
+
+    /// What a share came to: the writing it is (「tab#3」), and the chart's
+    /// corrections as the team now has them — this device's put together
+    /// with anyone else's since (EditMerge).
     struct SharedResult {
-        let fileId: String
-        let file: SharedEdits.File
+        let revision: String
+        let entry: SharedEdits.Entry
     }
 
-    func shareEdits(fileId: String, key: String, pages: [[ScoreChord]], base: [[ScoreChord]]?,
-                    lyrics: [LyricFix], lyricBase: [LyricFix]?) async -> Result<SharedResult, ShareEditsError> {
-        await updateShared(fileId: fileId) { file in
-            file.charts[key] = EditMerge.pages(base: base, local: pages, remote: file.charts[key])
-            let words = EditMerge.list(base: lyricBase, local: lyrics, remote: file.lyrics?[key],
-                                       same: { $0.samePlace($1) })
-            var all = file.lyrics ?? [:]
-            all[key] = words.isEmpty ? nil : words
-            file.lyrics = all.isEmpty ? nil : all
+    /// The tab's rows by chart, as of the last look (correctionRevisions).
+    private var correctionRows: [String: CorrectionsTab.Row] = [:]
+    private var hasCorrectionsTab = false
+
+    /// Which writing of a chart's corrections the team has, as last seen:
+    /// the tab's, else the Drive file of before named in its Edits cell.
+    func knownRevision(fileId: String, part: String) -> String? {
+        if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
+            return CorrectionsTab.token(row.revision)
         }
+        return attachment(fileId: fileId)?.editsFileId
     }
 
-    /// Which page of a 콘티 file is which song, as set by hand, for the team.
-    func sharePageAssignment(fileId: String, pages: [Int: String]) async -> Result<String, ShareEditsError> {
-        await updateShared(fileId: fileId) { file in
-            file.pages = Dictionary(uniqueKeysWithValues: pages.map { (String($0.key), $0.value) })
-        }.map(\.fileId)
-    }
-
-    /// Every chart's Edits file id, read fresh — one read of the
-    /// Attachments tab — and kept, so a chart opened next starts from it.
-    /// Nil when the sheet cannot be read.
-    func editsIds() async -> [String: String]? {
+    /// One look at what changed: the tab's file, part and writing columns,
+    /// and — for charts with no row yet — the Edits column of before, in a
+    /// single request. Every 3 seconds while a chart is open.
+    func correctionRevisions() async -> [String: String]? {
         guard let client, let sheetId = TeamSheetSource.current else { return nil }
-        var pairs: [(id: String, edits: String)] = []
-        // Two columns, in one request — not the whole tab every few seconds,
-        // which grows by a row with every chart ever put up. Where the
-        // columns are comes from the last full read of the tab.
-        if let header = attachmentsHeader,
-           let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
-           let editsCol = TeamSheet.column(header, ["edits", "교정"]) {
-            let tab = TeamSheet.attachmentsTab
-            let ids = TeamSheet.columnLetter(idCol), edits = TeamSheet.columnLetter(editsCol)
-            guard let columns = try? await client.readColumns(sheetId: sheetId,
-                                                              ranges: ["\(tab)!\(ids):\(ids)", "\(tab)!\(edits):\(edits)"]),
-                  columns.count == 2 else { return nil }
-            for (index, id) in columns[0].enumerated() {
-                pairs.append((id, columns[1].indices.contains(index) ? columns[1][index] : ""))
-            }
-        } else {
-            guard let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab),
-                  let header = rows.first,
-                  let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
+        var ranges: [String] = []
+        if hasCorrectionsTab {
+            ranges += ["\(CorrectionsTab.tab)!A:A", "\(CorrectionsTab.tab)!C:C", "\(CorrectionsTab.tab)!D:D"]
+        }
+        let legacy = attachmentsHeader.flatMap { header -> (String, String)? in
+            guard let idCol = TeamSheet.column(header, ["fileid", "파일id"]),
                   let editsCol = TeamSheet.column(header, ["edits", "교정"]) else { return nil }
-            attachmentsHeader = header
-            for row in rows.dropFirst() where row.indices.contains(idCol) {
-                pairs.append((row[idCol], row.indices.contains(editsCol) ? row[editsCol] : ""))
-            }
+            return (TeamSheet.columnLetter(idCol), TeamSheet.columnLetter(editsCol))
         }
+        if let (ids, edits) = legacy {
+            ranges += ["\(TeamSheet.attachmentsTab)!\(ids):\(ids)", "\(TeamSheet.attachmentsTab)!\(edits):\(edits)"]
+        }
+        guard !ranges.isEmpty,
+              let columns = try? await client.readColumns(sheetId: sheetId, ranges: ranges),
+              columns.count == ranges.count else { return nil }
         var out: [String: String] = [:]
-        for pair in pairs {
-            let id = pair.id.trimmingCharacters(in: .whitespaces)
-            // The header's own label, read as a cell of the column.
-            guard !id.isEmpty, TeamSheet.column([id], ["fileid", "파일id"]) == nil else { continue }
-            out[id] = pair.edits.trimmingCharacters(in: .whitespaces)
+        var next = 0
+        if hasCorrectionsTab {
+            correctionRows = CorrectionsTab.index(files: columns[0], parts: columns[1], revisions: columns[2])
+            for (key, row) in correctionRows { out[key] = CorrectionsTab.token(row.revision) }
+            next = 3
         }
-        for (day, list) in attachments {
-            for (index, item) in list.enumerated() {
-                if let edits = out[item.fileId], !edits.isEmpty, edits != item.editsFileId {
-                    attachments[day]?[index].editsFileId = edits
+        if legacy != nil {
+            let ids = columns[next], edits = columns[next + 1]
+            for (index, raw) in ids.enumerated() {
+                let id = raw.trimmingCharacters(in: .whitespaces)
+                let cell = edits.indices.contains(index) ? edits[index].trimmingCharacters(in: .whitespaces) : ""
+                guard !id.isEmpty, !cell.isEmpty, TeamSheet.column([id], ["fileid", "파일id"]) == nil else { continue }
+                // Under the file id alone: a chart part with a tab row is
+                // looked up by its own key first.
+                out[id] = cell
+                for (day, list) in attachments {
+                    if let i = list.firstIndex(where: { $0.fileId == id }), list[i].editsFileId != cell {
+                        attachments[day]?[i].editsFileId = cell
+                    }
                 }
             }
         }
         return out
     }
 
-    private func updateShared(fileId: String,
-                              _ change: (inout SharedEdits.File) -> Void) async -> Result<SharedResult, ShareEditsError> {
-        guard let client, let drive, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
-        guard let item = attachment(fileId: fileId) else { return .failure(.notFound) }
+    /// A chart part's corrections and the writing they are: its row of the
+    /// tab, else the Drive file of before — which is then moved into the
+    /// tab, so the next reader finds it there.
+    func fetchCorrection(fileId: String, part: String) async -> (revision: String, entry: SharedEdits.Entry)? {
+        guard let client, let sheetId = TeamSheetSource.current else { return nil }
+        if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
+            let layout = CorrectionsTab.Layout.standard
+            let column = TeamSheet.columnLetter(layout.body)
+            guard let cell = try? await client.read(sheetId: sheetId, range: "\(CorrectionsTab.tab)!\(column)\(row.row)"),
+                  let text = cell.first?.first,
+                  let entry = try? JSONDecoder().decode(SharedEdits.Entry.self, from: Data(text.utf8)) else { return nil }
+            return (CorrectionsTab.token(row.revision), entry)
+        }
+        guard let token = attachment(fileId: fileId)?.editsFileId,
+              let file = await SharedEdits.fetch(token),
+              let entry = SharedEdits.entry(from: file, part: part) else { return nil }
+        if !isReadOnly {
+            Task { _ = await self.shareCorrection(fileId: fileId, part: part) { $0 = $0.chords == nil && $0.pages == nil ? entry : $0 } }
+        }
+        return (token, entry)
+    }
+
+    /// The tab, made the first time and hidden: it is the app's, written
+    /// in JSON, and a member reading the sheet has nothing to do there.
+    private func ensureCorrectionsTab(sheetId: String, client: SheetsClient) async throws {
+        if hasCorrectionsTab { return }
+        if !(try await client.tabTitles(sheetId: sheetId)).contains(CorrectionsTab.tab) {
+            try await client.addSheet(sheetId: sheetId, title: CorrectionsTab.tab)
+            let last = TeamSheet.columnLetter(CorrectionsTab.header.count - 1)
+            try await client.write(sheetId: sheetId, range: "\(CorrectionsTab.tab)!A1:\(last)1", row: CorrectionsTab.header)
+            if let gid = try await client.tabGid(sheetId: sheetId, title: CorrectionsTab.tab) {
+                try? await client.formatUpdate(sheetId: sheetId, requests: [[
+                    "updateSheetProperties": ["properties": ["sheetId": gid, "hidden": true], "fields": "hidden"]
+                ]])
+            }
+        }
+        hasCorrectionsTab = true
+    }
+
+    /// Writes a chart part's corrections into its row of the tab: the row
+    /// as it is now, `change` laid on it, the next writing number — read
+    /// back, and made again on top of anyone else's that landed first.
+    func shareCorrection(fileId: String, part: String,
+                         _ change: (inout SharedEdits.Entry) -> Void) async -> Result<SharedResult, ShareEditsError> {
+        guard let client, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
+        let item = attachment(fileId: fileId)
+        let song = item.map { $0.song.isEmpty ? $0.name : $0.song } ?? ""
+        let who = lastActingEmail.flatMap { rosterName(for: $0) } ?? lastActingEmail ?? ""
+        let layout = CorrectionsTab.Layout.standard
+        let lastColumn = TeamSheet.columnLetter(CorrectionsTab.header.count - 1)
         do {
-            let (header, _) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
-            // A 콘티 folder file gets its row the first time it is needed.
-            let row: Int
-            if let existing = item.row {
-                row = existing
-            } else {
-                row = try await registerRow(for: item, sheetId: sheetId, client: client, header: header)
-            }
-            guard let column = TeamSheet.column(header, ["edits", "교정"]) else { return .failure(.notFound) }
-            let cell = "\(TeamSheet.attachmentsTab)!\(TeamSheet.columnLetter(column))\(row)"
-            func edits(in row: [String]) -> String? {
-                let id = row.indices.contains(column) ? row[column].trimmingCharacters(in: .whitespaces) : ""
-                return id.isEmpty ? nil : id
-            }
-            // The row as it is now: still this chart, and the Edits file the
-            // team has NOW. Started from the id this device last loaded, a
-            // share made on top of an older file than another member's
-            // latest, and threw their corrections — and other songs' pages
-            // of a 콘티 file — away.
-            var current = (try? await client.read(sheetId: sheetId,
-                                                  range: "\(TeamSheet.attachmentsTab)!A\(row):AZ\(row)"))?.first ?? []
-            guard current.contains(where: { $0.trimmingCharacters(in: .whitespaces) == fileId }) else {
-                return .failure(.moved)
-            }
-            var previous = edits(in: current) ?? item.editsFileId
-            let account = driveAccount ?? ""
-            // Two members sharing in the same moment both start from the same
-            // file, and the second write would erase the first's fixes. So
-            // the cell is read back: if someone else's file is in it, ours is
-            // made again on top of theirs.
+            try await ensureCorrectionsTab(sheetId: sheetId, client: client)
             for _ in 0..<3 {
-                // Whatever the team has now, then this device's change.
-                var file = await SharedEdits.fetch(previous) ?? SharedEdits.File()
-                change(&file)
-                let data = try JSONEncoder().encode(file)
-                // Into this account's own file for the chart, written over —
-                // one file per member per chart, not a new one per fix. Made
-                // the first time, or when the one remembered is refused.
-                let pointing = EditsToken(previous)
-                var written: EditsToken?
-                if let mine = SharedEdits.mine(for: fileId, account: account) {
-                    if (try? await drive.overwrite(fileId: mine.fileId, data: data, mimeType: "application/json")) != nil {
-                        // The next writing of whichever is higher: the cell may
-                        // already hold this file at a later writing.
-                        let last = pointing?.fileId == mine.fileId ? max(mine.revision, pointing!.revision) : mine.revision
-                        written = EditsToken(fileId: mine.fileId, revision: last + 1)
+                _ = await correctionRevisions()
+                let key = CorrectionsTab.key(fileId: fileId, part: part)
+                let found = correctionRows[key]
+                var entry = SharedEdits.Entry()
+                if let found {
+                    let range = "\(CorrectionsTab.tab)!\(TeamSheet.columnLetter(layout.body))\(found.row)"
+                    if let text = (try? await client.read(sheetId: sheetId, range: range))?.first?.first,
+                       let kept = try? JSONDecoder().decode(SharedEdits.Entry.self, from: Data(text.utf8)) {
+                        entry = kept
                     }
+                } else if let token = item?.editsFileId, let file = await SharedEdits.fetch(token),
+                          let before = SharedEdits.entry(from: file, part: part) {
+                    // Moved from the Drive file of before, with this change.
+                    entry = before
                 }
-                if written == nil {
-                    let uploaded = try await drive.upload(data: data, name: "\(item.name)-교정.json",
-                                                          mimeType: "application/json")
-                    written = EditsToken(fileId: uploaded.fileId, revision: 1)
+                change(&entry)
+                let body = String(decoding: try JSONEncoder().encode(entry), as: UTF8.self)
+                guard body.count <= CorrectionsTab.largestBody else {
+                    return .failure(.failed("교정이 시트 한 칸보다 커서 공유하지 못했습니다"))
                 }
-                guard let token = written else { break }
-                SharedEdits.setMine(token, for: fileId, account: account)
-                try await client.write(sheetId: sheetId, range: "\(cell):\(cell)", row: [token.cell])
-                try? await Task.sleep(for: .milliseconds(600))
-                current = (try? await client.read(sheetId: sheetId, range: "\(cell):\(cell)"))?.first ?? []
-                let now = current.first?.trimmingCharacters(in: .whitespaces)
-                if now == nil || now == token.cell {
-                    for (day, list) in attachments {
-                        if let i = list.firstIndex(where: { $0.fileId == fileId }) {
-                            attachments[day]?[i].editsFileId = token.cell
-                        }
-                    }
-                    return .success(SharedResult(fileId: token.cell, file: file))
+                let revision = (found?.revision ?? 0) + 1
+                let stamp = TeamSheet.dateFormatter.string(from: Date()) + " · " + String(UUID().uuidString.prefix(6))
+                var cells = Array(repeating: "", count: CorrectionsTab.header.count)
+                cells[layout.file] = fileId
+                cells[layout.song] = song
+                cells[layout.part] = part
+                cells[layout.revision] = String(revision)
+                cells[layout.body] = body
+                cells[layout.by] = who
+                cells[layout.at] = stamp
+                let row: Int
+                if let found {
+                    row = found.row
+                    try await client.write(sheetId: sheetId, range: "\(CorrectionsTab.tab)!A\(row):\(lastColumn)\(row)", row: cells)
+                } else {
+                    guard let appended = try await client.append(sheetId: sheetId, tab: CorrectionsTab.tab, row: cells)
+                    else { continue }
+                    row = appended
                 }
-                // Someone else's landed after ours: ours, made again on theirs.
-                previous = now
+                // Read back: ours, or someone else's that landed after it.
+                let back = (try? await client.read(sheetId: sheetId, range: "\(CorrectionsTab.tab)!A\(row):\(lastColumn)\(row)"))?.first ?? []
+                let stuck = back.indices.contains(layout.at) && back[layout.at] == stamp
+                if back.isEmpty || stuck {
+                    correctionRows[key] = .init(row: row, revision: revision)
+                    await clearDriveCorrections(for: fileId)
+                    return .success(SharedResult(revision: CorrectionsTab.token(revision), entry: entry))
+                }
             }
             return .failure(.failed("다른 팀원과 동시에 고쳐 공유하지 못했습니다"))
+        } catch SheetsClient.SheetsError.http(403, _) {
+            isReadOnly = true
+            return .failure(.noAccess)
         } catch {
             return .failure(.failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
         }
     }
+
+    /// Which page of a 콘티 file is which song, as set by hand, for the team.
+    func sharePageAssignment(fileId: String, pages: [Int: String]) async -> Result<String, ShareEditsError> {
+        await shareCorrection(fileId: fileId, part: CorrectionsTab.pageMapPart) { entry in
+            entry.pages = Dictionary(uniqueKeysWithValues: pages.map { (String($0.key), $0.value) })
+        }.map(\.revision)
+    }
+
+    /// The page map someone set by hand for a 콘티 file, if any.
+    func pageAssignment(fileId: String) async -> [String: String]? {
+        if correctionRows.isEmpty { _ = await correctionRevisions() }
+        return await fetchCorrection(fileId: fileId, part: CorrectionsTab.pageMapPart)?.entry.pages
+    }
+
+    // MARK: Drive files of before
+
+    /// This account's correction files in Drive, now that the tab has the
+    /// chart: to the trash — recoverable for thirty days — rather than
+    /// left in every member's Drive under names that meant nothing to them.
+    /// Once a launch, the rest of them too, except a file the Edits cell of
+    /// a chart not yet in the tab still points at.
+    private func clearDriveCorrections(for fileId: String) async {
+        guard let drive, let account = driveAccount else { return }
+        if let mine = SharedEdits.mine(for: fileId, account: account) {
+            try? await drive.trash(fileId: mine.fileId)
+            SharedEdits.setMine(nil, for: fileId, account: account)
+        }
+        // Only with the sheet loaded: which files are still pointed at is
+        // read from it, and an empty list would take every one of them.
+        guard !sweptDriveCorrections, lastLoaded != nil, !attachments.isEmpty else { return }
+        sweptDriveCorrections = true
+        let stillPointed = Set(attachments.values.joined().compactMap { item -> String? in
+            let moved = correctionRows.keys.contains { $0.hasPrefix(item.fileId + "|") }
+            return moved ? nil : EditsToken(item.editsFileId)?.fileId
+        })
+        for file in (try? await drive.files(named: "-교정.json")) ?? [] where !stillPointed.contains(file) {
+            try? await drive.trash(fileId: file)
+        }
+    }
+    private var sweptDriveCorrections = false
 
     enum ShareEditsError: Error {
         case noAccess, notFound, moved, failed(String)

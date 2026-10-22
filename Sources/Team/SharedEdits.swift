@@ -2,7 +2,9 @@
 //  SharedEdits.swift
 //  SolaPraise
 //
-//  The team's hand corrections to a chart's chords, shared through Drive.
+//  The team's hand corrections to a chart's chords — kept on the team
+//  sheet's hidden 「교정」 tab (CorrectionsTab); before that, in Drive files
+//  named in each chart's Edits cell, which are still read until moved.
 //
 //  WHY: one person fixes a misread chord, and every other member's stand
 //  still showed the misreading — corrections lived on the device that made
@@ -36,6 +38,22 @@ enum SharedEdits {
         /// Key → that chart's 코드표 lyrics corrected by hand (LyricFixes).
         /// Optional: files shared before lyrics were shared have none.
         var lyrics: [String: [LyricFix]]? = nil
+    }
+
+    /// One chart's corrections as the 「교정」 tab keeps them, one row each
+    /// (CorrectionsTab): its chords, its lyric fixes, and — on the page-map
+    /// row of a 콘티 file — which page is which song.
+    struct Entry: Codable, Equatable {
+        var chords: [[ScoreChord]]? = nil
+        var lyrics: [LyricFix]? = nil
+        var pages: [String: String]? = nil
+    }
+
+    /// A chart's part of a Drive file from before the tab, as an entry.
+    static func entry(from file: File, part: String) -> Entry? {
+        if part == CorrectionsTab.pageMapPart { return file.pages.map { Entry(pages: $0) } }
+        guard file.charts[part] != nil || file.lyrics?[part] != nil else { return nil }
+        return Entry(chords: file.charts[part], lyrics: file.lyrics?[part])
     }
 
     /// The shared file, or nil when there is none or it cannot be read.

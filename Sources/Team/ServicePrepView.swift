@@ -758,6 +758,13 @@ struct ServicePrepView: View {
                         Label("악보 Archive", systemImage: "archivebox")
                     }
                 }
+                // The charts for one song, when the team keeps them together
+                // in the shared drive (설정 › 곡별 악보 폴더).
+                if let url = MusicSheetFolder.url {
+                    Button { openURL(url) } label: {
+                        Label(MusicSheetFolder.name ?? "곡별 악보 폴더", systemImage: "folder")
+                    }
+                }
                 if let url = ChurchSheetSource.url {
                     Button { openURL(url) } label: {
                         Label([AppSecrets.churchName, "예배 정보 Sheet"].compactMap { $0 }.joined(separator: " "),

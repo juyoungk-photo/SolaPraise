@@ -98,6 +98,19 @@ actor DriveClient {
         // Into the 악보 folder when it can be had. A folder that cannot be
         // created is not a reason to refuse the upload: the file goes to
         // the Drive root, as it always used to.
+        // A chart for one song goes to the team's chosen folder (MusicSheet)
+        // when one was chosen and still takes it; else this account's own.
+        if folder == nil, let chosen = MusicSheetFolder.id {
+            do {
+                return try await upload(data: data, name: name, mimeType: mimeType, folder: chosen)
+            } catch DriveError.http(let code, _) where code == 403 || code == 404 {
+                MusicSheetFolder.problem = true
+            } catch {
+                // Anything else — a shared drive that forbids sharing by
+                // link, say — falls back to this account's own folder: the
+                // chart is put up either way.
+            }
+        }
         let parent: String?
         if let folder { parent = folder } else { parent = try? await scoreFolder() }
         struct Metadata: Encodable { let name: String; let parents: [String]? }
@@ -259,6 +272,48 @@ actor DriveClient {
         let _: Updated = try await send(url: components.url!, method: "PATCH", body: data, contentType: mimeType)
     }
 
+    /// A folder's name, as Drive has it now — for saying which folder.
+    func name(of folderId: String) async -> String? {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(folderId)")!
+        components.queryItems = [.init(name: "fields", value: "name"), .init(name: "supportsAllDrives", value: "true")]
+        var request = URLRequest(url: components.url!)
+        guard let token = try? await tokenProvider() else { return nil }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        struct Named: Decodable { let name: String }
+        return (try? JSONDecoder().decode(Named.self, from: data))?.name
+    }
+
+    /// To the trash, where the owner can still restore it for thirty days.
+    func trash(fileId: String) async throws {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(fileId)")!
+        components.queryItems = [.init(name: "supportsAllDrives", value: "true"), .init(name: "fields", value: "id")]
+        struct Updated: Decodable { let id: String }
+        let _: Updated = try await send(url: components.url!, method: "PATCH",
+                                        body: Data(#"{"trashed":true}"#.utf8), contentType: "application/json")
+    }
+
+    /// The ids of this app's files in this account whose name has `part` —
+    /// drive.file lists only what the app made.
+    func files(named part: String) async throws -> [String] {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        let escaped = part.replacingOccurrences(of: "'", with: "\\'")
+        components.queryItems = [
+            .init(name: "q", value: "name contains '\(escaped)' and trashed = false"),
+            .init(name: "fields", value: "files(id)"),
+            .init(name: "pageSize", value: "200"),
+            .init(name: "supportsAllDrives", value: "true"),
+            .init(name: "includeItemsFromAllDrives", value: "true")
+        ]
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(try await tokenProvider())", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DriveError.badResponse }
+        struct Listing: Decodable { struct File: Decodable { let id: String }; let files: [File]? }
+        return (try JSONDecoder().decode(Listing.self, from: data).files ?? []).map(\.id)
+    }
+
     /// Removes a file the app put there.
     func delete(fileId: String) async throws {
         var components = URLComponents(
@@ -337,4 +392,37 @@ extension URL {
         }
         return nil
     }
+}
+
+/// The church shared drive's folder for charts, one per song — 「MusicSheet」
+/// — chosen once on each device through Google's picker (PlanningAuth
+/// .pickFolder). Kept by id, so renaming or moving it inside the shared
+/// drive changes nothing. 콘티 files go to the 콘티 folder as before.
+///
+/// WHY: each member's uploads went to a folder in their own Drive, so the
+/// team's charts were spread over everyone's Drive and owned by whoever
+/// put them up. The member can put files in the shared drive; the app, on
+/// the narrow drive.file grant, only into a folder chosen in the picker.
+enum MusicSheetFolder {
+    private static let idKey = "drive.musicSheetFolder"
+    private static let nameKey = "drive.musicSheetFolderName"
+    private static let problemKey = "drive.musicSheetFolderProblem"
+
+    static var id: String? { UserDefaults.standard.string(forKey: idKey) }
+    static var name: String? { UserDefaults.standard.string(forKey: nameKey) }
+
+    /// An upload to it was refused: deleted, moved out of the shared drive,
+    /// or no longer shared with this account. Said until chosen again.
+    static var problem: Bool {
+        get { UserDefaults.standard.bool(forKey: problemKey) }
+        set { UserDefaults.standard.set(newValue, forKey: problemKey) }
+    }
+
+    static func choose(_ id: String?, name: String?) {
+        UserDefaults.standard.set(id, forKey: idKey)
+        UserDefaults.standard.set(name, forKey: nameKey)
+        problem = false
+    }
+
+    static var url: URL? { id.flatMap { URL(string: "https://drive.google.com/drive/folders/\($0)") } }
 }

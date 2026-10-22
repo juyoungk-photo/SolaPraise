@@ -64,7 +64,8 @@ enum ContiPages {
     @discardableResult
     static func compute(for attachment: Attachment, songs: [String]) async -> [Int: String]? {
         // Someone on the team set the pages by hand: that is the answer.
-        if let shared = await SharedEdits.fetch(attachment.editsFileId)?.pages {
+        if let team = await MainActor.run(body: { TeamStore.current }),
+           let shared = await team.pageAssignment(fileId: attachment.fileId) {
             let pages = Dictionary(uniqueKeysWithValues: shared.compactMap { k, v in Int(k).map { ($0, v) } })
             setManual(pages, for: attachment.fileId, count: max(pageCount(attachment.fileId) ?? 0, (pages.keys.max() ?? -1) + 1))
             return pages.filter { !$0.value.isEmpty }

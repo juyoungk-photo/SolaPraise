@@ -1533,16 +1533,18 @@ final class ScoreStandModel: ObservableObject {
         // The team's corrections, when someone has shared newer ones than
         // this copy holds and this device has none of its own unshared.
         // Not after 다시 읽기, which asked for the chart as read.
-        let remoteId = team?.attachment(fileId: item.attachment.fileId)?.editsFileId ?? item.attachment.editsFileId
+        let part = SharedEdits.key(pages: item.pages)
+        if team?.knownRevision(fileId: item.attachment.fileId, part: part) == nil { _ = await team?.correctionRevisions() }
+        let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: part) ?? item.attachment.editsFileId
         if let remoteId, saved?.sharedFrom != remoteId, saved?.dirty != true, !rereading.contains(item.id),
-           let file = await SharedEdits.fetch(remoteId),
-           let pages = file.charts[SharedEdits.key(pages: item.pages)] {
+           let fetched = await team?.fetchCorrection(fileId: item.attachment.fileId, part: part),
+           let pages = fetched.entry.chords {
             // Marked when the sender's app marks corrections: any chord
             // carrying the field at all.
             let marked = pages.joined().contains { $0.corrected != nil }
-            let lyrics = file.lyrics?[SharedEdits.key(pages: item.pages)] ?? []
+            let lyrics = fetched.entry.lyrics ?? []
             let shared = ScoreEditStore.Saved(pages: pages, edited: true, version: ScoreRecognition.version,
-                                              sharedFrom: remoteId, dirty: false,
+                                              sharedFrom: fetched.revision, dirty: false,
                                               marksCorrections: marked ? true : nil,
                                               base: pages, lyricBase: lyrics)
             ScoreEditStore.write(shared, for: item.id)
@@ -1680,7 +1682,8 @@ final class ScoreStandModel: ObservableObject {
             Self.cache[item.id] = state
             // After 다시 읽기, the shared corrections it set aside are
             // remembered as seen, so they are not taken up again.
-            let remoteId = team?.attachment(fileId: item.attachment.fileId)?.editsFileId ?? item.attachment.editsFileId
+            let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: SharedEdits.key(pages: item.pages))
+                ?? item.attachment.editsFileId
             ScoreEditStore.save(state.pages.map(\.chords), edited: false, for: item.id,
                                 sharedFrom: rereading.contains(item.id) ? remoteId : nil)
             rereading.remove(item.id)
@@ -2256,19 +2259,23 @@ final class ScoreStandModel: ObservableObject {
         }
         let key = SharedEdits.key(pages: item.pages)
         let lyrics = ScoreLyricFixStore.load(item.id)
-        switch await team.shareEdits(fileId: item.attachment.fileId, key: key,
-                                     pages: saved.pages, base: saved.base,
-                                     lyrics: lyrics, lyricBase: saved.lyricBase) {
+        let result = await team.shareCorrection(fileId: item.attachment.fileId, part: key) { entry in
+            entry.chords = EditMerge.pages(base: saved.base, local: saved.pages, remote: entry.chords)
+            let words = EditMerge.list(base: saved.lyricBase, local: lyrics, remote: entry.lyrics,
+                                       same: { $0.samePlace($1) })
+            entry.lyrics = words.isEmpty ? nil : words
+        }
+        switch result {
         case .success(let result):
             // What the team has now — this device's fixes and anyone
             // else's since, put together — is what this device shows.
-            let merged = result.file.charts[key] ?? saved.pages
-            let mergedLyrics = result.file.lyrics?[key] ?? lyrics
+            let merged = result.entry.chords ?? saved.pages
+            let mergedLyrics = result.entry.lyrics ?? lyrics
             var now = ScoreEditStore.load(item.id) ?? saved
             // Fixed again while this was being sent: kept, on top.
             let editedMeanwhile = now.pages != saved.pages
             now.pages = editedMeanwhile ? EditMerge.pages(base: saved.pages, local: now.pages, remote: merged) : merged
-            now.sharedFrom = result.fileId
+            now.sharedFrom = result.revision
             now.base = merged
             now.lyricBase = mergedLyrics
             now.dirty = editedMeanwhile
@@ -2283,7 +2290,7 @@ final class ScoreStandModel: ObservableObject {
                 : "고친 코드를 팀과 공유했습니다"
             if editedMeanwhile { scheduleShare(item) }
         case .failure(.noAccess):
-            shareStatus[item.id] = "이 기기에만 저장됨 — 공유하려면 교회 계정을 연결하세요"
+            shareStatus[item.id] = "이 기기에만 저장됨 — 팀 시트에 쓸 수 있는 계정이 필요합니다"
         case .failure(.moved), .failure(.notFound):
             shareStatus[item.id] = "이 기기에만 저장됨 — 시트를 새로 고친 뒤 다시 고치면 공유됩니다"
         case .failure(.failed(let reason)):
@@ -2305,9 +2312,9 @@ final class ScoreStandModel: ObservableObject {
     }
 
     /// While the stand is open: the team's newer corrections, taken up as
-    /// they are shared — every 3 seconds, one read of the Attachments tab
-    /// (twenty a minute, a third of what Google allows one person), and a
-    /// download only when a chart's file changed. For the members not in
+    /// they are shared — every 3 seconds, one read of the 「교정」 tab's
+    /// writing numbers (twenty a minute, a third of what Google allows one
+    /// person), and the row itself only when a chart's number changed. For the members not in
     /// the room; those in it have had the change from RehearsalLink.
     ///
     /// WHY: corrections reached another member only when they closed the
@@ -2317,27 +2324,33 @@ final class ScoreStandModel: ObservableObject {
     func watchTeam() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled, let team, let ids = await team.editsIds() else { continue }
+            guard !Task.isCancelled, let team, let ids = await team.correctionRevisions() else { continue }
             for (id, item) in knownItems where states[id]?.isReady == true {
-                guard let remote = ids[item.attachment.fileId], !remote.isEmpty else { continue }
+                let part = SharedEdits.key(pages: item.pages)
+                guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)]
+                        ?? ids[item.attachment.fileId], !remote.isEmpty else { continue }
                 let saved = ScoreEditStore.load(id)
                 guard remote != saved?.sharedFrom else { continue }
                 // Fixes of its own waiting: sharing merges the two.
                 if saved?.dirty == true { scheduleShare(item); continue }
-                guard let file = await SharedEdits.fetch(remote) else { continue }
-                receive(item, file: file, fileId: remote, saved: saved)
+                guard let fetched = await team.fetchCorrection(fileId: item.attachment.fileId, part: part) else {
+                    // Nothing for this chart's part (another song of the
+                    // file changed): seen, so not asked again.
+                    if var kept = saved { kept.sharedFrom = remote; ScoreEditStore.write(kept, for: id) }
+                    continue
+                }
+                receive(item, entry: fetched.entry, revision: fetched.revision, saved: saved)
             }
         }
     }
 
-    private func receive(_ item: ScoreStandItem, file: SharedEdits.File, fileId: String, saved: ScoreEditStore.Saved?) {
-        let key = SharedEdits.key(pages: item.pages)
-        guard let pages = file.charts[key] else {
-            // A change to another song's pages of this file: nothing here.
+    private func receive(_ item: ScoreStandItem, entry: SharedEdits.Entry, revision fileId: String,
+                         saved: ScoreEditStore.Saved?) {
+        guard let pages = entry.chords else {
             if var kept = saved { kept.sharedFrom = fileId; ScoreEditStore.write(kept, for: item.id) }
             return
         }
-        let lyrics = file.lyrics?[key] ?? []
+        let lyrics = entry.lyrics ?? []
         let changed = pages != saved?.pages || lyrics != ScoreLyricFixStore.load(item.id)
         ScoreEditStore.write(.init(pages: pages, edited: true, version: ScoreRecognition.version,
                                    sharedFrom: fileId, dirty: false,
