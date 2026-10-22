@@ -52,6 +52,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                accountSection
                 morningSection
                 ForEach(Purpose.allCases) { purpose in
                     channelSection(for: purpose)
@@ -64,7 +65,7 @@ struct SettingsView: View {
                 refreshSection
                 todaySection
                 studioSection
-                accountSection
+                churchChannelSection
                 aboutSection
             }
             .navigationTitle("설정")
@@ -412,7 +413,7 @@ struct SettingsView: View {
                 Text("「예배」 탭: 팀 시트를 연결하면 나타납니다.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if !auth.isSignedIn {
-                Text("「예배」 탭: Google 로그인이 필요합니다.")
+                Text("「예배」 탭: YouTube 계정으로 로그인하거나 교회 계정을 연결하면 나타납니다.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -421,7 +422,7 @@ struct SettingsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(address).font(.caption)
-                        Text("플래닝 계정").font(.caption2).foregroundStyle(.secondary)
+                        Text("교회 계정 — 팀 시트와 악보에 씀").font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("연결 해제") {
@@ -431,16 +432,11 @@ struct SettingsView: View {
                     .font(.caption)
                 }
             } else {
-                Button {
-                    Task {
-                        await planning.signIn()
-                        team.configure(auth: auth, planning: planning)
-                        if let id = TeamSheetSource.current { await team.load(sheetId: id) }
-                    }
-                } label: {
-                    Label("다른 계정으로 시트 연결", systemImage: "person.2.badge.key")
+                AccountSignInButton(role: .church) {
+                    await planning.signIn()
+                    team.configure(auth: auth, planning: planning)
+                    if let id = TeamSheetSource.current { await team.load(sheetId: id) }
                 }
-                .font(.caption)
             }
             if let message = planning.lastError {
                 Text(message).font(.caption2).foregroundStyle(.orange)
@@ -464,12 +460,12 @@ struct SettingsView: View {
                 if let email = team.actingEmail(auth: auth, planning: planning) {
                     (Text("시트에 접근하는 계정: ").foregroundStyle(.secondary)
                      + Text(email).bold()
-                     + Text(planning.isSignedIn ? " (플래닝 계정)" : "").foregroundStyle(.secondary))
+                     + Text(planning.isSignedIn ? " (교회 계정)" : " (YouTube 계정)").foregroundStyle(.secondary))
                         .font(.caption)
                 } else {
                     Text("로그인하지 않아 시트를 열 수 없습니다.").font(.caption)
                 }
-                Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다. 교회 계정으로 기록을 남기고 싶으면 「다른 계정으로 시트 연결」을 쓰세요 — YouTube 로그인은 그대로 둔 채 시트만 다른 계정으로 씁니다.")
+                Text("시트가 교회 계정 소유라도 상관없습니다. 위 주소가 그 시트를 편집할 수 있으면 됩니다. 교회 계정으로 기록을 남기고 싶으면 「교회 계정 연결」을 쓰세요 — YouTube 계정은 그대로 둔 채 시트와 악보만 그 계정으로 씁니다.")
                 Text("Schedule · Roles · Songs · Signups 탭이 필요하고, Members 탭에는 앱에 로그인하는 주소를 적습니다. Members 탭이 없으면 시트를 열 수 있는 사람 모두에게 「예배」 탭이 보입니다 — 실제로 지키는 것은 이 목록이 아니라 구글 시트의 공유 설정입니다.")
             }
         }
@@ -669,36 +665,14 @@ struct SettingsView: View {
 
     // MARK: - Account
 
+    /// Each sign-in, the address it is, and what it is for — first in
+    /// 설정, so which account does what is the first thing read here, not
+    /// the last (AccountRole).
     @ViewBuilder
     private var accountSection: some View {
         Section {
-            HStack(spacing: 12) {
-                if let url = auth.avatarURL {
-                    CachedAsyncImage(url: url) { image in
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Circle().fill(.quaternary)
-                    }
-                    .frame(width: 36, height: 36)
-                    .clipShape(Circle())
-                } else {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    if let name = auth.displayName {
-                        Text(name).font(.body)
-                    }
-                    if let email = auth.email {
-                        Text(email).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(.vertical, 2)
-
             if auth.isSignedIn {
+                accountRow(.youtube, email: auth.email, name: auth.displayName, avatar: auth.avatarURL)
                 if auth.sessionExpired {
                     // The account's own name is on the screen above, which is
                     // exactly why this has to be said out loud: everything
@@ -713,10 +687,38 @@ struct SettingsView: View {
                             await auth.signIn()
                         }
                     } label: {
-                        Label("다시 로그인", systemImage: "arrow.clockwise")
+                        Label("YouTube 계정 다시 로그인", systemImage: "arrow.clockwise")
                     }
                 }
-                Button("로그아웃", role: .destructive) {
+            } else {
+                // Browsing without an account is a starting point, not a
+                // one-way door: the playlist half of the app is still here
+                // and signing in is what turns it on.
+                AccountSignInButton(role: .youtube, prominent: true) { await auth.signIn() }
+            }
+
+            if planning.isSignedIn {
+                accountRow(.church, email: planning.email, name: nil, avatar: nil)
+                Button("교회 계정 연결 해제") {
+                    planning.signOut()
+                    team.configure(auth: auth, planning: planning)
+                }
+                .font(.caption)
+            } else {
+                AccountSignInButton(role: .church) {
+                    await planning.signIn()
+                    team.configure(auth: auth, planning: planning)
+                    if let id = TeamSheetSource.current { await team.load(sheetId: id) }
+                }
+                if auth.isSignedIn, TeamSheetSource.current != nil, let email = auth.email {
+                    Text("연결하기 전에는 팀 시트를 YouTube 계정(\(email))으로 씁니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if auth.isSignedIn || planning.isSignedIn {
+                Button("모두 로그아웃", role: .destructive) {
                     // Both accounts. Signing out of Google while the church
                     // account's refresh token stayed in the Keychain left the
                     // app still writing to the team sheet as somebody who had
@@ -727,24 +729,35 @@ struct SettingsView: View {
                     team.reset()
                     dismiss()
                 }
-            } else {
-                // Browsing without an account is a starting point, not a
-                // one-way door: the playlist half of the app is still here
-                // and signing in is what turns it on.
-                Button {
-                    Task { await auth.signIn() }
-                } label: {
-                    Label("Google 계정으로 로그인", systemImage: "person.crop.circle.badge.plus")
-                }
             }
         } header: {
             Text("계정")
         } footer: {
-            Text(auth.isSignedIn
-                 ? "내 재생목록을 보고, 곡을 추가하고, 순서를 바꿀 수 있습니다."
-                 : "로그인하면 내 YouTube 재생목록을 이 앱에서 보고 편집할 수 있습니다. 나머지 기능은 로그인 없이도 그대로 동작합니다.")
+            Text("피드·검색·재생·성경 읽기는 로그인 없이 됩니다. 계정은 아래 표의 일에만 쓰입니다.")
         }
 
+        // Which account each part of the app acts as — most need none.
+        Section {
+            accountUse("말씀 · 찬양 · 홈, 재생, 검색", "로그인 필요 없음", systemImage: "play.circle")
+            accountUse("콘티 폴더, 첨부된 악보 보기", "로그인 필요 없음 — 링크로 열림", systemImage: "doc.richtext")
+            accountUse("보관함 재생목록, 재생목록에 추가", auth.email.map { "\($0) (YouTube 계정)" } ?? "YouTube 계정으로 로그인 필요", systemImage: "play.rectangle")
+            accountUse("예배 준비 — 시트 읽기·쓰기",
+                       team.actingEmail(auth: auth, planning: planning)
+                           .map { planning.isSignedIn ? "\($0) (교회 계정)" : "\($0) (YouTube 계정)" }
+                           ?? "교회 계정 연결 — 또는 YouTube 계정으로 로그인",
+                       systemImage: "person.2")
+            accountUse("악보 올리기 (드라이브)",
+                       planning.isSignedIn ? (planning.email ?? "교회 계정") : "교회 계정 연결 필요",
+                       systemImage: "icloud.and.arrow.up")
+        } header: {
+            Text("어디에 어떤 계정을 쓰나")
+        }
+    }
+
+    /// The members' password and the channel manager: for a few, kept
+    /// below the rest.
+    @ViewBuilder
+    private var churchChannelSection: some View {
         // Members: the church's password for its sealed 관심 채널 list.
         Section {
             LabeledContent("교회 멤버 암호", value: hasChurchPassword ? "저장됨" : "없음")
@@ -765,31 +778,40 @@ struct SettingsView: View {
                 LabeledContent("채널 관리 계정", value: channelManager.email ?? "")
                 Button("연결 해제", role: .destructive) { channelManager.signOut() }
             } else {
-                Button {
-                    Task { await channelManager.signIn() }
-                } label: {
-                    Label("채널 관리 계정 연결", systemImage: "person.badge.key")
-                }
+                AccountSignInButton(role: .channelManager) { await channelManager.signIn() }
             }
         } footer: {
             Text("교회 교제 채널(예: Cornerstone TV)을 관리하는 분만 필요합니다. 연결하면 그 채널 페이지 오른쪽 위에 「멤버 공유」가 나타나, 일부 공개 예배를 암호화해 멤버에게 공유할 수 있습니다. YouTube 읽기 권한만 받으며, 위의 계정들은 바뀌지 않습니다. 브랜드 채널이면 로그인할 때 그 채널을 고르세요.")
         }
+    }
 
-        // Which account each part of the app acts as — most need none.
-        Section {
-            accountUse("말씀 · 찬양 · 홈, 재생, 검색", "로그인 필요 없음", systemImage: "play.circle")
-            accountUse("콘티 폴더, 첨부된 악보 보기", "로그인 필요 없음 — 링크로 열림", systemImage: "doc.richtext")
-            accountUse("보관함 재생목록, 재생목록에 추가", auth.email ?? "YouTube 계정 로그인 필요", systemImage: "play.rectangle")
-            accountUse("예배 준비 — 시트 읽기·쓰기",
-                       team.actingEmail(auth: auth, planning: planning)
-                           .map { planning.isSignedIn ? "\($0) (교회 계정)" : $0 } ?? "로그인 필요",
-                       systemImage: "person.2")
-            accountUse("악보 올리기 (드라이브)",
-                       planning.isSignedIn ? (planning.email ?? "교회 계정") : "교회 계정·드라이브 권한 연결 필요",
-                       systemImage: "icloud.and.arrow.up")
-        } header: {
-            Text("어디에 어떤 계정을 쓰나")
+    private func accountRow(_ role: AccountRole, email: String?, name: String?, avatar: URL?) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let avatar {
+                CachedAsyncImage(url: avatar) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle().fill(.quaternary)
+                }
+                .frame(width: 36, height: 36)
+                .clipShape(Circle())
+            } else {
+                Image(systemName: role.symbol)
+                    .font(.system(size: 22))
+                    .foregroundStyle(.tint)
+                    .frame(width: 36, height: 36)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(role.name).font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                if let name { Text(name).font(.body) }
+                if let email {
+                    Text(email).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Text(role.purpose).font(.caption2).foregroundStyle(.secondary)
+            }
         }
+        .padding(.vertical, 2)
     }
 
     private func accountUse(_ feature: String, _ account: String, systemImage: String) -> some View {

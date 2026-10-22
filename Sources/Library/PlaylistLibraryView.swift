@@ -302,22 +302,10 @@ struct PlaylistLibraryView: View {
     /// alone, as a row, instead of standing in for the whole tab.
     private var signInRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("내 YouTube 재생목록을 보고 편집하려면 Google 계정이 필요합니다.")
+            Text("내 YouTube 재생목록을 보고 편집하려면 YouTube 계정이 필요합니다.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Button {
-                isSigningIn = true
-                Task { await auth.signIn(); isSigningIn = false }
-            } label: {
-                if isSigningIn {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Google 로그인", systemImage: "person.crop.circle")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(isSigningIn)
+            AccountSignInButton(role: .youtube, prominent: true) { await auth.signIn() }
         }
         .padding(.vertical, 4)
     }

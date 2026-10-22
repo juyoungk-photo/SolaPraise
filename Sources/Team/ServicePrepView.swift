@@ -421,7 +421,7 @@ struct ServicePrepView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("다른 계정·드라이브 권한 연결") {
+                    Button("교회 계정 연결 — 팀 시트·악보") {
                         Task {
                             await planning.signIn()
                             team.configure(auth: auth, planning: planning)
@@ -434,7 +434,7 @@ struct ServicePrepView: View {
                 // Incremental consent fails outright if the scope is not
                 // listed on the OAuth consent screen, and a full re-login is
                 // the only thing that then picks it up.
-                Button("로그아웃 후 다시 로그인") {
+                Button("YouTube 계정 다시 로그인") {
                     Task {
                         auth.signOut()
                         await auth.signIn()
@@ -446,7 +446,7 @@ struct ServicePrepView: View {
 
                 VStack(spacing: 2) {
                     if let email = team.actingEmail(auth: auth, planning: planning) {
-                        Text("계정: \(email)")
+                        Text("시트에 쓰는 계정: \(email) (\(planning.isSignedIn ? "교회 계정" : "YouTube 계정"))")
                     }
                     Text("spreadsheets 권한: \(auth.canUseSheets ? "있음" : "없음")")
                     if let sheetId {
@@ -521,8 +521,10 @@ struct ServicePrepView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Group {
+                    // Which of the two accounts the sheet is written as —
+                    // the one every answer and assignment here goes in under.
                     if let email = team.actingEmail(auth: auth, planning: planning) {
-                        Text("로그인 계정: ").foregroundStyle(.secondary)
+                        Text(planning.isSignedIn ? "교회 계정: " : "YouTube 계정: ").foregroundStyle(.secondary)
                             + Text(email)
                     } else {
                         Text("로그인된 계정이 없습니다").foregroundStyle(.secondary)
@@ -533,12 +535,12 @@ struct ServicePrepView: View {
 
                 Menu {
                     if planning.isSignedIn {
-                        Button("추가 연결 해제") {
+                        Button("교회 계정 연결 해제") {
                             planning.signOut()
                             team.configure(auth: auth, planning: planning)
                         }
                     } else {
-                        Button("다른 계정·드라이브 권한 연결") {
+                        Button("교회 계정 연결 — 팀 시트·악보") {
                             Task {
                                 await planning.signIn()
                                 team.configure(auth: auth, planning: planning)

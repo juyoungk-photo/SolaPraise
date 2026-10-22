@@ -227,19 +227,14 @@ struct AttachmentMenu<Content: View>: View {
                             later { showFiles = true }
                         } label: { Label("파일에서 추가", systemImage: "folder") }
                     } else {
-                        Button {
-                            showsList = false
-                            Task {
-                                await planning.signIn()
-                                team.configure(auth: auth, planning: planning)
-                            }
-                        } label: {
-                            Label("구글 드라이브 권한 연결", systemImage: "externaldrive.badge.plus")
+                        AccountSignInButton(role: .church) {
+                            await planning.signIn()
+                            team.configure(auth: auth, planning: planning)
                         }
                     }
                 } footer: {
                     if !team.canAttach {
-                        Text("악보를 올리려면 드라이브 권한이 필요합니다. 지금 쓰는 계정 그대로 한 번 더 로그인하면 됩니다 — 구글이 유튜브 권한과 드라이브 권한을 한 번에 주지 않습니다.")
+                        Text("악보는 교회 계정으로 팀 드라이브에 올립니다. YouTube 계정과 같은 계정이어도 한 번 더 연결해야 합니다 — 구글이 YouTube 권한과 드라이브 권한을 한 번에 주지 않습니다.")
                     } else if !existing.isEmpty {
                         Text("누르면 연주 모드로 열립니다. 왼쪽으로 밀면 지웁니다.")
                     }

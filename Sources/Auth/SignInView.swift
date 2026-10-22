@@ -47,7 +47,7 @@ struct SignInView: View {
                         } else {
                             Image(systemName: "person.crop.circle")
                         }
-                        Text(isWorking ? "Signing in…" : "Sign in with Google")
+                        Text(isWorking ? "로그인 중…" : AccountRole.youtube.signInLabel)
                             .fontWeight(.medium)
                     }
                     .frame(maxWidth: .infinity)
@@ -56,13 +56,22 @@ struct SignInView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(isWorking)
 
+                // Which account, and what for, before Google asks which.
+                VStack(spacing: 2) {
+                    Text(AccountRole.youtube.purpose)
+                    Text(AccountRole.youtube.pick)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
                 Button("로그인 없이 둘러보기") {
                     auth.continueWithoutAccount()
                 }
                 .font(.subheadline)
 
                 Text(AppSecrets.hasYouTubeAPIKey
-                     ? "찬양·말씀 피드, 검색, 시편과 성경 읽기, 코드 감지까지 로그인 없이 쓸 수 있습니다.\n내 재생목록을 보거나 편집할 때만 Google 계정이 필요합니다."
+                     ? "찬양·말씀 피드, 검색, 시편과 성경 읽기, 코드 감지까지 로그인 없이 쓸 수 있습니다.\n팀 시트와 악보 올리기는 나중에 설정에서 교회 계정으로 따로 연결합니다."
                      : "시편과 말씀 읽기는 로그인 없이 바로 쓸 수 있습니다.\n영상과 재생목록에는 Google 계정이 필요합니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
