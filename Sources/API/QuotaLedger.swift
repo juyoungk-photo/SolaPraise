@@ -86,13 +86,16 @@ final class QuotaLedger: ObservableObject {
     /// Quota resets at midnight Pacific, not local midnight — a Korea-morning
     /// session and the previous evening can land on the same quota day.
     private static func pacificDayString(_ date: Date = Date()) -> String {
+        pacificDay.string(from: date)
+    }
+    private static let pacificDay: DateFormatter = {
         let fmt = DateFormatter()
         fmt.calendar = Calendar(identifier: .gregorian)
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.timeZone = TimeZone(identifier: "America/Los_Angeles")
         fmt.dateFormat = "yyyy-MM-dd"
-        return fmt.string(from: date)
-    }
+        return fmt
+    }()
 
     private func rollOverIfNeeded() {
         let today = Self.pacificDayString()

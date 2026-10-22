@@ -17,7 +17,7 @@ struct SheetHealthView: View {
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var planning: PlanningAuth
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @Environment(\.modelContext) private var modelContext
     @State private var confirmingTitles = false
     @State private var confirmingGrid = false

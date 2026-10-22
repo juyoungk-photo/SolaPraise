@@ -15,7 +15,7 @@ struct PlaylistLibraryView: View {
     var showsStudio = false
 
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @EnvironmentObject private var planning: PlanningAuth
 
     @Environment(\.modelContext) private var modelContext
@@ -325,7 +325,7 @@ struct PlaylistLibraryView: View {
     private func channelChip(_ channel: Channel) -> some View {
         HStack(spacing: 7) {
             if let url = channel.thumbnailURL {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
                     Circle().fill(Color.secondary.opacity(0.3))
@@ -424,7 +424,7 @@ struct Thumbnail: View {
     var height: CGFloat
 
     var body: some View {
-        AsyncImage(url: url) { phase in
+        CachedAsyncImage(url: url) { phase in
             switch phase {
             case .success(let image):
                 image.resizable().aspectRatio(contentMode: .fill)

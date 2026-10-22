@@ -60,6 +60,9 @@ struct SolaPraiseApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // Thumbnails and channel art survive a relaunch: the default URL
+        // cache (a few MB on disk) evicted a feed's worth within a scroll.
+        URLCache.shared = URLCache(memoryCapacity: 16 * 1024 * 1024, diskCapacity: 256 * 1024 * 1024)
         // Must happen during launch, before the scene is active.
         BackgroundRefresh.register(container: container)
         // Before the scene: a tapped notification can be what launches us.
@@ -86,6 +89,8 @@ struct SolaPraiseApp: App {
                 .environmentObject(daily)
                 .environmentObject(analyzer)
                 .environmentObject(playerHost)
+                .environment(\.playerActions, playerHost)
+                .environment(\.quotaLedger, quota)
                 .environmentObject(team)
                 .environmentObject(planning)
                 .environmentObject(channelManager)

@@ -260,7 +260,9 @@ struct AttachmentMenu<Content: View>: View {
         memoSaving = true
         defer { memoSaving = false }
         let who = team.rosterName(for: team.actingEmail(auth: auth, planning: planning) ?? "") ?? auth.displayName ?? ""
-        if let failure = await team.setMemo(memoText, for: song, by: who, sheetId: sheetId) { note = failure }
+        let failure = await team.setMemo(memoText, for: song, by: who, sheetId: sheetId)
+        if let failure { note = failure }
+        Toast.shared.sheet(failure, saved: "팀 메모 — 시트에 저장됨")
     }
 
     /// From the list to the stand: the list goes, then the stand comes.

@@ -21,7 +21,7 @@ import SwiftUI
 
 struct FillFromPlaylistSheet: View {
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @EnvironmentObject private var team: TeamStore
     @Environment(\.dismiss) private var dismiss
 

@@ -13,7 +13,7 @@ import SwiftUI
 import SwiftData
 
 struct PsalmAudioSheet: View {
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var auth: GoogleAuthManager

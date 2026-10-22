@@ -34,7 +34,7 @@ struct StudioView: View {
     private var songs: [SavedSong]
 
     @EnvironmentObject private var analyzer: AudioFileAnalyzer
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var planning: PlanningAuth

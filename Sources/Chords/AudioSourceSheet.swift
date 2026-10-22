@@ -183,7 +183,7 @@ struct AudioSourceSheet: View {
 
     private func row(_ track: AudioSourceSearch.Track) -> some View {
         HStack(spacing: 10) {
-            AsyncImage(url: track.artwork) { phase in
+            CachedAsyncImage(url: track.artwork) { phase in
                 switch phase {
                 case .success(let image): image.resizable().scaledToFill()
                 default: Rectangle().fill(.quaternary)

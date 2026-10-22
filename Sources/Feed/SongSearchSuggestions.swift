@@ -337,7 +337,7 @@ enum SongSearchSuggestions {
     /// A title set in quotes inside a longer one — 「'어려운 일 당할 때'」,
     /// 「“은혜”」 — when it reads as a title: Korean, two characters or more.
     static func quotedTitle(in text: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: #"['‘"“「『]([^'’"”」』]{2,40})['’"”」』]"#),
+        guard let regex = NSRegularExpression.cached(#"['‘"“「『]([^'’"”」』]{2,40})['’"”」』]"#),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let range = Range(match.range(at: 1), in: text) else { return nil }
         let inner = text[range].trimmingCharacters(in: .whitespaces)
@@ -354,7 +354,7 @@ enum SongSearchSuggestions {
 
     /// #선하신목자 → 선하신목자, normalised.
     static func hashtags(in text: String) -> Set<String> {
-        guard let regex = try? NSRegularExpression(pattern: #"#([\p{L}\p{N}_]+)"#) else { return [] }
+        guard let regex = NSRegularExpression.cached(#"#([\p{L}\p{N}_]+)"#) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         return Set(regex.matches(in: text, range: range).compactMap {
             Range($0.range(at: 1), in: text).map { normalised(String(text[$0])) }
@@ -412,7 +412,7 @@ enum SongSearchSuggestions {
         let patterns = [#"(?:새|통일)?찬송가\s*(\d{1,3})\s*장(?!\s*(?:부터|까지|~))"#,
                         #"(?<![\d~])(\d{1,3})\s*장(?!\s*(?:\d|부터|까지|~))"#]
         for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern),
+            guard let regex = NSRegularExpression.cached(pattern),
                   let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                   let range = Range(match.range(at: 1), in: text),
                   let number = Int(text[range]),
@@ -616,7 +616,7 @@ enum ScriptureReferenceText {
         // not read as 예레미야.
         for book in books.sorted(by: { $0.count > $1.count }) {
             let pattern = book + #"\s*(\d{1,3})\s*(?:[편장]|:\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?)"#
-            guard let regex = try? NSRegularExpression(pattern: pattern),
+            guard let regex = NSRegularExpression.cached(pattern),
                   let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                   let whole = Range(match.range, in: text) else { continue }
             return String(text[whole]).replacingOccurrences(of: #"\s+"#, with: " ",
@@ -625,3 +625,21 @@ enum ScriptureReferenceText {
         return nil
     }
 }
+
+extension NSRegularExpression {
+    /// A pattern compiled once and kept. Song titles are read on every row
+    /// drawn and every video in a feed, and compiling the same expressions
+    /// each time — 66 of them to find a passage of scripture — was most of
+    /// what reading a title cost.
+    static func cached(_ pattern: String) -> NSRegularExpression? {
+        regexLock.lock()
+        defer { regexLock.unlock() }
+        if let known = regexCache[pattern] { return known }
+        let compiled = try? NSRegularExpression(pattern: pattern)
+        regexCache[pattern] = compiled
+        return compiled
+    }
+}
+
+nonisolated(unsafe) private var regexCache: [String: NSRegularExpression?] = [:]
+private let regexLock = NSLock()

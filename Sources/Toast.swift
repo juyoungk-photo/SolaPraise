@@ -76,3 +76,16 @@ struct ToastOverlay: View {
         .allowsHitTesting(false)
     }
 }
+
+extension Toast {
+    /// What a sheet write came to, said once it has: the change is already
+    /// on screen (it is made there first), so this is the word that the
+    /// sheet has it too — or, in orange, that it does not and why.
+    func sheet(_ failure: String?, saved: String) {
+        if let failure {
+            show(failure, symbol: "exclamationmark.triangle.fill", tint: .orange)
+        } else {
+            show(saved, symbol: "checkmark.icloud.fill")
+        }
+    }
+}

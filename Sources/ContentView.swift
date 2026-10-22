@@ -15,10 +15,12 @@ import SwiftData
 struct ContentView: View {
     @EnvironmentObject private var daily: DailyReading
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var playerHost: PlayerHost
+    /// Acted on, not drawn: PlayerStage observes it. Observed here, every
+    /// queue, index and mode change rebuilt the whole tab view.
+    @Environment(\.playerActions) private var playerHost: PlayerHost!
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!
     @EnvironmentObject private var channelManager: ChannelManagerAuth
 
     /// Recomputed as the roster loads and as sign-in changes, so the tab

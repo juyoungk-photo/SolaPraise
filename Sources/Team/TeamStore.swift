@@ -684,7 +684,25 @@ final class TeamStore: ObservableObject {
 
     // MARK: - Loading
 
+    /// One load at a time: a call made while one runs waits for it.
+    ///
+    /// WHY: at launch the root and 예배 준비 both saw no services yet and
+    /// both loaded — every tab read twice, side by side, each publishing
+    /// as it went, the screen redrawn for both.
     func load(sheetId: String) async {
+        if let running = loading, running.sheetId == sheetId {
+            await running.task.value
+            return
+        }
+        let id = UUID()
+        let task = Task { await performLoad(sheetId: sheetId) }
+        loading = (id, sheetId, task)
+        await task.value
+        if loading?.id == id { loading = nil }
+    }
+    private var loading: (id: UUID, sheetId: String, task: Task<Void, Never>)?
+
+    private func performLoad(sheetId: String) async {
         guard let client else { return }
         isLoading = true
         errorMessage = nil
@@ -1290,13 +1308,25 @@ final class TeamStore: ObservableObject {
                 }
             }
         }
+        // On screen first, then on the sheet; put back if the sheet says no.
+        // `songCharts` keeps the marks as they were, which is also what the
+        // writes below are worked out from.
+        apply()
+        func undo() {
+            for chart in songCharts {
+                if let i = attachments[day]?.firstIndex(where: { $0.fileId == chart.fileId }) {
+                    attachments[day]?[i].chosenForConti = chart.chosenForConti
+                }
+            }
+        }
         #if DEBUG
-        if isSample { apply(); return nil }
+        if isSample { return nil }
         #endif
-        guard let client else { return "시트에 연결되어 있지 않습니다." }
+        guard let client else { undo(); return "시트에 연결되어 있지 않습니다." }
         do {
             let (header, _) = try await ensureAttachmentsTab(sheetId: sheetId, client: client)
             guard let column = TeamSheet.column(header, Self.contiColumnNames) else {
+                undo()
                 return "Attachments 탭에 콘티 열을 만들지 못했습니다."
             }
             var updates: [(range: String, rows: [[String]])] = []
@@ -1305,17 +1335,18 @@ final class TeamStore: ObservableObject {
                 let want = chart.fileId == chosenId ? "✓" : ""
                 guard want != (chart.chosenForConti ? "✓" : "") else { continue }
                 guard await confirm(TeamSheet.attachmentsTab, row: row, holds: [chart.fileId],
-                                    sheetId: sheetId, client: client) else { return Self.sheetMovedMessage }
+                                    sheetId: sheetId, client: client) else { undo(); return Self.sheetMovedMessage }
                 let at = "\(TeamSheet.columnLetter(column))\(row)"
                 updates.append(("\(TeamSheet.attachmentsTab)!\(at):\(at)", [[want]]))
             }
             if !updates.isEmpty { try await client.batchWrite(sheetId: sheetId, updates: updates) }
-            apply()
             return nil
         } catch SheetsClient.SheetsError.http(403, _) {
+            undo()
             isReadOnly = true
             return "이 시트에 편집 권한이 없어 팀과 나누지 못했습니다. 이 기기에서만 콘티에 넣습니다."
         } catch {
+            undo()
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
@@ -2047,19 +2078,27 @@ final class TeamStore: ObservableObject {
         }
 
         let cell = "\(TeamSheet.scheduleTab)!\(TeamSheet.columnLetter(column))\(row)"
+        // On screen first, then on the sheet — the read that checks the row
+        // and the write take a second or two, and the chip waiting for them
+        // read as a tap that did not take. Put back if the sheet says no.
+        let before = service.assignments[role] ?? ""
+        applyAssignmentLocally(role: role, value: value, service: service)
+        func undo() { applyAssignmentLocally(role: role, value: before, service: service) }
         guard await confirm(TeamSheet.scheduleTab, row: row, holds: [dateText(service)],
                             sheetId: sheetId, client: client) else {
+            undo()
             return Self.sheetMovedMessage
         }
         do {
             isReadOnly = false
             try await client.write(sheetId: sheetId, range: cell, row: [value])
-            applyAssignmentLocally(role: role, value: value, service: service)
             return nil
         } catch SheetsClient.SheetsError.http(403, _) {
+            undo()
             isReadOnly = true
             return "이 시트에 편집 권한이 없어 지정하지 못했습니다."
         } catch {
+            undo()
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
@@ -2334,21 +2373,31 @@ final class TeamStore: ObservableObject {
         }
 
         let tab = hasPlanTab ? TeamSheet.planTab : TeamSheet.songsTab
-        let header = (try? await client.readTable(sheetId: sheetId, tab: tab))?.first ?? []
-        let width = max(header.count, 7)
-        let last = TeamSheet.columnLetter(width - 1)
+        // Off the screen first; back if the sheet says no. It used to wait
+        // for three round trips — the whole tab read for its width — with
+        // the swiped row still standing there.
+        let keptPlan = plans[day], keptSongs = songs[day]
+        plans[day]?.removeAll { $0.id == item.id }
+        if !hasPlanTab {
+            songs[day]?.removeAll { $0.order == item.order && $0.title == item.title }
+        }
+        func undo() { plans[day] = keptPlan; songs[day] = keptSongs }
 
         // The row number is from the last load. If somebody has since
         // deleted or inserted a row in the browser, it now points at a
         // different line — and clearing it would remove someone else's
-        // song without a word. So the row must still hold this title.
+        // song without a word. So the row must still hold this title. The
+        // same read gives its width.
         let current = (try? await client.read(sheetId: sheetId,
-                                              range: "\(tab)!A\(row):\(last)\(row)"))?.first ?? []
+                                              range: "\(tab)!A\(row):AZ\(row)"))?.first ?? []
         let wanted = item.title.trimmingCharacters(in: .whitespaces)
         guard current.contains(where: { $0.trimmingCharacters(in: .whitespaces) == wanted }) else {
+            undo()
             await load(sheetId: sheetId)
             return "시트가 그 사이에 바뀌어 지우지 않았습니다. 새로 불러왔으니 다시 확인해 주세요."
         }
+        let width = max(current.count, 7)
+        let last = TeamSheet.columnLetter(width - 1)
 
         do {
             isReadOnly = false
@@ -2357,16 +2406,14 @@ final class TeamStore: ObservableObject {
                 range: "\(tab)!A\(row):\(last)\(row)",
                 row: [String](repeating: "", count: width)
             )
-            plans[day]?.removeAll { $0.id == item.id }
-            if !hasPlanTab {
-                songs[day]?.removeAll { $0.order == item.order && $0.title == item.title }
-            }
             errorMessage = nil
             return nil
         } catch SheetsClient.SheetsError.http(403, _) {
+            undo()
             isReadOnly = true
             return "이 시트에 편집 권한이 없어 지우지 못했습니다."
         } catch {
+            undo()
             return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }

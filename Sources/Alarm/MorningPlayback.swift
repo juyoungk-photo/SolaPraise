@@ -147,9 +147,9 @@ final class MorningPlayback: ObservableObject {
 /// happening, and a way out of it.
 struct MorningPlaybackBanner: View {
     @EnvironmentObject private var morning: MorningPlayback
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
 
     var body: some View {
         if morning.phase != .idle {

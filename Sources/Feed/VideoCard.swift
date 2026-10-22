@@ -22,7 +22,7 @@ private struct ThumbnailBox<Overlay: View>: View {
         Color.clear
             .aspectRatio(16.0 / 9.0, contentMode: .fit)
             .overlay {
-                AsyncImage(url: url) { phase in
+                CachedAsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
                         image.resizable().scaledToFill()

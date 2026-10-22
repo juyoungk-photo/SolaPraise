@@ -15,7 +15,7 @@ import SwiftUI
 struct PlaylistDetailView: View {
     let playlist: YTPlaylist
 
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
     @Environment(\.openURL) private var openURL

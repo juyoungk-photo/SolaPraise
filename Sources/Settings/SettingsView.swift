@@ -674,7 +674,7 @@ struct SettingsView: View {
         Section {
             HStack(spacing: 12) {
                 if let url = auth.avatarURL {
-                    AsyncImage(url: url) { image in
+                    CachedAsyncImage(url: url) { image in
                         image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: {
                         Circle().fill(.quaternary)
@@ -826,7 +826,7 @@ private struct ChannelRow: View {
     var body: some View {
         HStack(spacing: 10) {
             if let url = channel.thumbnailURL {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
                     Circle().fill(.quaternary)

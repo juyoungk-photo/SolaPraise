@@ -21,7 +21,7 @@ struct LyricCheckSheet: View {
     let song: String
 
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss

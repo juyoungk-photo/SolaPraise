@@ -17,7 +17,7 @@ import SwiftUI
 struct QueueManageSheet: View {
     @EnvironmentObject private var host: PlayerHost
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @Environment(\.dismiss) private var dismiss
 
     private struct Line: Identifiable {

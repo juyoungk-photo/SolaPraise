@@ -31,7 +31,7 @@ struct HomeCardView: View {
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .overlay {
                         if let thumbnailURL {
-                            AsyncImage(url: thumbnailURL) { phase in
+                            CachedAsyncImage(url: thumbnailURL) { phase in
                                 switch phase {
                                 case .success(let image): image.resizable().scaledToFill()
                                 default: placeholderArtwork

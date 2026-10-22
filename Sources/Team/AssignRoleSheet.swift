@@ -202,14 +202,18 @@ struct AssignRoleSheet: View {
             errorMessage = "팀 시트가 연결되어 있지 않습니다."
             return
         }
-        isSaving = true
-        errorMessage = nil
+        // Closed at once: the store puts the change on screen before it
+        // writes, and says when the sheet has it (Toast.sheet). Waiting here
+        // behind a spinner for the read and the write felt like a tap that
+        // had not taken.
+        let day = RosterMessage.day(service.date)
         Task {
             let failure = await team.assign(
                 role: role, to: name, service: service, sheetId: sheetId
             )
-            isSaving = false
-            if let failure { errorMessage = failure } else { dismiss() }
+            Toast.shared.sheet(failure.map { "지정하지 못했습니다 — \($0)" },
+                               saved: "\(day) \(role): \(name ?? "비움") — 시트에 저장됨")
         }
+        dismiss()
     }
 }

@@ -41,13 +41,16 @@ enum OfferingNote {
         return set?.isEmpty == false ? set! : defaultCall
     }
 
+    /// Compiled once: read for every 순서 line drawn.
+    private static let prayerPattern = try? NSRegularExpression(pattern: #"헌금\s*기도\s*(?:자)?\s*[:：]?\s*([^·\n,/|]+)"#)
+
     static func parse(notes: String?, orderLabel: String? = nil) -> Parsed {
         var text = (notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let labelled = orderLabel.map { label in markers.contains { label.contains($0) } || label.contains("헌금") } ?? false
         var isOffering = labelled
 
         var prayer: String?
-        if let regex = try? NSRegularExpression(pattern: #"헌금\s*기도\s*(?:자)?\s*[:：]?\s*([^·\n,/|]+)"#),
+        if let regex = Self.prayerPattern,
            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
            let range = Range(match.range(at: 1), in: text), let whole = Range(match.range, in: text) {
             let name = text[range].trimmingCharacters(in: .whitespaces)

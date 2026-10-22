@@ -15,10 +15,12 @@ import SwiftData
 struct HomeView: View {
     @Binding var selection: ContentView.Tab
 
-    @EnvironmentObject private var host: PlayerHost
+    /// Acted on, not drawn — see Unobserved.
+    @Environment(\.playerActions) private var host: PlayerHost!
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    /// For clients; the counts shown observe it themselves (QuotaCount).
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!
     @EnvironmentObject private var daily: DailyReading
 
     @Query(sort: [SortDescriptor(\HomeCard.sortOrder), SortDescriptor(\HomeCard.addedAt)])
@@ -307,9 +309,11 @@ struct HomeView: View {
                 Text("찬양·말씀 검색")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(quota.searchesRemaining)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(quota.canSearch ? Color.secondary : Color.orange)
+                QuotaCount { quota in
+                    Text("\(quota.searchesRemaining)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(quota.canSearch ? Color.secondary : Color.orange)
+                }
             }
             .font(.subheadline)
             .padding(.horizontal, 14)
@@ -353,18 +357,22 @@ struct HomeView: View {
     @ViewBuilder
     private func cardView(_ card: HomeCard) -> some View {
         ZStack(alignment: .topTrailing) {
-            HomeCardView(
-                card: card,
-                subtitle: subtitle(for: card),
-                thumbnailURL: thumbnail(for: card),
-                isRead: card.kind == .reading ? daily.isCurrentRead : false,
-                // Only the 시편 card steps. 시편 듣기 reads the same
-                // `daily.chapter`, so it follows along without a second pair
-                // of buttons competing for the same value.
-                // 시편 steps its chapter, which is the same thing as its
-                // day. A channel card steps through that channel's episodes.
-                onStep: stepper(for: card)
-            )
+            // The search card's subtitle is the count left, which only it
+            // observes.
+            QuotaCount { quota in
+                HomeCardView(
+                    card: card,
+                    subtitle: card.kind == .search ? "\(quota.searchesRemaining)회 남음" : subtitle(for: card),
+                    thumbnailURL: thumbnail(for: card),
+                    isRead: card.kind == .reading ? daily.isCurrentRead : false,
+                    // Only the 시편 card steps. 시편 듣기 reads the same
+                    // `daily.chapter`, so it follows along without a second pair
+                    // of buttons competing for the same value.
+                    // 시편 steps its chapter, which is the same thing as its
+                    // day. A channel card steps through that channel's episodes.
+                    onStep: stepper(for: card)
+                )
+            }
             // A tap gesture rather than a Button. Wrapping the card in
             // `Button { } label: { }` inside this nesting — ZStack in an
             // HStack in a LazyVStack in a ScrollView that also carries a

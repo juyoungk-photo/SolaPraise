@@ -15,7 +15,8 @@ import SwiftData
 
 struct ServicePrepView: View {
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var host: PlayerHost
+    /// Acted on, not drawn — see Unobserved.
+    @Environment(\.playerActions) private var host: PlayerHost!
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var planning: PlanningAuth
     @Environment(\.modelContext) private var modelContext
@@ -41,7 +42,7 @@ struct ServicePrepView: View {
     @State private var live: TeamService?
     @State private var responding: TeamService?
 
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
 
     private var pinnedPlaylists: [CachedPlaylist] {
         allPlaylists.filter { $0.purposeRaw == Purpose.worship.rawValue }
@@ -1801,9 +1802,10 @@ struct ServicePrepView: View {
     private func removeItem(_ item: PlanItem, from service: TeamService) async {
         guard let sheetId else { return }
         pushNote = nil
-        if let failure = await team.removePlanItem(item, from: service, sheetId: sheetId) {
-            pushNote = failure
-        }
+        let failure = await team.removePlanItem(item, from: service, sheetId: sheetId)
+        pushNote = failure
+        Toast.shared.sheet(failure.map { "지우지 못했습니다 — \($0)" },
+                           saved: "「\(PlanSongTitle.split(item.title).title)」 순서에서 뺌 — 시트에 저장됨")
     }
 
     // MARK: - Pushing the 콘티
@@ -2186,11 +2188,17 @@ struct ServicePrepView: View {
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "참여"
         if status == .available { usualRole = part }
 
+        // Cleared first: setAvailability only ever sets it, so an error from
+        // any earlier write was read back after every later answer that
+        // went through, and shown under the row as this one's.
+        team.errorMessage = nil
         await team.setAvailability(
             status, service: upcoming, role: part,
             email: email, name: auth.displayName ?? email, sheetId: sheetId
         )
         if let message = team.errorMessage { rowError[key] = message }
+        Toast.shared.sheet(team.errorMessage.map { "응답을 저장하지 못했습니다 — \($0)" },
+                           saved: "\(RosterMessage.day(upcoming.date)) \(status.label) — 시트에 저장됨")
     }
 
     /// Takes the answer back, under every address that is me.
@@ -2213,6 +2221,8 @@ struct ServicePrepView: View {
             rowError[key] = team.errorMessage
                 ?? "응답을 취소하지 못했습니다. 시트에 쓰지 못했습니다."
         }
+        Toast.shared.sheet(ok ? nil : rowError[key],
+                           saved: "\(RosterMessage.day(upcoming.date)) 응답 취소 — 시트에 저장됨")
     }
 
     /// The two parts a service cannot happen without, in the order they are
@@ -2622,10 +2632,16 @@ struct ServicePrepView: View {
         guard let sheetId, let email = team.actingEmail(auth: auth, planning: planning)
         else { return }
         usualRole = role
+        // On the row at once; the sheet after (see record).
+        inFlight[upcoming.id] = .some(.available)
+        defer { inFlight[upcoming.id] = nil }
+        team.errorMessage = nil
         await team.setAvailability(
             .available, service: upcoming, role: role,
             email: email, name: auth.displayName ?? email, sheetId: sheetId
         )
+        Toast.shared.sheet(team.errorMessage.map { "응답을 저장하지 못했습니다 — \($0)" },
+                           saved: "\(RosterMessage.day(upcoming.date)) \(role) 가능 — 시트에 저장됨")
     }
 
     private func answer(_ status: SignupStatus,
@@ -2637,10 +2653,15 @@ struct ServicePrepView: View {
         // were not doing.
         let part = (role?.isEmpty == false ? role!
                     : (usualRole.isEmpty ? (team.roles.first?.name ?? "참여") : usualRole))
+        inFlight[upcoming.id] = .some(status)
+        defer { inFlight[upcoming.id] = nil }
+        team.errorMessage = nil
         await team.setAvailability(
             status, service: upcoming, role: part,
             email: email, name: auth.displayName ?? email, sheetId: sheetId
         )
+        Toast.shared.sheet(team.errorMessage.map { "응답을 저장하지 못했습니다 — \($0)" },
+                           saved: "\(RosterMessage.day(upcoming.date)) \(status.label) — 시트에 저장됨")
     }
 
     /// 인도 then 반주 then everyone else: the two parts that decide whether a

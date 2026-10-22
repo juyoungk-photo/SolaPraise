@@ -27,7 +27,7 @@ struct SheetMusicLinks: View {
     @EnvironmentObject private var team: TeamStore
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var planning: PlanningAuth
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @Environment(\.modelContext) private var modelContext
 
     /// Every link opens in the app's 악보 finder (ScoreFinder): the music

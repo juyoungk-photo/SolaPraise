@@ -14,7 +14,7 @@ import SwiftUI
 import SwiftData
 
 struct HomeSearchSheet: View {
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger

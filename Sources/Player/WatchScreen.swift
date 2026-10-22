@@ -93,7 +93,8 @@ struct WatchScreen: View {
     @State private var shareButtonFrame: CGRect?
     @StateObject private var detection = DetectionSession()
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    /// For clients only — see Unobserved.
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!
     @EnvironmentObject private var planning: PlanningAuth
     @Environment(\.modelContext) private var context
     @State private var worshipSet: [WorshipSetItem] = []

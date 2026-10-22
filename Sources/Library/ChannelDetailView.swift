@@ -15,10 +15,10 @@ import SwiftData
 struct ChannelDetailView: View {
     let channel: Channel
 
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @EnvironmentObject private var planning: PlanningAuth
     @EnvironmentObject private var channelManager: ChannelManagerAuth
     @StateObject private var feed = FeedStore()
@@ -542,7 +542,7 @@ struct PlaylistCard: View {
                         .aspectRatio(16 / 9, contentMode: .fit)
                         .overlay {
                             if let url = playlist.thumbnailURL {
-                                AsyncImage(url: url) { image in
+                                CachedAsyncImage(url: url) { image in
                                     image.resizable().aspectRatio(contentMode: .fill)
                                 } placeholder: { Color.clear }
                             } else {
@@ -584,7 +584,7 @@ struct SharedListPublishCard: View {
     let channelId: String
 
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @EnvironmentObject private var planning: PlanningAuth
     @EnvironmentObject private var manager: ChannelManagerAuth
 

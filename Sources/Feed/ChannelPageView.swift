@@ -28,9 +28,9 @@ struct ChannelPageView: View {
     /// Shown until the real title arrives, so the header is never blank.
     let fallbackTitle: String
 
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
     @Environment(\.modelContext) private var modelContext
 
     @Query private var channels: [Channel]
@@ -115,7 +115,7 @@ struct ChannelPageView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 96)
                     .overlay {
-                        AsyncImage(url: banner) { image in
+                        CachedAsyncImage(url: banner) { image in
                             image.resizable().scaledToFill()
                         } placeholder: {
                             EmptyView()
@@ -125,7 +125,7 @@ struct ChannelPageView: View {
             }
 
             HStack(alignment: .center, spacing: 14) {
-                AsyncImage(url: channel?.thumbnailURL) { image in
+                CachedAsyncImage(url: channel?.thumbnailURL) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
                     Circle().fill(Color(.secondarySystemBackground))
@@ -247,7 +247,7 @@ private struct VideoTile: View {
             Color(.secondarySystemBackground)
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay {
-                    AsyncImage(url: thumbnailURL) { image in
+                    CachedAsyncImage(url: thumbnailURL) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         EmptyView()

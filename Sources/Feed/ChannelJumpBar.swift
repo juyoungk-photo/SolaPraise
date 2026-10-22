@@ -33,7 +33,7 @@ struct ChannelJumpBar: View {
     private func chip(_ channel: Channel) -> some View {
         HStack(spacing: 5) {
             if let url = channel.thumbnailURL {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
                     Circle().fill(Color.secondary.opacity(0.3))
@@ -112,7 +112,7 @@ struct FilterChip: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 if let thumbnail {
-                    AsyncImage(url: thumbnail) { image in
+                    CachedAsyncImage(url: thumbnail) { image in
                         image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: {
                         Circle().fill(Color.secondary.opacity(0.3))

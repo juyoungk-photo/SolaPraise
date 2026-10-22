@@ -96,8 +96,21 @@ enum EpisodeDate {
 
     // MARK: - Helpers
 
+    /// Each pattern compiled once: a date is read out of every card's title
+    /// on every draw of 홈.
+    private static func compiled(_ pattern: String) -> NSRegularExpression? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let known = compiledPatterns[pattern] { return known }
+        let regex = try? NSRegularExpression(pattern: pattern)
+        compiledPatterns[pattern] = regex
+        return regex
+    }
+    nonisolated(unsafe) private static var compiledPatterns: [String: NSRegularExpression?] = [:]
+    private static let lock = NSLock()
+
     private static func firstMatch(_ pattern: String, in text: String) -> [Int]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = compiled(pattern),
               let match = regex.firstMatch(
                 in: text, range: NSRange(text.startIndex..., in: text))
         else { return nil }

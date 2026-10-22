@@ -10,9 +10,9 @@ import SwiftData
 
 struct MorningAlarmSettingsView: View {
     @EnvironmentObject private var morning: MorningPlayback
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
 
     @Query(sort: [SortDescriptor(\CachedPlaylist.title)]) private var playlists: [CachedPlaylist]
 

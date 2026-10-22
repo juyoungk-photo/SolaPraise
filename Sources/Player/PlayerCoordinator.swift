@@ -61,8 +61,11 @@ final class PlayerCoordinator: NSObject, ObservableObject {
     @Published private(set) var state: YTPlayerState = .unstarted
     @Published private(set) var isReady = false
     @Published private(set) var didEnd = false
-    @Published private(set) var currentTime: Double = 0
-    @Published private(set) var duration: Double = 0
+    // Not published: the page reports them every second, nothing on screen
+    // draws them, and published they redrew every view observing the
+    // player once a second while it played. Read when needed.
+    private(set) var currentTime: Double = 0
+    private(set) var duration: Double = 0
     @Published private(set) var errorMessage: String?
     /// True when playback failed because the rights holder disabled embedding
     /// (101/150/152). Nothing in-app can fix that, so the UI offers YouTube.

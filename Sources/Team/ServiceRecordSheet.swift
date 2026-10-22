@@ -72,6 +72,7 @@ struct ServiceRecordSheet: View {
         if let failure = await team.record(service, sheetId: sheetId) {
             note = failure
         } else {
+            Toast.shared.sheet(nil, saved: "예배 기록 — 곡 메모에 저장됨")
             dismiss()
         }
     }

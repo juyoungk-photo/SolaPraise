@@ -107,8 +107,24 @@ enum SongCompletion {
     static func matches(_ query: String, title: String) -> Bool {
         let typed = letters(query)
         guard !typed.isEmpty else { return false }
-        return score(typed: typed, query: query, Candidate(text: title, source: .video)) != nil
+        return score(typed: typed, query: query, candidate(for: title)) != nil
     }
+
+    /// A title's letters, worked out once: the feed's search reads every
+    /// cached title on each keystroke.
+    private static func candidate(for title: String) -> Candidate {
+        titleLock.lock()
+        if let known = titleCandidates[title] { titleLock.unlock(); return known }
+        titleLock.unlock()
+        let made = Candidate(text: title, source: .video)
+        titleLock.lock()
+        if titleCandidates.count > 5000 { titleCandidates.removeAll() }
+        titleCandidates[title] = made
+        titleLock.unlock()
+        return made
+    }
+    nonisolated(unsafe) private static var titleCandidates: [String: Candidate] = [:]
+    private static let titleLock = NSLock()
 
     private static func score(typed: [Unicode.Scalar], query: String, _ candidate: Candidate) -> Int? {
         if isInitials(query) {

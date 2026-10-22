@@ -23,10 +23,12 @@ struct WordFeedView: View {
         return 4
     }
 
-    @EnvironmentObject private var host: PlayerHost
+    /// Acted on, not drawn — see Unobserved.
+    @Environment(\.playerActions) private var host: PlayerHost!
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    /// For clients only — see Unobserved.
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!
     @StateObject private var feed = FeedStore()
 
     // A combined filter+sort @Query blows the SwiftUI type-checker's budget
@@ -444,7 +446,7 @@ struct ChannelSection: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 if let url = channel.thumbnailURL {
-                    AsyncImage(url: url) { image in
+                    CachedAsyncImage(url: url) { image in
                         image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: {
                         Circle().fill(.quaternary)

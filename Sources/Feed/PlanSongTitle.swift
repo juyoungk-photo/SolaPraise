@@ -69,7 +69,7 @@ enum PlanSongTitle {
             let isSongPart = index == songPart
             var rest = part
             for (pattern, aside) in [(#"\[([^\]]*)\]"#, false), (#"【([^】]*)】"#, false), (#"\(([^)]*)\)"#, true)] {
-                guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+                guard let regex = NSRegularExpression.cached(pattern) else { continue }
                 let range = NSRange(rest.startIndex..., in: rest)
                 for match in regex.matches(in: rest, range: range) {
                     guard let inner = Range(match.range(at: 1), in: rest) else { continue }
@@ -130,7 +130,7 @@ enum PlanSongTitle {
         for part in SongSearchSuggestions.parts(of: text) {
             var rest = part
             for pattern in [#"\[([^\]]*)\]"#, #"【([^】]*)】"#, #"\(([^)]*)\)"#] {
-                guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+                guard let regex = NSRegularExpression.cached(pattern) else { continue }
                 let range = NSRange(rest.startIndex..., in: rest)
                 for match in regex.matches(in: rest, range: range) {
                     if let inner = Range(match.range(at: 1), in: rest), song(String(rest[inner])) { add(String(rest[inner])) }
@@ -209,7 +209,7 @@ enum PlanSongTitle {
     private static let lock = NSLock()
 
     private static func matches(_ pattern: String, in text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = NSRegularExpression.cached(pattern) else { return [] }
         return regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
             .compactMap { Range($0.range, in: text).map { String(text[$0]) } }
     }

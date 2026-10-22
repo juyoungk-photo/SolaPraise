@@ -26,10 +26,12 @@ struct WorshipFeedView: View {
         return 6
     }
 
-    @EnvironmentObject private var host: PlayerHost
+    /// Acted on, not drawn — see Unobserved.
+    @Environment(\.playerActions) private var host: PlayerHost!
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    /// For clients; the counts shown observe it themselves (QuotaCount).
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!
     @EnvironmentObject private var team: TeamStore
     @StateObject private var feed = FeedStore()
 
@@ -130,13 +132,15 @@ struct WorshipFeedView: View {
         ToolbarItem(placement: .topBarLeading) {
             // Compact + fixedSize: the full "100/100" form gets truncated to
             // "100/…" beside a large navigation title.
-            Label("\(quota.searchesRemaining)", systemImage: "magnifyingglass")
-                // Toolbars default Labels to icon-only, which hides the count.
-                .labelStyle(.titleAndIcon)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(quota.canSearch ? Color.secondary : Color.orange)
-                .fixedSize()
-                .accessibilityLabel("\(quota.searchesRemaining) of \(QuotaLedger.dailySearchLimit) searches left today")
+            QuotaCount { quota in
+                Label("\(quota.searchesRemaining)", systemImage: "magnifyingglass")
+                    // Toolbars default Labels to icon-only, which hides the count.
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(quota.canSearch ? Color.secondary : Color.orange)
+                    .fixedSize()
+                    .accessibilityLabel("\(quota.searchesRemaining) of \(QuotaLedger.dailySearchLimit) searches left today")
+            }
         }
     }
 
@@ -528,23 +532,25 @@ struct WorshipFeedView: View {
     private var remoteSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !hasRemoteResults {
-                Button {
-                    Task { await runRemoteSearch() }
-                } label: {
-                    HStack {
-                        Image(systemName: "globe")
-                        Text("YouTube 전체에서 「\(trimmedSearch)」 검색")
-                            .lineLimit(1)
-                        Spacer()
-                        Text("오늘 \(quota.searchesRemaining)회 남음")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                QuotaCount { quota in
+                    Button {
+                        Task { await runRemoteSearch() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "globe")
+                            Text("YouTube 전체에서 「\(trimmedSearch)」 검색")
+                                .lineLimit(1)
+                            Spacer()
+                            Text("오늘 \(quota.searchesRemaining)회 남음")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.subheadline)
                     }
-                    .font(.subheadline)
+                    .buttonStyle(.bordered)
+                    .disabled(isSearching || !quota.canSearch || trimmedSearch.isEmpty)
+                    .padding(.horizontal, 16)
                 }
-                .buttonStyle(.bordered)
-                .disabled(isSearching || !quota.canSearch || trimmedSearch.isEmpty)
-                .padding(.horizontal, 16)
             }
 
             if isSearching {

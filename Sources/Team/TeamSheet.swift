@@ -162,6 +162,27 @@ enum TeamSheet {
     /// the ISO form was accepted, which silently dropped every row of a
     /// schedule typed the ordinary American way — the tab looked empty and
     /// nothing said why.
+    /// One formatter per format, made once: every date cell of every tab
+    /// is read through here on each load, and a DateFormatter is costly to
+    /// make. Never changed after, so safe to share.
+    private static let dayFormatters: [DateFormatter] = dateFormats.map { format in
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static let yearlessFormatters: [DateFormatter] = yearlessFormats.map { format in
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = format + " yyyy"
+        return formatter
+    }
+
     private static let dateFormats = [
         "yyyy-MM-dd", "M/d/yyyy", "yyyy/M/d", "M-d-yyyy",
         "MMM d yyyy", "MMM d, yyyy", "d MMM yyyy"
@@ -187,13 +208,7 @@ enum TeamSheet {
             }
         }
 
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-
-        for format in dateFormats {
-            formatter.dateFormat = format
+        for formatter in dayFormatters {
             if let date = formatter.date(from: text) { return date }
         }
 
@@ -202,8 +217,7 @@ enum TeamSheet {
         // year and putting next January ten months in the past.
         let calendar = Calendar(identifier: .gregorian)
         let thisYear = calendar.component(.year, from: Date())
-        for format in yearlessFormats {
-            formatter.dateFormat = format + " yyyy"
+        for formatter in yearlessFormatters {
             for year in [thisYear, thisYear + 1, thisYear - 1] {
                 guard let date = formatter.date(from: "\(text) \(year)") else { continue }
                 let days = calendar.dateComponents([.day], from: Date(), to: date).day ?? 0

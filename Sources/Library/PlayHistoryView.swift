@@ -17,7 +17,7 @@ import SwiftUI
 import SwiftData
 
 struct PlayHistoryView: View {
-    @EnvironmentObject private var host: PlayerHost
+    @Environment(\.playerActions) private var host: PlayerHost!   // acted on, not drawn — see Unobserved
     @Environment(\.modelContext) private var modelContext
 
     @Query(sort: [SortDescriptor(\WatchEvent.startedAt, order: .reverse)])

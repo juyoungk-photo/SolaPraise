@@ -41,7 +41,7 @@ enum TeamPlaylist {
 /// 설정 › 팀 콘티 재생목록: a link pasted, or one of this account's own.
 struct TeamPlaylistSettingsView: View {
     @EnvironmentObject private var auth: GoogleAuthManager
-    @EnvironmentObject private var quota: QuotaLedger
+    @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
 
     @State private var current = (id: TeamPlaylist.id, title: TeamPlaylist.title)
     @State private var link = ""

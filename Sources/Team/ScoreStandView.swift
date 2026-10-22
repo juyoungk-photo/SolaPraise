@@ -457,13 +457,16 @@ struct ScoreStandView: View {
                                 ContiChoice.choose(item.id, scope: contiScope, song: item.song)
                                 // Marked for the team, so every member's 콘티 —
                                 // and the sheet — takes the same one.
+                                // Marked here at once; the sheet says when it
+                                // has it (Toast.sheet).
+                                markChosen(item)
                                 if let shareChoice {
                                     Task {
-                                        if let failure = await shareChoice(item) { model.note = failure }
-                                        markChosen(item)
+                                        let failure = await shareChoice(item)
+                                        if let failure { model.note = failure }
+                                        Toast.shared.sheet(failure,
+                                                           saved: "「\(PlanSongTitle.split(item.song).title)」 콘티 버전 — 시트에 저장됨")
                                     }
-                                } else {
-                                    markChosen(item)
                                 }
                                 choiceTick += 1
                             } label: {
