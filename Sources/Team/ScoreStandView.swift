@@ -17,6 +17,7 @@
 //
 
 import SwiftUI
+import Combine
 import Photos
 import UIKit
 import PDFKit
@@ -349,11 +350,28 @@ struct ScoreStandView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             model.team = team
+            model.nearbyName = team.lastActingEmail.flatMap { team.rosterName(for: $0) } ?? UIDevice.current.name
+            model.joinRoom(items: items, team: TeamSheetSource.current)
         }
         // The team's corrections, as they are made, while this is open.
         .task { await model.watchTeam() }
+        #if DEBUG
+        // -uiTestRehearsalEdit: take the first chord off, as a hand would,
+        // once the room has had time to connect — to watch it leave the
+        // other simulator's stand.
+        .task {
+            guard DebugHarness.args.contains("-uiTestRehearsalEdit"), let item else { return }
+            try? await Task.sleep(for: .seconds(15))
+            await model.ensureRead(item)
+            if let first = model.states[item.id]?.pages.first?.chords.first {
+                print("[Rehearsal] removing \(first.original) — peers: \(RehearsalLink.shared.peers)")
+                model.remove(item, page: 0, chord: first.id)
+            }
+        }
+        #endif
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+            model.leaveRoom()
             // Corrections waiting to be shared go now, not lost with the stand.
             model.shareNow()
         }
@@ -579,12 +597,16 @@ struct ScoreStandView: View {
                 Text(item.song.isEmpty ? item.attachment.name : PlanSongTitle.split(item.song).title)
                     .font(.system(size: 24, weight: .bold))
                     .lineLimit(1)
+                    .layoutPriority(1)
                 if items.count > 1 {
                     Text("\(index + 1)/\(items.count)")
                         .font(.system(size: 17, weight: .medium).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.55))
+                        // Never broken over lines: 「1/」 above 「3」 read as nothing.
+                        .fixedSize()
                 }
                 Spacer(minLength: 0)
+                NearbyBadge(inRow: true)
                 // The file itself, in Drive: to check what was uploaded.
                 if !item.attachment.fileId.hasPrefix("local-") {
                     Button { openFile(item.attachment.url) } label: {
@@ -617,6 +639,7 @@ struct ScoreStandView: View {
             // page as it was, at the same place. The taller sets the height.
             ZStack(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
+                    NearbyBadge(inRow: false)
                     // Shown from the start, before the page has loaded: which
                     // version to look at is the first choice, not the last.
                     versionChips(item)
@@ -1477,6 +1500,8 @@ final class ScoreStandModel: ObservableObject {
 
     func load(_ item: ScoreStandItem) async {
         knownItems[item.id] = item
+        onScreen = item
+        defer { readIfInRoom() }
         if states[item.id] != nil { return }
         if let cached = Self.cache[item.id] {
             states[item.id] = cached
@@ -1999,7 +2024,11 @@ final class ScoreStandModel: ObservableObject {
         ScoreLyricFixStore.save(fixes, for: item.id)
         systems[index] = edited
         charts[item.id] = systems
-        // Shared with the chords: the team reads the same words.
+        // Shared with the chords: the team reads the same words — the room
+        // at once, the sheet a moment later.
+        RehearsalLink.shared.send(.init(kind: .lyrics, fileId: item.attachment.fileId,
+                                        key: SharedEdits.key(pages: item.pages), delta: nil,
+                                        lyrics: fixes, from: nearbyName))
         if var saved = ScoreEditStore.load(item.id) {
             saved.dirty = true
             ScoreEditStore.write(saved, for: item.id)
@@ -2037,10 +2066,151 @@ final class ScoreStandModel: ObservableObject {
         charts[item.id] = nil
         guard let state = states[item.id] else { return }
         let before = ScoreEditStore.load(item.id)
-        ScoreEditStore.save(state.pages.map(\.chords), edited: true, for: item.id,
+        let now = state.pages.map(\.chords)
+        ScoreEditStore.save(now, edited: true, for: item.id,
                             sharedFrom: before?.sharedFrom, dirty: true,
                             base: before?.base, lyricBase: before?.lyricBase)
+        // The room first: only what changed, to the stands nearby at once.
+        // The sheet gets the whole correction a moment later.
+        if let old = before?.pages, let delta = ChartDelta.between(old, now), !delta.isEmpty {
+            RehearsalLink.shared.send(.init(kind: .delta, fileId: item.attachment.fileId,
+                                            key: SharedEdits.key(pages: item.pages), delta: delta,
+                                            lyrics: nil, from: nearbyName))
+        }
         scheduleShare(item)
+    }
+
+    // MARK: The room
+
+    /// The name shown to the devices nearby.
+    var nearbyName = ""
+    private var linkToken: UUID?
+    /// When a change last came from the room, per chart — the same change
+    /// arriving through the sheet a moment later is not announced again.
+    private var heardNearby: [String: Date] = [:]
+
+    /// While the stand is open: the team's devices in the room, and every
+    /// chart of the set, so a change to a song not on screen lands too.
+    func joinRoom(items: [ScoreStandItem], team sheetId: String?) {
+        for item in items where knownItems[item.id] == nil { knownItems[item.id] = item }
+        guard linkToken == nil else { return }
+        RehearsalLink.shared.start(team: RehearsalLink.teamTag(sheetId), name: nearbyName)
+        linkToken = RehearsalLink.shared.listen { [weak self] message in self?.heard(message) }
+        roomWatch = RehearsalLink.shared.$peers
+            .removeDuplicates()
+            .sink { [weak self] _ in Task { @MainActor in self?.readIfInRoom() } }
+    }
+
+    func leaveRoom() {
+        guard let linkToken else { return }
+        RehearsalLink.shared.unlisten(linkToken)
+        RehearsalLink.shared.stop()
+        self.linkToken = nil
+        roomWatch = nil
+    }
+
+    private var roomWatch: AnyCancellable?
+    private var onScreen: ScoreStandItem?
+
+    /// With someone in the room, the chart on screen has its chords ahead —
+    /// theirs if they have read it, else read here: a change is laid on
+    /// chords, and reading them only when the first change came took
+    /// seconds, on the one change that most needed to be seen at once.
+    private func readIfInRoom() {
+        guard !RehearsalLink.shared.peers.isEmpty, let item = onScreen,
+              states[item.id]?.isReady == true, states[item.id]?.isRead != true,
+              states[item.id]?.isReading != true else { return }
+        askRoom(item)
+    }
+
+    /// One printed chord on two devices: the same id, or — read on each
+    /// device under its own ids — the same spot on the page.
+    static func samePrinted(_ a: ScoreChord, _ b: ScoreChord) -> Bool {
+        a.id == b.id || (abs(a.box.midX - b.box.midX) < 0.015 && abs(a.box.midY - b.box.midY) < 0.01)
+    }
+
+    private func heard(_ message: RehearsalLink.Message) {
+        for item in knownItems.values
+        where item.attachment.fileId == message.fileId && SharedEdits.key(pages: item.pages) == message.key {
+            switch message.kind {
+            case .want:
+                // Answered by whoever has the chords read.
+                if let pages = readChords(item) {
+                    send(.chords, item, pages: pages)
+                }
+                continue
+            case .chords:
+                guard let pages = message.pages else { continue }
+                takeChords(item, pages: pages)
+            case .delta:
+                guard let delta = message.delta else { continue }
+                guard let current = readChords(item) else {
+                    // Not read here yet: the room's reading, not a new one.
+                    askRoom(item)
+                    continue
+                }
+                let laid = delta.applied(to: current, same: Self.samePrinted)
+                keep(item, pages: laid.pages)
+                // Fell partly on nothing: this copy was read differently.
+                // The whole chart, from the one who changed it.
+                if laid.missed > 0 { askRoom(item) }
+            case .lyrics:
+                ScoreLyricFixStore.save(message.lyrics ?? [], for: item.id)
+                charts[item.id] = nil
+            }
+            heardNearby[item.id] = Date()
+            if message.kind != .chords {
+                shareStatus[item.id] = "\(message.from.isEmpty ? "팀원" : message.from) 님이 고친 것을 바로 받았습니다"
+            }
+        }
+    }
+
+    /// The chords this device has for a chart: on screen if read, else kept.
+    private func readChords(_ item: ScoreStandItem) -> [[ScoreChord]]? {
+        states[item.id].flatMap { $0.isRead ? $0.pages.map(\.chords) : nil } ?? ScoreEditStore.load(item.id)?.pages
+    }
+
+    /// Kept as this device's copy, not as its own fix: the sender shares it
+    /// with the sheet, and this device's own unshared fixes stay marked.
+    private func keep(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
+        var saved = ScoreEditStore.load(item.id) ?? .init(pages: pages, edited: true, version: ScoreRecognition.version)
+        saved.pages = pages
+        saved.edited = true
+        ScoreEditStore.write(saved, for: item.id)
+        if states[item.id]?.isReady == true { adopt(item, pages: pages) }
+    }
+
+    /// Another device's reading, whole. Fixes of this device's own that are
+    /// not yet shared are laid on top of it.
+    private func takeChords(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
+        if let at = tookChords[item.id], Date().timeIntervalSince(at) < 2 { return }
+        let saved = ScoreEditStore.load(item.id)
+        let mine = saved?.dirty == true ? EditMerge.pages(base: saved?.base, local: saved!.pages, remote: pages) : pages
+        keep(item, pages: mine)
+        tookChords[item.id] = Date()
+        waitingForRoom.remove(item.id)
+    }
+    private var tookChords: [String: Date] = [:]
+    private var waitingForRoom: Set<String> = []
+
+    /// Asks the room for a chart's chords; reads them here only if nobody
+    /// answers within two seconds.
+    private func askRoom(_ item: ScoreStandItem) {
+        guard !waitingForRoom.contains(item.id) else { return }
+        waitingForRoom.insert(item.id)
+        send(.want, item)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.waitingForRoom.remove(item.id) != nil,
+                  self.states[item.id]?.isRead != true else { return }
+            await self.ensureRead(item)
+        }
+    }
+
+    private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, pages: [[ScoreChord]]? = nil) {
+        RehearsalLink.shared.send(.init(kind: kind, fileId: item.attachment.fileId,
+                                        key: SharedEdits.key(pages: item.pages), delta: nil,
+                                        lyrics: nil, pages: pages, from: nearbyName))
     }
 
     // MARK: Sharing corrections
@@ -2054,13 +2224,14 @@ final class ScoreStandModel: ObservableObject {
     /// A line for the header: shared, sharing, or why not.
     @Published var shareStatus: [String: String] = [:]
 
-    /// Shares a chart's corrections a few seconds after the last change —
-    /// one upload for a run of fixes, not one per tap.
+    /// Shares a chart's corrections a second after the last change — one
+    /// upload for a run of quick fixes, not one per tap, and soon enough for
+    /// the members not in the room.
     private func scheduleShare(_ item: ScoreStandItem) {
         shareTasks[item.id]?.cancel()
         shareStatus[item.id] = "고친 코드를 팀과 공유하는 중…"
         shareTasks[item.id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
             await self?.share(item)
         }
@@ -2134,8 +2305,10 @@ final class ScoreStandModel: ObservableObject {
     }
 
     /// While the stand is open: the team's newer corrections, taken up as
-    /// they are shared — every 12 seconds, one read of the Attachments
-    /// tab, and a download only when a chart's file changed.
+    /// they are shared — every 3 seconds, one read of the Attachments tab
+    /// (twenty a minute, a third of what Google allows one person), and a
+    /// download only when a chart's file changed. For the members not in
+    /// the room; those in it have had the change from RehearsalLink.
     ///
     /// WHY: corrections reached another member only when they closed the
     /// chart and opened it again after a reload. In a rehearsal the person
@@ -2143,7 +2316,7 @@ final class ScoreStandModel: ObservableObject {
     /// the same moment.
     func watchTeam() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(12))
+            try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, let team, let ids = await team.editsIds() else { continue }
             for (id, item) in knownItems where states[id]?.isReady == true {
                 guard let remote = ids[item.attachment.fileId], !remote.isEmpty else { continue }
@@ -2173,6 +2346,8 @@ final class ScoreStandModel: ObservableObject {
         ScoreLyricFixStore.save(lyrics, for: item.id)
         guard changed else { return }
         adopt(item, pages: pages)
+        // Already had from the room: the sheet's copy only settles the ids.
+        if let heard = heardNearby[item.id], Date().timeIntervalSince(heard) < 30 { return }
         shareStatus[item.id] = "팀원이 고친 코드를 받았습니다"
         let song = item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension
                                      : PlanSongTitle.split(item.song).title
@@ -2559,5 +2734,27 @@ enum ScoreKeyStore {
         var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
         all[fileId] = value
         UserDefaults.standard.set(all, forKey: key)
+    }
+}
+
+/// 「근처 3명」: the stands in the room that a fix reaches at once.
+private struct NearbyBadge: View {
+    /// In the title row (wide screens), or as a line under it (a phone,
+    /// whose title row the song's name already fills).
+    let inRow: Bool
+    @ObservedObject private var link = RehearsalLink.shared
+    @Environment(\.horizontalSizeClass) private var width
+
+    var body: some View {
+        if !link.peers.isEmpty, inRow == (width != .compact) {
+            Label(inRow ? "근처 \(link.peers.count)명" : "근처 \(link.peers.joined(separator: ", "))와 바로 연결됨",
+                  systemImage: "dot.radiowaves.left.and.right")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                .background(Color.green.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(.white)
+                .accessibilityLabel("근처 팀원 \(link.peers.count)명과 바로 연결됨: \(link.peers.joined(separator: ", "))")
+        }
     }
 }

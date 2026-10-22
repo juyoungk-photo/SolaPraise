@@ -464,7 +464,7 @@ final class TeamStore: ObservableObject {
 
     /// Who writes, as of the last configure — for rows written outside a
     /// view that knows the accounts.
-    private var lastActingEmail: String?
+    private(set) var lastActingEmail: String?
 
     // MARK: - Rows that may have moved
 

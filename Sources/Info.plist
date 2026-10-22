@@ -58,6 +58,13 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>팀 연습 중 같은 방에 있는 팀원 기기와 악보 수정을 바로 주고받습니다.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_sp-rehearsal._tcp</string>
+		<string>_sp-rehearsal._udp</string>
+	</array>
 	<key>NSAlarmKitUsageDescription</key>
 	<string>아침 알람이 정한 시간에 울리고, 「예배 틀기」를 누르면 모닝워십이나 찬양을 틉니다.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
