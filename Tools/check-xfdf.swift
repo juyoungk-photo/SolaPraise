@@ -56,6 +56,10 @@ struct CheckXFDF {
         expect(read.delete.first?.box, printed.box, "and by place")
         expect(command.contains("<delete><id page=\"3\""), true, "the standard's delete")
 
+        // A 콘티 file's page map, as XFDF form fields.
+        let map = XFDF.Document(pages: [], fields: ["page.0": "빛의 노래", "page.2": "새벽 & 노래"])
+        expect(XFDF.decode(XFDF.encode(map, pdfPages: [], sizes: [])), map, "fields read back as written")
+
         if failures == 0 {
             print("all xfdf checks passed")
         } else {

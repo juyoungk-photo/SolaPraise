@@ -1549,7 +1549,7 @@ final class ScoreStandModel: ObservableObject {
         // Not after 다시 읽기, which asked for the chart as read.
         let part = SharedEdits.key(pages: item.pages)
         if team?.knownRevision(fileId: item.attachment.fileId, part: part) == nil { _ = await team?.correctionRevisions() }
-        let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: part) ?? item.attachment.editsFileId
+        let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: part)
         if let remoteId, saved?.sharedFrom != remoteId, saved?.dirty != true, !rereading.contains(item.id),
            let fetched = await team?.fetchCorrection(fileId: item.attachment.fileId, part: part),
            let pages = fetched.entry.chords {
@@ -1697,7 +1697,6 @@ final class ScoreStandModel: ObservableObject {
             // After 다시 읽기, the shared corrections it set aside are
             // remembered as seen, so they are not taken up again.
             let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: SharedEdits.key(pages: item.pages))
-                ?? item.attachment.editsFileId
             ScoreEditStore.save(state.pages.map(\.chords), edited: false, for: item.id,
                                 sharedFrom: rereading.contains(item.id) ? remoteId : nil)
             rereading.remove(item.id)
@@ -2439,8 +2438,8 @@ final class ScoreStandModel: ObservableObject {
             misses = 0
             for (id, item) in knownItems where states[id]?.isReady == true {
                 let part = SharedEdits.key(pages: item.pages)
-                guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)]
-                        ?? ids[item.attachment.fileId], !remote.isEmpty else { continue }
+                guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)],
+                      !remote.isEmpty else { continue }
                 let saved = ScoreEditStore.load(id)
                 guard remote != saved?.sharedFrom else { continue }
                 // Fixes of its own waiting: sharing merges the two.

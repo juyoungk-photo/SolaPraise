@@ -67,6 +67,9 @@ enum XFDF {
         /// Per page of the chart, in order — empty pages included.
         var pages: [[Mark]]
         var lyrics: [Lyric] = []
+        /// XFDF's form fields: name → value. For a 콘티 file, which page is
+        /// which song — 「page.3」 → the song.
+        var fields: [String: String] = [:]
     }
 
     // MARK: - Writing
@@ -75,7 +78,13 @@ enum XFDF {
     /// - sizes: each page's size in points, for the standard's rectangle;
     ///   US Letter where not known — this app reads its own box.
     static func encode(_ document: Document, pdfPages: [Int], sizes: [CGSize]) -> String {
-        var out = header + "<annots sp:pages=\"\(document.pages.count)\">"
+        var out = header
+        if !document.fields.isEmpty {
+            out += "<fields>" + document.fields.sorted { $0.key < $1.key }.map { name, value in
+                "<field name=\"\(escape(name))\"><value>\(escape(value))</value></field>"
+            }.joined() + "</fields>"
+        }
+        out += "<annots sp:pages=\"\(document.pages.count)\">"
         for (part, marks) in document.pages.enumerated() {
             for mark in marks {
                 out += element(mark, pdfPages: pdfPages, sizes: sizes)
@@ -163,7 +172,7 @@ enum XFDF {
         guard reader.read(xml), reader.sawXFDF else { return nil }
         var pages = [[Mark]](repeating: [], count: max(reader.pageCount ?? 0, (reader.marks.map(\.part).max() ?? -1) + 1))
         for mark in reader.marks { pages[mark.part].append(mark) }
-        return Document(pages: pages, lyrics: reader.lyrics)
+        return Document(pages: pages, lyrics: reader.lyrics, fields: reader.fields)
     }
 
     /// A command's three lists, or nil when the text is not XFDF.
@@ -176,6 +185,8 @@ enum XFDF {
     private final class Reader: NSObject, XMLParserDelegate {
         var marks: [Mark] = [], added: [Mark] = [], modified: [Mark] = [], deleted: [Mark] = []
         var lyrics: [Lyric] = []
+        var fields: [String: String] = [:]
+        private var field: String?
         var pageCount: Int?
         var sawXFDF = false
         private var section = ""
@@ -202,15 +213,28 @@ enum XFDF {
                 pending = attributes
                 pendingKind = name
                 text = ""
+            case "field":
+                field = attributes["name"]
+                text = ""
+            case "value" where field != nil:
+                text = ""
             default: break
             }
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
-            if pending != nil { text += string }
+            if pending != nil || field != nil { text += string }
         }
 
         func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            if name == "value", let field {
+                fields[field] = text
+                return
+            }
+            if name == "field" {
+                field = nil
+                return
+            }
             guard name == pendingKind, let attributes = pending else { return }
             pending = nil
             if pendingKind == "id" {

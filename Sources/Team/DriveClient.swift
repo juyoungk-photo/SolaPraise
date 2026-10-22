@@ -257,21 +257,6 @@ actor DriveClient {
         )
     }
 
-    /// Writes over a file the app put there, keeping its id and its link.
-    /// Refused for another account's file — the drive.file grant reaches
-    /// only what this account made — and then the caller makes its own.
-    func overwrite(fileId: String, data: Data, mimeType: String) async throws {
-        var components = URLComponents(
-            string: "https://www.googleapis.com/upload/drive/v3/files/\(fileId)")!
-        components.queryItems = [
-            .init(name: "uploadType", value: "media"),
-            .init(name: "fields", value: "id"),
-            .init(name: "supportsAllDrives", value: "true")
-        ]
-        struct Updated: Decodable { let id: String }
-        let _: Updated = try await send(url: components.url!, method: "PATCH", body: data, contentType: mimeType)
-    }
-
     /// A folder's name, as Drive has it now — for saying which folder.
     func name(of folderId: String) async -> String? {
         var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(folderId)")!
@@ -283,35 +268,6 @@ actor DriveClient {
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         struct Named: Decodable { let name: String }
         return (try? JSONDecoder().decode(Named.self, from: data))?.name
-    }
-
-    /// To the trash, where the owner can still restore it for thirty days.
-    func trash(fileId: String) async throws {
-        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(fileId)")!
-        components.queryItems = [.init(name: "supportsAllDrives", value: "true"), .init(name: "fields", value: "id")]
-        struct Updated: Decodable { let id: String }
-        let _: Updated = try await send(url: components.url!, method: "PATCH",
-                                        body: Data(#"{"trashed":true}"#.utf8), contentType: "application/json")
-    }
-
-    /// The ids of this app's files in this account whose name has `part` —
-    /// drive.file lists only what the app made.
-    func files(named part: String) async throws -> [String] {
-        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
-        let escaped = part.replacingOccurrences(of: "'", with: "\\'")
-        components.queryItems = [
-            .init(name: "q", value: "name contains '\(escaped)' and trashed = false"),
-            .init(name: "fields", value: "files(id)"),
-            .init(name: "pageSize", value: "200"),
-            .init(name: "supportsAllDrives", value: "true"),
-            .init(name: "includeItemsFromAllDrives", value: "true")
-        ]
-        var request = URLRequest(url: components.url!)
-        request.setValue("Bearer \(try await tokenProvider())", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DriveError.badResponse }
-        struct Listing: Decodable { struct File: Decodable { let id: String }; let files: [File]? }
-        return (try JSONDecoder().decode(Listing.self, from: data).files ?? []).map(\.id)
     }
 
     /// Removes a file the app put there.
