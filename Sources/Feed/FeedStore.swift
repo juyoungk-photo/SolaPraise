@@ -489,6 +489,11 @@ final class FeedStore: ObservableObject {
             predicate: #Predicate { $0.durationSeconds == nil }
         )
         let pending = (try? context.fetch(descriptor)) ?? []
+        // Asked again until they have aired: then they have a length, and
+        // are a song (or a set) like any other.
+        let upcoming = (try? context.fetch(FetchDescriptor<CachedVideo>(
+            predicate: #Predicate { $0.broadcastRaw == "upcoming" }
+        ))) ?? []
 
         // The newest handful go in whether or not they need a duration.
         //
@@ -506,7 +511,7 @@ final class FeedStore: ObservableObject {
 
         var wanted: [CachedVideo] = []
         var seen = Set<String>()
-        for video in newest + pending where !seen.contains(video.videoId) {
+        for video in newest + upcoming + pending where !seen.contains(video.videoId) {
             seen.insert(video.videoId)
             wanted.append(video)
         }
@@ -522,13 +527,28 @@ final class FeedStore: ObservableObject {
         var viewsById: [String: Int] = [:]
         var publishedById: [String: Date] = [:]
         var liveById: [String: Bool] = [:]
+        var broadcastById: [String: String] = [:]
         for v in videos {
+            if let state = v.snippet?.liveBroadcastContent { broadcastById[v.id] = state }
             if let secs = v.durationSeconds { durationById[v.id] = secs }
             embeddableById[v.id] = v.isEmbeddable
             if let views = v.viewCount { viewsById[v.id] = views }
             if let published = v.snippet?.publishedAt { publishedById[v.id] = published }
             liveById[v.id] = v.isLiveNow
         }
+        // Asked for and not answered: made private or deleted since the
+        // feed listed it. Kept, it stayed a grey card with no length that
+        // the 곡 view took for a song, and played nothing. Gone from the
+        // cache — unless pinned, which is someone's choice to keep.
+        let answered = Set(videos.map(\.id))
+        let asked = Set(ids)
+        var removed = false
+        for video in wanted where asked.contains(video.videoId) && !answered.contains(video.videoId) && !video.isPinned {
+            context.delete(video)
+            removed = true
+        }
+        if removed { try? context.save() }
+
         guard !durationById.isEmpty || !embeddableById.isEmpty || !liveById.isEmpty
         else { return }
 
@@ -537,11 +557,12 @@ final class FeedStore: ObservableObject {
             if let text = v.snippet?.description, !text.isEmpty { descriptionById[v.id] = text }
         }
         let now = Date()
-        for video in wanted {
+        for video in wanted where answered.contains(video.videoId) {
             if let live = liveById[video.videoId] {
                 video.isLiveNow = live
                 video.liveCheckedAt = now
             }
+            if let state = broadcastById[video.videoId] { video.broadcastRaw = state }
             if let secs = durationById[video.videoId] { video.durationSeconds = secs }
             if let ok = embeddableById[video.videoId] { video.isEmbeddable = ok }
             if let views = viewsById[video.videoId] { video.viewCount = views }

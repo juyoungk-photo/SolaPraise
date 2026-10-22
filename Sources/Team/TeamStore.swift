@@ -511,6 +511,8 @@ final class TeamStore: ObservableObject {
     /// what the notes say (OfferingNote). Returns an error message, or nil.
     func setOffering(_ item: PlanItem, in service: TeamService, isOffering: Bool,
                      prayer: String?, sheetId: String) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let notes = OfferingNote.notes(isOffering: isOffering, prayer: prayer, rest: item.offering.rest)
         #if DEBUG
         if isSample {
@@ -704,28 +706,51 @@ final class TeamStore: ObservableObject {
 
     private func performLoad(sheetId: String) async {
         guard let client else { return }
+        lastSheetId = sheetId
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
+        let generation = editGeneration
 
         do {
-            // Four reads rather than one batch: each tab is parsed
-            // differently and a failure in one should not lose the others.
+            // Every tab at once. They were read one after another — ten
+            // round trips end to end on each pull to refresh — and each
+            // was put on screen as it came, so the screen was redrawn ten
+            // times with half a sheet. Each tab still fails on its own: the
+            // four the app cannot do without throw, the rest are optional.
             // Every tab through readTable: its header is found by name
             // wherever it sits, not assumed to be row 1.
             async let scheduleRows = client.readTable(sheetId: sheetId, tab: TeamSheet.scheduleTab)
             async let roleRows     = client.readTable(sheetId: sheetId, tab: TeamSheet.rolesTab)
             async let songRows     = client.readTable(sheetId: sheetId, tab: TeamSheet.songsTab)
             async let signupRows   = client.readTable(sheetId: sheetId, tab: TeamSheet.signupsTab)
+            // Optional tab: absent on a sheet made before the order of
+            // service existed, which must keep working.
+            async let planRows     = try? client.readTable(sheetId: sheetId, tab: TeamSheet.planTab)
+            async let memberRows   = try? client.readTable(sheetId: sheetId, tab: TeamSheet.membersTab)
+            async let gridRows     = try? client.read(sheetId: sheetId, range: AvailabilityGrid.tab)
+            async let memoRows     = try? client.read(sheetId: sheetId, range: SongMemos.quotedTab)
+            async let titles       = try? client.tabTitles(sheetId: sheetId)
+            async let attachmentRows = try? client.readTable(sheetId: sheetId, tab: TeamSheet.attachmentsTab)
+            async let church       = fetchChurchNotes(client: client)
 
             let (schedule, roleData, songData, signupData) =
                 try await (scheduleRows, roleRows, songRows, signupRows)
+            let (planRead, memberRead, gridRead, memoRead, titleRead, attachmentRead, churchRead) =
+                await (planRows, memberRows, gridRows, memoRows, titles, attachmentRows, church)
 
-            // Optional tab: absent on a sheet made before the order of
-            // service existed, which must keep working.
-            let planData = (try? await client.readTable(sheetId: sheetId, tab: TeamSheet.planTab)) ?? []
+            // Read while an answer, an assignment or a removal was being
+            // written: this is the sheet from before it, and putting it on
+            // screen would take back what the person just did. The last
+            // write to finish reads again (endWrite).
+            if writesInFlight > 0 || editGeneration != generation {
+                reloadWhenSettled = true
+                return
+            }
+
+            // All at once: one redraw, never half a sheet.
+            let planData = planRead ?? []
             plans = Self.parsePlan(planData)
-
             roles = Self.parseRoles(roleData)
             services = Self.parseSchedule(schedule, roles: roles)
             roleColumns = Self.scheduleRoleColumns(schedule)
@@ -736,23 +761,50 @@ final class TeamStore: ObservableObject {
             rawPlan = planData
             signups = Self.parseSignups(signupData)
             signupLayout = SignupLayout(header: signupData.first ?? [])
-            memberEmails = await loadMembers(sheetId: sheetId, client: client)
+            memberEmails = applyMembers(memberRead)
             // After the roster: a grid column is a member by name.
-            await loadGrid(sheetId: sheetId, client: client)
-            rawSongMemos = (try? await client.read(sheetId: sheetId, range: SongMemos.quotedTab)) ?? []
+            applyGrid(gridRead ?? [])
+            rawSongMemos = memoRead ?? []
             songMemos = SongMemos.parse(rawSongMemos)
-            hasWeekTab = (try? await client.tabTitles(sheetId: sheetId))?.contains(WeekTab.tab) ?? false
-            await loadChurchNotes(client: client)
-            await loadAttachments(sheetId: sheetId, client: client)
-            await loadContiFolder()
+            hasWeekTab = titleRead?.contains(WeekTab.tab) ?? false
+            churchNotes = churchRead.notes
+            churchSheetProblem = churchRead.problem
+            applyAttachments(attachmentRead)
             lastLoaded = Date()
             needsAuthorization = false
         } catch SheetsClient.SheetsError.http(403, let message) {
             needsAuthorization = true
             errorMessage = message ?? "시트를 읽을 권한이 없습니다."
+            return
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return
         }
+        // Drive, not the sheet: after, so the sheet is on screen first.
+        await loadContiFolder()
+    }
+
+    // MARK: - Writes under way
+
+    /// Writes to the sheet now running, and how many have finished: a
+    /// load compares them to know whether what it read is already old.
+    private var writesInFlight = 0
+    private var editGeneration = 0
+    /// A load read while a write ran and put nothing on screen.
+    private var reloadWhenSettled = false
+    private var lastSheetId: String?
+
+    /// Around every write that changes the screen first (an answer, an
+    /// assignment, a removal …): a load that reads meanwhile reads the
+    /// sheet from before it, and must not paint over it.
+    private func beginWrite() { writesInFlight += 1 }
+
+    private func endWrite() {
+        writesInFlight -= 1
+        editGeneration += 1
+        guard writesInFlight == 0, reloadWhenSettled, let sheetId = lastSheetId else { return }
+        reloadWhenSettled = false
+        Task { await self.load(sheetId: sheetId) }
     }
 
     /// The church sheet's two columns, if there is a church sheet.
@@ -761,24 +813,21 @@ final class TeamStore: ObservableObject {
     /// different document, owned by someone else, and the team's own planner
     /// has to keep working when it is missing, renamed, unshared or simply
     /// not configured — a 403 here is not the team's problem to see.
-    private func loadChurchNotes(client: SheetsClient) async {
-        churchSheetProblem = nil
+    private func fetchChurchNotes(client: SheetsClient) async -> (notes: [Date: ChurchNote], problem: String?) {
         guard let id = ChurchSheetSource.current,
-              let range = ChurchSheet.encodedRange else { churchNotes = [:]; return }
+              let range = ChurchSheet.encodedRange else { return ([:], nil) }
         do {
             let rows = try await client.readEncoded(sheetId: id, encodedRange: range)
-            churchNotes = ChurchSheet.notes(from: rows)
+            return (ChurchSheet.notes(from: rows), nil)
         } catch {
-            churchNotes = [:]
             // Said, not swallowed. 설교제목 and 헌신찬양 simply vanishing is
             // indistinguishable from the office not having filled them in,
             // and the usual cause — reading with an account the church
             // sheet is not shared with — has a one-tap fix.
             if case SheetsClient.SheetsError.http(let code, _) = error, code == 403 || code == 404 {
-                churchSheetProblem = "교회 정보 시트를 이 계정으로 열 수 없습니다. 위의 「계정 변경」에서 교회 계정을 연결하세요."
-            } else {
-                churchSheetProblem = "교회 정보 시트를 불러오지 못했습니다."
+                return ([:], "교회 정보 시트를 이 계정으로 열 수 없습니다. 위의 「계정 변경」에서 교회 계정을 연결하세요.")
             }
+            return ([:], "교회 정보 시트를 불러오지 못했습니다.")
         }
     }
 
@@ -794,9 +843,8 @@ final class TeamStore: ObservableObject {
     /// The Members tab is optional. Without one, anyone who can open the
     /// sheet counts as a member — which is the same thing, since Google's own
     /// sharing is what actually protects it.
-    private func loadMembers(sheetId: String, client: SheetsClient) async -> Set<String> {
-        guard let rows = try? await client.readTable(sheetId: sheetId, tab: TeamSheet.membersTab),
-              rows.count > 1 else { members = []; rawMembers = nil; return [] }
+    private func applyMembers(_ read: [[String]]?) -> Set<String> {
+        guard let rows = read, rows.count > 1 else { members = []; rawMembers = nil; return [] }
         rawMembers = rows
 
         let header = rows[0]
@@ -972,6 +1020,8 @@ final class TeamStore: ObservableObject {
         name: String,
         sheetId: String
     ) async {
+        beginWrite()
+        defer { endWrite() }
         #if DEBUG
         if isSample {
             if DebugHarness.slowSheet { try? await Task.sleep(for: .seconds(1)) }
@@ -1148,6 +1198,8 @@ final class TeamStore: ObservableObject {
     /// one; the tab made the first time. Blank clears it. Returns an error
     /// message, or nil.
     func setMemo(_ text: String, for song: String, by who: String, sheetId: String) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let title = PlanSongTitle.forSheet(song).title
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let stamp = TeamSheet.dateFormatter.string(from: Date())
@@ -1229,6 +1281,8 @@ final class TeamStore: ObservableObject {
     /// the tab has none. Nothing else is touched. Returns an error message,
     /// or nil.
     func record(_ service: TeamService, sheetId: String) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let songs = sung(in: service)
         guard !songs.isEmpty else { return nil }
         #if DEBUG
@@ -1296,6 +1350,8 @@ final class TeamStore: ObservableObject {
     /// A 콘티's pages chosen clears every mark: unmarked means the newest.
     /// Returns an error message, or nil.
     func chooseForConti(_ item: ScoreStandItem, service: TeamService, sheetId: String) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let day = Calendar.current.startOfDay(for: service.date)
         let songCharts = (attachments[day] ?? []).filter {
             !$0.belongsToService && PlanSongTitle.sameSong($0.song, item.song)
@@ -1354,7 +1410,10 @@ final class TeamStore: ObservableObject {
     // MARK: - The 응답 tab
 
     private func loadGrid(sheetId: String, client: SheetsClient) async {
-        let rows = (try? await client.read(sheetId: sheetId, range: AvailabilityGrid.tab)) ?? []
+        applyGrid((try? await client.read(sheetId: sheetId, range: AvailabilityGrid.tab)) ?? [])
+    }
+
+    private func applyGrid(_ rows: [[String]]) {
         guard let header = rows.first, AvailabilityGrid.Layout(header: header) != nil else {
             usesGrid = false
             rawGrid = nil
@@ -1580,10 +1639,8 @@ final class TeamStore: ObservableObject {
     /// Optional like Plan: a team that has never attached anything has no
     /// such tab, and that is not an error. The tab is created on the first
     /// upload rather than demanded up front.
-    private func loadAttachments(sheetId: String, client: SheetsClient) async {
-        guard let rows = try? await client.readTable(
-            sheetId: sheetId, tab: TeamSheet.attachmentsTab
-        ), rows.count > 1 else { attachments = [:]; return }
+    private func applyAttachments(_ read: [[String]]?) {
+        guard let rows = read, rows.count > 1 else { attachments = [:]; return }
 
         let header = rows[0]
         let dateCol = TeamSheet.column(header, ["date", "날짜"]) ?? TeamSheet.Attachments.date
@@ -2055,6 +2112,8 @@ final class TeamStore: ObservableObject {
         service: TeamService,
         sheetId: String
     ) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let cleaned = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = (cleaned?.isEmpty ?? true) ? "" : cleaned!
 
@@ -2204,6 +2263,8 @@ final class TeamStore: ObservableObject {
         emails: [String],
         sheetId: String
     ) async -> Bool {
+        beginWrite()
+        defer { endWrite() }
         let day = Calendar.current.startOfDay(for: service.date)
         func isMine(_ signup: TeamSignup) -> Bool {
             emails.contains { $0.caseInsensitiveCompare(signup.email) == .orderedSame }
@@ -2359,6 +2420,8 @@ final class TeamStore: ObservableObject {
         from service: TeamService,
         sheetId: String
     ) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let day = Calendar.current.startOfDay(for: service.date)
 
         #if DEBUG
@@ -2432,6 +2495,8 @@ final class TeamStore: ObservableObject {
     func reorder(_ items: [PlanItem],
                  in service: TeamService,
                  sheetId: String) async -> String? {
+        beginWrite()
+        defer { endWrite() }
         let day = Calendar.current.startOfDay(for: service.date)
 
         #if DEBUG

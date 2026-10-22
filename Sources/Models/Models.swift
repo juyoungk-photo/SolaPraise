@@ -142,6 +142,13 @@ final class CachedVideo {
     /// When `isLiveNow` was last established, so a stale "live" from
     /// yesterday morning is not believed.
     var liveCheckedAt: Date?
+    /// YouTube's liveBroadcastContent — "upcoming", "live" or "none" — as of
+    /// the last refresh. An upcoming stream has no length yet, so a feed of
+    /// songs took it for one: a grey placeholder card between the songs,
+    /// for a broadcast days away.
+    var broadcastRaw: String?
+
+    var isUpcoming: Bool { broadcastRaw == "upcoming" }
 
     /// Kept at the top of its feed.
     ///

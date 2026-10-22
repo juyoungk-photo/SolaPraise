@@ -699,6 +699,15 @@ struct WorshipFeedView: View {
                     || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
             }
             .filter { length.matches(seconds: $0.durationSeconds) }
+            // A stream not yet aired has no length and is not a song; one
+            // live now is a set, not a song.
+            .filter { video in
+                switch length {
+                case .all:  return true
+                case .song: return !video.isUpcoming && video.broadcastRaw != "live"
+                case .set:  return !video.isUpcoming
+                }
+            }
             // 안내 · 공지 · 예고편 out, as 설정 › 피드·찬양 검색 says.
             .filter { !(FeedFilter.skipsNotices && FeedFilter.isNotice($0.title)) }
             .filter { !$0.isPinned }
