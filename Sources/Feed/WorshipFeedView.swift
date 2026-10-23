@@ -681,38 +681,36 @@ struct WorshipFeedView: View {
 
     /// The browse feed: every worship video the cache holds, newest first,
     /// narrowed by the topic, channel and length chips.
+    /// One lazy pass that stops at the cap: the first 120 that pass, not
+    /// every cached video filtered five times over on each redraw — which,
+    /// with the feed refreshing at launch, was each new row saved.
     private var browseVideos: [CachedVideo] {
         let channelIds = Set(channels.map(\.youtubeChannelId))
-        return allVideos
-            .filter { video in
-                if let channelFilter {
-                    return video.channelId == channelFilter
-                }
-                if let topicFilter, !topicFilter.isEmpty {
-                    return video.title.lowercased().contains(topicFilter.lowercased())
-                        && (video.channelId.map(channelIds.contains) ?? false
-                            || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue)
-                }
-                // Topic-search results belong here too: they were fetched for
-                // 찬양 and have no channel in the whitelist.
-                return video.channelId.map(channelIds.contains) ?? false
-                    || video.sourceRaw == CachedVideo.Source.topicSearch.rawValue
+        let topic = topicFilter.flatMap { $0.isEmpty ? nil : $0.lowercased() }
+        let skipsNotices = FeedFilter.skipsNotices
+        let topicSearch = CachedVideo.Source.topicSearch.rawValue
+        return Array(allVideos.lazy.filter { video in
+            if video.isPinned { return false }
+            if let channelFilter {
+                guard video.channelId == channelFilter else { return false }
+            } else {
+                // Topic-search results belong here too: they were fetched
+                // for 찬양 and have no channel in the whitelist.
+                let inFeed = video.channelId.map(channelIds.contains) ?? false || video.sourceRaw == topicSearch
+                guard inFeed else { return false }
+                if let topic, !video.title.lowercased().contains(topic) { return false }
             }
-            .filter { length.matches(seconds: $0.durationSeconds) }
+            guard length.matches(seconds: video.durationSeconds) else { return false }
             // A stream not yet aired has no length and is not a song; one
             // live now is a set, not a song.
-            .filter { video in
-                switch length {
-                case .all:  return true
-                case .song: return !video.isUpcoming && video.broadcastRaw != "live"
-                case .set:  return !video.isUpcoming
-                }
+            switch length {
+            case .all: break
+            case .song: if video.isUpcoming || video.broadcastRaw == "live" { return false }
+            case .set: if video.isUpcoming { return false }
             }
             // 안내 · 공지 · 예고편 out, as 설정 › 피드·찬양 검색 says.
-            .filter { !(FeedFilter.skipsNotices && FeedFilter.isNotice($0.title)) }
-            .filter { !$0.isPinned }
-            .prefix(Self.browseCap)
-            .map { $0 }
+            return !(skipsNotices && FeedFilter.isNotice(video.title))
+        }.prefix(Self.browseCap))
     }
 
     /// Enough to browse, finite by design. The feed still ends.

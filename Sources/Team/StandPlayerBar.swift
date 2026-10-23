@@ -122,34 +122,13 @@ struct StandPlayerBar: View {
     }
 
     private func bookmarkMenu(_ videoId: String, playing: Bool) -> some View {
-        Menu {
-            Button {
-                marks = SongBookmarks.add(host.coordinator.currentTime, to: videoId)
-            } label: {
-                Label("지금 위치에 책갈피", systemImage: "bookmark")
-            }
-            .disabled(!playing)
-            if !marks.isEmpty {
-                Section("가기") {
-                    ForEach(marks) { mark in
-                        Button("\(mark.dot)  \(Self.clock(mark.time))") { jump(to: mark.time, videoId: videoId) }
-                    }
-                }
-                Menu("책갈피 지우기") {
-                    ForEach(marks) { mark in
-                        Button("\(mark.dot)  \(Self.clock(mark.time))", role: .destructive) {
-                            marks = SongBookmarks.remove(mark, from: videoId)
-                        }
-                    }
-                }
-            }
-        } label: {
-            Image(systemName: marks.isEmpty ? "bookmark" : "bookmark.fill")
+        SongBookmarkMenu(videoId: videoId, marks: $marks, canMark: playing,
+                         now: { host.coordinator.currentTime },
+                         jump: { jump(to: $0, videoId: videoId) }) { hasMarks in
+            Image(systemName: hasMarks ? "bookmark.fill" : "bookmark")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 30, height: 30)
         }
-        .menuOrder(.fixed)
-        .accessibilityLabel("책갈피")
     }
 
     private func isThis(_ videoId: String) -> Bool {
@@ -181,6 +160,47 @@ struct StandPlayerBar: View {
     static func clock(_ seconds: Double) -> String {
         let s = max(0, Int(seconds))
         return "\(s / 60):" + String(format: "%02d", s % 60)
+    }
+}
+
+/// 책갈피: mark where the song is now, go to a mark, take one off — the
+/// same menu under the chart and in the player, the same marks in both.
+struct SongBookmarkMenu<Face: View>: View {
+    let videoId: String
+    @Binding var marks: [SongBookmarks.Mark]
+    /// The song is playing here, so there is a place to mark.
+    let canMark: Bool
+    let now: () -> Double
+    let jump: (Double) -> Void
+    @ViewBuilder let face: (_ hasMarks: Bool) -> Face
+
+    var body: some View {
+        Menu {
+            Button {
+                marks = SongBookmarks.add(now(), to: videoId)
+            } label: {
+                Label("지금 위치에 책갈피", systemImage: "bookmark")
+            }
+            .disabled(!canMark)
+            if !marks.isEmpty {
+                Section("가기") {
+                    ForEach(marks) { mark in
+                        Button("\(mark.dot)  \(StandPlayerBar.clock(mark.time))") { jump(mark.time) }
+                    }
+                }
+                Menu("책갈피 지우기") {
+                    ForEach(marks) { mark in
+                        Button("\(mark.dot)  \(StandPlayerBar.clock(mark.time))", role: .destructive) {
+                            marks = SongBookmarks.remove(mark, from: videoId)
+                        }
+                    }
+                }
+            }
+        } label: {
+            face(!marks.isEmpty)
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel("책갈피")
     }
 }
 

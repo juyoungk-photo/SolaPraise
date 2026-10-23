@@ -88,8 +88,15 @@ final class YouTubeAPIClient {
     ) async throws -> T {
         let data = try await perform(path, method: method, query: query, body: body, cost: cost)
         if T.self == EmptyResponse.self, let empty = EmptyResponse() as? T { return empty }
-        do { return try Self.decoder.decode(T.self, from: data) }
+        do { return try await Self.decode(T.self, from: data) }
         catch { throw APIError.decoding(error) }
+    }
+
+    /// Off the main thread: a page of fifty videos is thousands of fields,
+    /// and decoded on the main actor it held up the 찬양 tab's first
+    /// scroll while the feed refreshed at launch.
+    nonisolated private static func decode<T: Decodable>(_ type: T.Type, from data: Data) async throws -> T {
+        try decoder.decode(type, from: data)
     }
 
     /// A 204 with no body — playlistItems.delete.
@@ -629,24 +636,12 @@ final class YouTubeAPIClient {
     /// YouTube emits RFC-3339, sometimes with fractional seconds.
     /// Built per response, not shared.
     ///
-    /// This was a `static let`, and its date strategy captured two
-    /// ISO8601DateFormatters. Formatters are not safe to use from several
-    /// threads at once, and two screens refreshing together decode at the
-    /// same time — a race whose symptoms are a wrong date or a crash, both
-    /// intermittent and neither traceable to the decoder. Making one per
-    /// response costs nothing next to the network call that produced it.
-    static var decoder: JSONDecoder {
+    /// One per response; dates read by YouTubeDate.
+    nonisolated static var decoder: JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom { decoder in
             let raw = try decoder.singleValueContainer().decode(String.self)
-            // Built here rather than captured, so the formatter cannot
-            // outlive one date or be touched by two threads at once.
-            // YouTube sends both spellings, with and without fractions.
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: raw) { return date }
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: raw) { return date }
+            if let date = YouTubeDate.parse(raw) { return date }
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath,
                       debugDescription: "Unrecognised date: \(raw)")

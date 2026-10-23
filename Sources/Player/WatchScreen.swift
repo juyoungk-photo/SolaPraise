@@ -100,6 +100,8 @@ struct WatchScreen: View {
     @State private var worshipSet: [WorshipSetItem] = []
     @State private var sheetLinks: [SheetMusicLink] = []
     @State private var managingQueue = false
+    /// 책갈피 in what is playing (SongBookmarks).
+    @State private var bookmarks: [SongBookmarks.Mark] = []
     @EnvironmentObject private var team: TeamStore
     /// A chart already up for a song, on the stand.
     @State private var standChart: ScoreStandItem?
@@ -841,6 +843,19 @@ struct WatchScreen: View {
                         .onAppear { shareButtonFrame = geo.frame(in: .global) }
                         .onChange(of: geo.frame(in: .global)) { _, frame in shareButtonFrame = frame }
                 })
+            }
+
+            // 책갈피: places in this video to come back to — the same marks
+            // the chart's player row shows for the song.
+            if let current {
+                SongBookmarkMenu(videoId: current.id, marks: $bookmarks, canMark: true,
+                                 now: { player.currentTime },
+                                 jump: { player.seek(to: $0) }) { hasMarks in
+                    Label(hasMarks ? "책갈피 \(bookmarks.count)" : "책갈피",
+                          systemImage: hasMarks ? "bookmark.fill" : "bookmark")
+                }
+                .buttonStyle(.bordered)
+                .task(id: current.id) { bookmarks = SongBookmarks.load(current.id) }
             }
 
             // PiP: the embed offers none.
