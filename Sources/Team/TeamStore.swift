@@ -599,6 +599,20 @@ final class TeamStore: ObservableObject {
 
     /// The song's title as the team last wrote it for this video, as the
     /// Songs tab carries it. A title fixed by hand once is the title.
+    /// A song's video in the 순서: the service on `day` first, else the
+    /// nearest that has the song with one.
+    func videoId(forSong song: String, on day: Date) -> String? {
+        guard !song.isEmpty else { return nil }
+        let nearest = services.sorted { abs($0.date.timeIntervalSince(day)) < abs($1.date.timeIntervalSince(day)) }
+        for service in nearest {
+            if let id = plan(for: service).first(where: { $0.kind == .song && $0.videoId != nil
+                                                          && PlanSongTitle.sameSong($0.title, song) })?.videoId {
+                return id
+            }
+        }
+        return nil
+    }
+
     func sheetTitle(forVideo id: String) -> String? {
         sheetTitles(only: id)[id]
     }

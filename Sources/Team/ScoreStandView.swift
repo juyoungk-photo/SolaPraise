@@ -37,6 +37,9 @@ struct ScoreStandItem: Identifiable, Hashable {
     /// offered when this service has none. Shown as such, and never taken
     /// off from here: it belongs to that service.
     var earlierDay: Date? = nil
+    /// The song's video, when the chart was opened from it playing — the
+    /// recording the stand's player row plays. Else the 순서's.
+    var videoId: String? = nil
 
     /// The file and the pages: one 콘티 file is several songs on the stand,
     /// each read, transposed and corrected on its own.
@@ -159,9 +162,7 @@ struct ScoreStandView: View {
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          shareChoice: ((ScoreStandItem) async -> String?)? = nil,
          uploadSet: ((Data, String) async -> String)? = nil,
-         uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil,
-         transport: PlayerCoordinator? = nil) {
-        self.transport = transport
+         uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
         self.contiScope = contiScope
@@ -176,10 +177,6 @@ struct ScoreStandView: View {
         self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
     }
-
-    /// The player, when one is playing: its 연습 controls ride on the chart
-    /// (PracticeControls), since the video is under the stand.
-    let transport: PlayerCoordinator?
 
     private var item: ScoreStandItem? {
         items.indices.contains(index) ? items[index] : nil
@@ -229,15 +226,11 @@ struct ScoreStandView: View {
             .accessibilityAction(named: "이전") { turn(-1) }
     }
 
+    /// The chart's own song: played, scrubbed, marked (StandPlayerBar).
     @ViewBuilder
     private var practiceRow: some View {
-        if showsChrome, let transport {
-            PracticeControls(coordinator: transport)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.white)
-                .font(.caption)
-                .padding(.vertical, 6)
+        if showsChrome, let item {
+            StandPlayerBar(item: item)
                 .frame(maxWidth: .infinity)
                 .background(sizeClass == .regular ? Color.black.opacity(0.88) : .clear)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -436,6 +429,14 @@ struct ScoreStandView: View {
                     if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
                 }
                 #endif
+            }
+
+            // Nothing to show — said, rather than a black screen.
+            if item == nil {
+                Text("열 수 있는 악보가 없습니다.")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if showsChrome {

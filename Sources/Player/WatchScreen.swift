@@ -241,8 +241,7 @@ struct WatchScreen: View {
         }
         .fullScreenCover(item: $standChart) { item in
             ScoreStandView(items: [item],
-                           versions: [item.song: charts(for: item.song, videoId: nil)],
-                           transport: player)
+                           versions: [item.song: charts(for: item.song, videoId: nil)])
         }
         .onAppear {
             loadWorshipSet()
@@ -372,7 +371,7 @@ struct WatchScreen: View {
                             // the song playing.
                             if isWorship(item) {
                                 let chart = charts(for: item.title, videoId: item.id).first
-                                Button { standChart = chart } label: {
+                                Button { standChart = chart.map { var chart = $0; chart.videoId = item.id; return chart } } label: {
                                     Image(systemName: "music.note.list")
                                         .font(.footnote.weight(chart == nil ? .regular : .semibold))
                                         .foregroundStyle(chart == nil ? Color.secondary.opacity(0.35) : Color.accentColor)
@@ -1015,7 +1014,11 @@ struct WatchScreen: View {
 
             // Uploaded: each opens on the stand, in the 순서's key.
             ForEach(current.map { charts(for: $0.title, videoId: $0.id) } ?? []) { chart in
-                Button { standChart = chart } label: {
+                Button {
+                    var chart = chart
+                    chart.videoId = current?.id
+                    standChart = chart
+                } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "music.note.list")
                             .font(.caption)
