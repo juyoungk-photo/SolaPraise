@@ -46,6 +46,19 @@ found by the user rather than by me:
    model: it states that iPad has room for the tab and that iPhone keeps
    4 tabs rather than 5.
 
+## UI rules
+
+- **The 악보 never moves when a mode changes.** Entering or leaving 편집,
+  그리기 or 연주 모드 leaves the page where it was, the same size: a chord
+  is checked against the page as it was, and a player mid-song loses
+  their place if it jumps. On iPad the bars float over the page (a little
+  of it under them) rather than pushing it; hints and buttons that come
+  with a mode take the place of what they replace, at the same height.
+- **One tap toggles 연주 모드**, in and out. Swiping turns: sideways to the
+  next song, down a song's pages.
+- **Nothing heavy starts by itself in 연주 모드.** A chart not yet read
+  shows as printed; reading chords or a 코드표 waits until asked.
+
 ## Verification
 
 - Both simulators, every time: `iPhone 17` and `iPad Pro 11-inch (M5)`.

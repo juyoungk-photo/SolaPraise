@@ -65,6 +65,13 @@ final class RehearsalLink: NSObject, ObservableObject {
             case digest
             /// One member's drawing on a chart, all of it (ScoreInk).
             case ink
+            /// 「I am leading — here」: the chart and page the leader is on,
+            /// as they turn it and every two seconds besides, so a stand
+            /// that comes in later finds them, and one that stops hearing
+            /// them stops following.
+            case lead
+            /// The leader has stopped leading.
+            case leadEnd
         }
         var kind: Kind
         /// The chart: the attachment's file id and which of its pages.
@@ -238,7 +245,13 @@ final class RehearsalLink: NSObject, ObservableObject {
     fileprivate func refreshPeers() {
         let connected = session?.connectedPeers ?? []
         invited.subtract(connected)
-        peers = connected.map(\.displayName).sorted()
+        // By name: a stand that restarted is a new peer at once, and the
+        // old one lingers a few seconds before it times out — counted
+        // once, not twice.
+        peers = Array(Set(connected.map(\.displayName))).sorted()
+        #if DEBUG
+        NSLog("[Room] peers \(peers.count) (sessions \(connected.count), invited \(invited.count))")
+        #endif
         if !peers.isEmpty { roomFull = false }
         let full = connected.count + 1 >= Self.roomSize
         if full != advertisingFull { advertise(full: full) }

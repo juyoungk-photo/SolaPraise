@@ -98,6 +98,13 @@ struct ScoreStandView: View {
     @State private var editing = false
     /// 그리기: the drawer's own layer open to Pencil or finger.
     @State private var drawing = false
+    /// Turning with the room's leader, while someone leads. Off once this
+    /// member turns to another song themselves, until they ask again.
+    @State private var following = true
+    /// The song was turned to follow the leader, not by hand.
+    @State private var followTurned = false
+    /// The page at the top of each song's scroll, by stand item.
+    @State private var pagePositions: [String: Int] = [:]
     /// The page alone: header, buttons and ✕ out of the way. A one-page
     /// chart on iPad lost its last staff and lyrics under the buttons. A tap
     /// on the page toggles it; editing brings everything back, since a tap
@@ -181,7 +188,94 @@ struct ScoreStandView: View {
     // In two: the whole chain as one expression was more than the type
     // checker would take.
     var body: some View {
-        editPresentations(stand)
+        editPresentations(followingLeader(stand))
+    }
+
+    /// 세션 리더 따라가기: turning to where the leader is, and — leading — saying
+    /// where this stand is as it turns.
+    private func followingLeader<Content: View>(_ content: Content) -> some View {
+        content
+        .onChange(of: fullPage, initial: true) { _, on in model.performing = on }
+        .onChange(of: model.lead) { _, lead in
+            if let lead { if following { follow(lead) } } else { following = true }
+        }
+        .onChange(of: index) { _, now in
+            // Turned by hand while someone leads: this member is looking
+            // ahead or back, and is left there until they follow again.
+            if followTurned { followTurned = false } else if model.lead != nil { following = false }
+            if model.leading, items.indices.contains(now) {
+                model.leaderMoved(items[now], page: pagePositions[items[now].id] ?? 0)
+            }
+        }
+        .onChange(of: pagePositions) { _, _ in
+            if model.leading, let item { model.leaderMoved(item, page: pagePositions[item.id] ?? 0) }
+        }
+    }
+
+    /// The songs. A tap goes into 연주 모드 and out again — the page alone,
+    /// whole — and a swipe turns: sideways to the next song, down a song's
+    /// pages one at a time.
+    private var pagerArea: some View {
+        songPager
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !editing, !drawing else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
+            }
+            .accessibilityAction(named: fullPage ? "메뉴 보이기" : "연주 모드") {
+                withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
+            }
+            .accessibilityAction(named: "다음") { turn(1) }
+            .accessibilityAction(named: "이전") { turn(-1) }
+    }
+
+    @ViewBuilder
+    private var practiceRow: some View {
+        if showsChrome, let transport {
+            PracticeControls(coordinator: transport)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.white)
+                .font(.caption)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(sizeClass == .regular ? Color.black.opacity(0.88) : .clear)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    /// A page on, or back — and past a song's last page, the next song.
+    private func turn(_ step: Int) {
+        guard let item else { return }
+        let count = model.states[item.id]?.pages.count ?? 1
+        let page = (pagePositions[item.id] ?? 0) + step
+        if (0..<count).contains(page) {
+            withAnimation(.easeOut(duration: 0.25)) { pagePositions[item.id] = page }
+        } else {
+            go(step)
+        }
+    }
+
+    /// To the leader's song and page — not while editing or drawing, which
+    /// the member is in the middle of.
+    private func follow(_ lead: ScoreStandModel.Lead) {
+        guard !editing, !drawing, let target = items.firstIndex(where: lead.matches) else { return }
+        if target != index {
+            followTurned = true
+            withAnimation(.easeOut(duration: 0.2)) { index = target }
+        }
+        withAnimation(.easeOut(duration: 0.25)) { pagePositions[items[target].id] = lead.page }
+    }
+
+    private func pagePosition(_ item: ScoreStandItem) -> Binding<Int?> {
+        Binding(get: { pagePositions[item.id] }, set: { pagePositions[item.id] = $0 })
+    }
+
+    private func leadControl(inRow: Bool) -> some View {
+        LeadControl(model: model, inRow: inRow, following: following,
+                    available: model.lead.map { lead in items.contains(where: lead.matches) } ?? true,
+                    onLead: { if let item { model.startLeading(item, page: pagePositions[item.id] ?? 0) } },
+                    onFollow: { following = $0; if $0, let lead = model.lead { follow(lead) } })
     }
 
     /// What editing presents over the stand: taking a version off, a 코드표
@@ -300,27 +394,36 @@ struct ScoreStandView: View {
             Color.black.ignoresSafeArea()
 
             if let item {
-                VStack(spacing: 0) {
-                    if showsChrome { Built { header(item) }.transition(.move(edge: .top).combined(with: .opacity)) }
-                    songPager
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            guard !editing else { return }
-                            withAnimation(.easeInOut(duration: 0.2)) { fullPage.toggle() }
+                Group {
+                    // On an iPad the page is the whole screen and the bars lie
+                    // over it — a little of the page under them, which 연주
+                    // 모드 takes away — so the page never moves: not for 연주
+                    // 모드, not for 편집 or 그리기, where a chord is checked
+                    // against the page where it was. A phone keeps them
+                    // beside it: its pages scroll anyway.
+                    if sizeClass == .regular {
+                        ZStack {
+                            pagerArea
+                            if showsChrome {
+                                VStack(spacing: 0) {
+                                    Built { header(item) }
+                                        .background(Color.black.opacity(0.88))
+                                    Spacer(minLength: 0)
+                                    practiceRow
+                                    Built { controls(item) }
+                                        .background(Color.black.opacity(0.88))
+                                }
+                                .transition(.opacity)
+                            }
                         }
-                        .accessibilityAction(named: fullPage ? "메뉴 보이기" : "악보만 크게 보기") {
-                            fullPage.toggle()
+                    } else {
+                        VStack(spacing: 0) {
+                            if showsChrome { Built { header(item) }.transition(.move(edge: .top).combined(with: .opacity)) }
+                            pagerArea
+                            practiceRow
+                            if showsChrome { Built { controls(item) }.transition(.move(edge: .bottom).combined(with: .opacity)) }
                         }
-                    if showsChrome, let transport {
-                        PracticeControls(coordinator: transport)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .tint(.white)
-                            .font(.caption)
-                            .padding(.vertical, 6)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if showsChrome { Built { controls(item) }.transition(.move(edge: .bottom).combined(with: .opacity)) }
                 }
                 .foregroundStyle(.white)
                 .task(id: item.id) { await model.load(item) }
@@ -606,6 +709,7 @@ struct ScoreStandView: View {
                 }
                 Spacer(minLength: 0)
                 NearbyBadge(inRow: true)
+                leadControl(inRow: true)
                 // The file itself, in Drive: to check what was uploaded.
                 if !item.attachment.fileId.hasPrefix("local-") {
                     Button { openFile(item.attachment.url) } label: {
@@ -638,7 +742,10 @@ struct ScoreStandView: View {
             // page as it was, at the same place. The taller sets the height.
             ZStack(alignment: .topLeading) {
                 VStack(alignment: .leading, spacing: 4) {
-                    NearbyBadge(inRow: false)
+                    HStack(spacing: 6) {
+                        NearbyBadge(inRow: false)
+                        leadControl(inRow: false)
+                    }
                     // Shown from the start, before the page has loaded: which
                     // version to look at is the first choice, not the last.
                     versionChips(item)
@@ -779,14 +886,19 @@ struct ScoreStandView: View {
     private func pages(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         if let state, state.isReady {
+            // On an iPad each page is the screen: the whole page in view,
+            // centred, the scroll stopping page by page — a page taller than
+            // the screen had its last staff below the fold mid-song. A phone
+            // keeps pages the width of the screen, to read them large.
+            let fits = sizeClass == .regular
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: fits ? 0 : 12) {
                     // The 헌금송's prayer and call, read before the song.
                     if let notice = notices[item.song], !editing {
                         noticeCard(notice)
                     }
                     ForEach(Array(state.pages.enumerated()), id: \.offset) { pageIndex, page in
-                        ScorePageView(
+                        Built { ScorePageView(
                             page: page,
                             shift: state.showsOriginal ? 0 : state.shift,
                             useFlats: state.useFlats,
@@ -805,11 +917,16 @@ struct ScoreStandView: View {
                             onPopoverDismiss: { entry = nil },
                             ink: inkFor(item, page: pageIndex),
                             drawing: drawing,
-                            onInk: { data in model.setMyInk(item, page: pageIndex, drawing: data) })
+                            onInk: { data in model.setMyInk(item, page: pageIndex, drawing: data) }) }
+                        .modifier(ScreenPage(on: fits))
+                        .id(pageIndex)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                // Which page is at the top: what a leader says, and where a
+                // follower is turned to.
+                .scrollTargetLayout()
+                .padding(.horizontal, fits ? 0 : 12)
+                .padding(.bottom, fits ? 0 : 12)
                 // While editing, one finger moves a chord and two scroll
                 // the page. Scrolling used to be off altogether, and a
                 // chart taller than the screen could not be edited below
@@ -817,6 +934,8 @@ struct ScoreStandView: View {
                 // chord by a little moved the page instead.
                 .background(ScrollTouches(minimum: editing || drawing ? 2 : 1))
             }
+            .scrollPosition(id: pagePosition(item), anchor: .top)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: fits ? .always : .never))
             // Reading the chords takes seconds a page: said over the page,
             // where the eye is, not in a line at the top.
             .overlay {
@@ -883,14 +1002,20 @@ struct ScoreStandView: View {
                 // its 코드표 too, when that is what is showing.
                 guard items.indices.contains(index + 1) else { return }
                 await model.load(items[index + 1])
-                if showsChart { await model.loadChart(items[index + 1]) }
+                if showsChartFor(items[index + 1]) { await model.loadChart(items[index + 1]) }
             }
         }
     }
 
+    /// In 연주 모드 a chart nobody has read yet shows as printed: the 코드표
+    /// would mean reading it there and then, seconds mid-song.
+    private func showsChartFor(_ song: ScoreStandItem) -> Bool {
+        showsChart && !editing && !(fullPage && model.states[song.id]?.isRead != true)
+    }
+
     @ViewBuilder
     private func songContent(_ song: ScoreStandItem) -> some View {
-        if showsChart && !editing {
+        if showsChartFor(song) {
             chart(song)
                 .task(id: chartKey(song)) {
                     guard showsChart else { return }
@@ -2137,6 +2262,88 @@ final class ScoreStandModel: ObservableObject {
         ScoreInkStore.save(layers, for: item.id)
     }
 
+    // MARK: 세션 리더 따라가기
+
+    /// Where the leader is: a chart, by its file and pages, and a page of it.
+    struct Lead: Equatable {
+        let sender: String
+        let name: String
+        let fileId: String
+        let key: String
+        let page: Int
+
+        func matches(_ item: ScoreStandItem) -> Bool {
+            item.attachment.fileId == fileId && SharedEdits.key(pages: item.pages) == key
+        }
+    }
+
+    /// Someone else leading, as last heard.
+    @Published private(set) var lead: Lead?
+    /// This stand leading the room.
+    @Published private(set) var leading = false
+    private var leadHeard = Date.distantPast
+    private var leadAt: (item: ScoreStandItem, page: Int)?
+    private var leadBeat: Task<Void, Never>?
+
+    /// This stand leads from here: everyone else's turns to this chart and
+    /// page, and follows as it turns. Someone else leading stops.
+    func startLeading(_ item: ScoreStandItem, page: Int) {
+        leading = true
+        lead = nil
+        leadAt = (item, page)
+        sendLead()
+    }
+
+    func stopLeading() {
+        guard leading else { return }
+        leading = false
+        if let (item, _) = leadAt { send(.leadEnd, item) }
+    }
+
+    /// The leader turned to another chart or page.
+    func leaderMoved(_ item: ScoreStandItem, page: Int) {
+        guard leading, leadAt?.item.id != item.id || leadAt?.page != page else { return }
+        leadAt = (item, page)
+        sendLead()
+    }
+
+    private func sendLead() {
+        guard leading, let (item, page) = leadAt else { return }
+        RehearsalLink.shared.send(.init(kind: .lead, fileId: item.attachment.fileId,
+                                        key: SharedEdits.key(pages: item.pages), page: page, from: nearbyName))
+    }
+
+    private func heardLead(_ message: RehearsalLink.Message) {
+        switch message.kind {
+        case .lead:
+            // Someone took the lead after this stand did: theirs now.
+            if leading { leading = false }
+            leadHeard = Date()
+            let heard = Lead(sender: message.sender, name: message.from.isEmpty ? "세션 리더" : message.from,
+                             fileId: message.fileId, key: message.key, page: message.page ?? 0)
+            if heard != lead { lead = heard }
+        case .leadEnd:
+            if lead?.sender == message.sender { lead = nil }
+        default:
+            break
+        }
+    }
+
+    /// Every two seconds: the leader says where it is; a follower that has
+    /// heard nothing for seven lets the leader go — they left the room, or
+    /// their stand closed.
+    private func beat() {
+        leadBeat?.cancel()
+        leadBeat = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self else { return }
+                if self.leading { self.sendLead() }
+                if self.lead != nil, Date().timeIntervalSince(self.leadHeard) > 7 { self.lead = nil }
+            }
+        }
+    }
+
     // MARK: The room
 
     /// The name shown to the devices nearby.
@@ -2150,12 +2357,16 @@ final class ScoreStandModel: ObservableObject {
         guard linkToken == nil else { return }
         RehearsalLink.shared.start(team: RehearsalLink.teamTag(sheetId), name: nearbyName)
         linkToken = RehearsalLink.shared.listen { [weak self] message in self?.heard(message) }
+        beat()
         roomWatch = RehearsalLink.shared.$peers
             .removeDuplicates()
             .sink { [weak self] _ in Task { @MainActor in self?.readIfInRoom() } }
     }
 
     func leaveRoom() {
+        stopLeading()
+        leadBeat?.cancel()
+        lead = nil
         guard let linkToken else { return }
         RehearsalLink.shared.unlisten(linkToken)
         RehearsalLink.shared.stop()
@@ -2189,6 +2400,8 @@ final class ScoreStandModel: ObservableObject {
     }
 
     private func heard(_ message: RehearsalLink.Message) {
+        // Where the leader is: about the room, not one chart this stand has.
+        if message.kind == .lead || message.kind == .leadEnd { heardLead(message); return }
         for item in knownItems.values
         where item.attachment.fileId == message.fileId && SharedEdits.key(pages: item.pages) == message.key {
             // Meant for another device: not this one's to answer or take.
@@ -2246,6 +2459,8 @@ final class ScoreStandModel: ObservableObject {
                 // Fell partly on nothing: this copy was read differently.
                 // The whole chart, from the one who changed it.
                 if laid.missed > 0 { askRoom(item) }
+            case .lead, .leadEnd:
+                continue
             case .lyrics:
                 let fixes = message.xfdf.flatMap(XFDF.decode)?.lyrics.map(CorrectionsBody.lyric) ?? []
                 ScoreLyricFixStore.save(fixes, for: item.id)
@@ -2297,7 +2512,8 @@ final class ScoreStandModel: ObservableObject {
     private var waitingForRoom: Set<String> = []
 
     /// Asks the room for a chart's chords; reads them here only if nobody
-    /// answers within two seconds.
+    /// answers within two seconds — and not in 연주 모드, where a chart turned
+    /// to mid-song must not stop for seconds of reading.
     private func askRoom(_ item: ScoreStandItem) {
         guard !waitingForRoom.contains(item.id) else { return }
         waitingForRoom.insert(item.id)
@@ -2305,10 +2521,13 @@ final class ScoreStandModel: ObservableObject {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self, self.waitingForRoom.remove(item.id) != nil,
-                  self.states[item.id]?.isRead != true else { return }
+                  self.states[item.id]?.isRead != true, !self.performing else { return }
             await self.ensureRead(item)
         }
     }
+
+    /// 연주 모드 is on: nothing is read that was not asked for.
+    var performing = false
 
     private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, xfdf: String? = nil,
                       digest: String? = nil, corrected: Date? = nil, root: Int? = nil, to: String? = nil) {
@@ -2895,16 +3114,106 @@ private struct NearbyBadge: View {
     @Environment(\.horizontalSizeClass) private var width
 
     var body: some View {
-        if !link.peers.isEmpty, inRow == (width != .compact) {
-            Label(inRow ? "근처 \(link.peers.count)명" : "근처 \(link.peers.joined(separator: ", "))와 바로 연결됨",
+        if link.peers.isEmpty, link.roomFull, inRow == (width != .compact) {
+            // Eight stands already: this one is not let in, and says why.
+            Label("근처 방이 가득 찼습니다 (최대 \(RehearsalLink.roomSize)대)", systemImage: "person.3.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                .background(Color.orange.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+        } else if !link.peers.isEmpty, inRow == (width != .compact) {
+            // Short on a phone too: 따라가기 shares its line.
+            Label("근처 \(link.peers.count)명",
                   systemImage: "dot.radiowaves.left.and.right")
                 .font(.system(size: 13, weight: .semibold))
                 .padding(.horizontal, 8)
                 .frame(height: 30)
                 .background(Color.green.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                // Whole, always: a long song name or leader's name gives way.
+                .fixedSize()
                 .accessibilityLabel("근처 팀원 \(link.peers.count)명과 바로 연결됨: \(link.peers.joined(separator: ", "))")
         }
+    }
+}
+
+/// A page of the stand as one screen, on an iPad: the whole page fitted
+/// into what the scroll shows, centred, with a little room around it.
+private struct ScreenPage: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .padding(8)
+                .containerRelativeFrame([.horizontal, .vertical])
+        } else {
+            content
+        }
+    }
+}
+
+/// 세션 리더 하기 · 세션 리더 (나) · ○○ 따라가는 중: who the room turns
+/// with. Anyone in the room can lead — whoever turns the pages for the
+/// band, not only the worship leader.
+private struct LeadControl: View {
+    @ObservedObject var model: ScoreStandModel
+    @ObservedObject private var link = RehearsalLink.shared
+    @Environment(\.horizontalSizeClass) private var width
+    let inRow: Bool
+    let following: Bool
+    /// The leader's song is in this stand's list.
+    let available: Bool
+    let onLead: () -> Void
+    let onFollow: (Bool) -> Void
+
+    var body: some View {
+        if !link.peers.isEmpty, inRow == (width != .compact) {
+            Button(action: tap) {
+                Label(title, systemImage: symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .frame(height: 30)
+                    .background(tint.opacity(active ? 0.45 : 0.2), in: RoundedRectangle(cornerRadius: 8))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.lead != nil && !available)
+            .fixedSize(horizontal: !inRow ? false : true, vertical: false)
+            .accessibilityHint(hint)
+        }
+    }
+
+    private var title: String {
+        if model.leading { return "세션 리더 (나)" }
+        guard let lead = model.lead else { return "세션 리더 하기" }
+        if !available { return "\(lead.name): 목록에 없는 곡" }
+        return following ? "\(lead.name) 따라가는 중" : "\(lead.name) 따라가기"
+    }
+
+    private var symbol: String {
+        if model.leading { return "music.mic" }
+        if model.lead != nil { return following ? "figure.walk.motion" : "figure.walk" }
+        return "music.mic"
+    }
+
+    private var active: Bool { model.leading || (model.lead != nil && following) }
+    private var tint: Color { model.leading ? .accentColor : model.lead != nil ? .blue : .white }
+
+    private var hint: String {
+        if model.leading { return "세션 리더 끝내기" }
+        if model.lead != nil { return following ? "따라가기 멈추기" : "세션 리더가 보는 곡과 페이지로 가기" }
+        return "근처 팀원 모두가 이 기기의 곡과 페이지를 따라오게 하기 — 누구든 리더가 될 수 있습니다"
+    }
+
+    private func tap() {
+        if model.leading { model.stopLeading() }
+        else if model.lead != nil { onFollow(!following) }
+        else { onLead() }
     }
 }
 

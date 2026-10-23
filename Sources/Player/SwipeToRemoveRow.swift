@@ -39,6 +39,9 @@ struct SwipeToRemoveRow<Content: View>: View {
     /// made an open row feel like it was flicking back and forth and could
     /// not simply be pushed closed again.
     @State private var dragStart: CGFloat?
+    /// This drag's direction, decided by its first movement: sideways moves
+    /// the row, anything else is the page's scroll and is left alone.
+    @State private var sideways: Bool?
 
     private static var revealWidth: CGFloat { 84 }
 
@@ -52,13 +55,17 @@ struct SwipeToRemoveRow<Content: View>: View {
 
             content
                 .offset(x: offset)
-                .gesture(
+                // Alongside the scroll, not before it. As `.gesture` it took
+                // every drag that started on a row — the list could not
+                // begin to scroll until the drag had moved far enough to be
+                // judged and let go, and each scroll started with a hitch.
+                .simultaneousGesture(
                     DragGesture(minimumDistance: 14)
                         .onChanged { value in
-                            // Vertical wins, so the page can still scroll
-                            // with a finger that starts on a row.
-                            guard abs(value.translation.width)
-                                    > abs(value.translation.height) else { return }
+                            if sideways == nil {
+                                sideways = abs(value.translation.width) > abs(value.translation.height) * 1.2
+                            }
+                            guard sideways == true else { return }
                             let start = dragStart ?? offset
                             dragStart = start
                             offset = max(-Self.revealWidth,
@@ -66,6 +73,8 @@ struct SwipeToRemoveRow<Content: View>: View {
                         }
                         .onEnded { _ in
                             dragStart = nil
+                            defer { sideways = nil }
+                            guard sideways == true else { return }
                             // Judged on where the row ENDED UP, not on how
                             // far the finger moved. A short push back from an
                             // open row now closes it, instead of counting as
