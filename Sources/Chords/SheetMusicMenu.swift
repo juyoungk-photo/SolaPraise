@@ -25,6 +25,7 @@ struct SheetMusicLinks: View {
     var destination: ScoreDestination? = nil
 
     @EnvironmentObject private var team: TeamStore
+    @EnvironmentObject private var player: PlayerHost
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var planning: PlanningAuth
     @Environment(\.quotaLedger) private var quota: QuotaLedger!   // for clients only — see Unobserved
@@ -35,8 +36,9 @@ struct SheetMusicLinks: View {
     /// attached to the song on its 콘티 when it is on one.
     private func openURL(_ url: URL) {
         ScoreFinder.present(url: url, song: SheetMusicSources.plan(title: title, channel: channel).song,
-                            destination: destination ?? found,
-                            team: team, auth: auth, planning: planning, quota: quota, context: modelContext)
+                            destination: destination ?? found, videoId: videoId,
+                            team: team, auth: auth, planning: planning, quota: quota, player: player,
+                            context: modelContext)
     }
 
     /// This song on the nearest upcoming 콘티: by its video, else by title.

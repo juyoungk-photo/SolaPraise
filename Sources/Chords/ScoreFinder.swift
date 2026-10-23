@@ -41,22 +41,22 @@ enum ScoreFinder {
     /// Opens the finder over whatever is on screen — from the player, the
     /// stand or a menu, where a SwiftUI sheet does not always present.
     @MainActor
-    static func present(url: URL, song: String, destination: ScoreDestination?,
+    static func present(url: URL, song: String, destination: ScoreDestination?, videoId: String? = nil,
                         team: TeamStore, auth: GoogleAuthManager, planning: PlanningAuth,
-                        quota: QuotaLedger, context: ModelContext) {
+                        quota: QuotaLedger, player: PlayerHost, context: ModelContext) {
         // Called from a menu item: the menu is still going away, and a
         // controller presented over it in the same moment never appears.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
-            show(url: url, song: song, destination: destination, team: team, auth: auth,
-                 planning: planning, quota: quota, context: context)
+            show(url: url, song: song, destination: destination, videoId: videoId, team: team, auth: auth,
+                 planning: planning, quota: quota, player: player, context: context)
         }
     }
 
     @MainActor
-    private static func show(url: URL, song: String, destination: ScoreDestination?,
+    private static func show(url: URL, song: String, destination: ScoreDestination?, videoId: String?,
                              team: TeamStore, auth: GoogleAuthManager, planning: PlanningAuth,
-                             quota: QuotaLedger, context: ModelContext) {
+                             quota: QuotaLedger, player: PlayerHost, context: ModelContext) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
               let root = scene.keyWindow?.rootViewController ?? scene.windows.first?.rootViewController
@@ -65,11 +65,16 @@ enum ScoreFinder {
         while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
 
         let closer = Closer()
-        let view = ScoreFinderView(start: url, song: song, destination: destination, closer: closer)
+        // Presented by UIKit, it inherits nothing: everything the stand
+        // inside it reads is handed on here — the player too, which the
+        // stand's player row reads, and without which it stopped the app.
+        let view = ScoreFinderView(start: url, song: song, destination: destination, videoId: videoId, closer: closer)
             .environmentObject(team)
             .environmentObject(auth)
             .environmentObject(planning)
             .environmentObject(quota)
+            .environmentObject(player)
+            .environment(\.playerActions, player)
             .environment(\.modelContext, context)
         let host = UIHostingController(rootView: AnyView(view))
         host.modalPresentationStyle = .fullScreen
@@ -130,6 +135,8 @@ struct ScoreFinderView: View {
     let start: URL
     let song: String
     let destination: ScoreDestination?
+    /// The video the song is playing from: what the stand's player row plays.
+    var videoId: String? = nil
     let closer: ScoreFinder.Closer
 
     @EnvironmentObject private var team: TeamStore
@@ -144,6 +151,9 @@ struct ScoreFinderView: View {
         let id = UUID()
         let data: Data
         let isPDF: Bool
+        /// Said in the sheet, over the picture: an alert raised as the sheet
+        /// opened left one of the two unpresented.
+        var warning: String? = nil
         var preview: UIImage? { isPDF ? nil : UIImage(data: data) }
     }
 
@@ -161,6 +171,13 @@ struct ScoreFinderView: View {
     @State private var title = ""
     @State private var saving = false
     @State private var stand: ScoreStandItem?
+    /// The stand to open once the review sheet has finished closing.
+    /// Opened in the same moment the sheet was told to close, SwiftUI
+    /// could not present it — it never appeared, and the next 「이 악보로
+    /// 연주」 was presented over nothing: the app stopped answering.
+    @State private var standNext: ScoreStandItem?
+    /// What the upload is doing, said under the spinner.
+    @State private var savingStep = ""
 
     var body: some View {
         NavigationStack {
@@ -187,7 +204,12 @@ struct ScoreFinderView: View {
             title = song
             page.load(start)
         }
-        .sheet(item: $capture) { capture in review(capture) }
+        .sheet(item: $capture, onDismiss: {
+            if let next = standNext {
+                standNext = nil
+                stand = next
+            }
+        }) { capture in review(capture) }
         .sheet(isPresented: Binding(get: { pictures != nil }, set: { if !$0 { pictures = nil } })) {
             picturesSheet
         }
@@ -255,17 +277,16 @@ struct ScoreFinderView: View {
            let source = found["src"] as? String,
            let data = await ScoreFinder.fetch(source, referer: page.url), usable(data) {
             let width = (found["w"] as? Int) ?? UIImage(data: data).map { Int($0.size.width) } ?? 0
-            if width < 500 {
-                note = "그림이 작습니다(\(width)px). 그림을 눌러 크게 연 뒤 다시 누르면 더 잘 읽힙니다. 이대로 쓰려면 아래에서 계속하세요."
-            }
-            capture = Capture(data: data, isPDF: false)
+            capture = Capture(data: data, isPDF: false,
+                              warning: width < 500
+                                ? "그림이 작습니다(\(width)px). 그림을 눌러 크게 연 뒤 다시 누르면 더 잘 읽힙니다. 이대로 쓰려면 아래에서 계속하세요."
+                                : nil)
             return
         }
         // The screen as it is.
         if let shot = try? await page.web.takeSnapshot(configuration: nil),
            let data = shot.pngData() {
-            note = "화면의 그림을 찾지 못해 보이는 화면을 그대로 씁니다."
-            capture = Capture(data: data, isPDF: false)
+            capture = Capture(data: data, isPDF: false, warning: "화면의 그림을 찾지 못해 보이는 화면을 그대로 씁니다.")
         }
     }
 
@@ -351,6 +372,13 @@ struct ScoreFinderView: View {
     private func review(_ capture: Capture) -> some View {
         NavigationStack {
             Form {
+                if let warning = capture.warning {
+                    Section {
+                        Label(warning, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
                 Section {
                     if let image = capture.preview {
                         Image(uiImage: image).resizable().scaledToFit()
@@ -384,7 +412,16 @@ struct ScoreFinderView: View {
                 }
             }
             .disabled(saving)
-            .overlay { if saving { ProgressView().controlSize(.large) } }
+            .overlay {
+                if saving {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large)
+                        Text(savingStep).font(.callout.weight(.semibold))
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
             .navigationTitle("이 악보로 연주")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -411,15 +448,24 @@ struct ScoreFinderView: View {
         if let key = destination?.key {
             standItem = ScoreStandItem(attachment: standItem.attachment, song: standItem.song, teamKey: key)
         }
+        standItem.videoId = videoId
+        // Opened when the sheet has gone (its onDismiss).
+        standNext = standItem
         self.capture = nil
-        stand = standItem
     }
 
     private func attach(_ capture: Capture, to destination: ScoreDestination) async {
         guard let sheetId = TeamSheetSource.current else { return }
         saving = true
+        savingStep = "악보를 준비하는 중…"
         defer { saving = false }
-        let data = capture.isPDF ? capture.data : (LocalScores.chartJPEG(capture.data) ?? capture.data)
+        // Off the main thread: a photo of a chart is decoded and encoded
+        // again, a second or more on a phone with the screen held still.
+        let raw = capture.data, isPDF = capture.isPDF
+        let data = await Task.detached(priority: .userInitiated) {
+            isPDF ? raw : (LocalScores.chartJPEG(raw) ?? raw)
+        }.value
+        savingStep = "드라이브에 올리고 콘티에 적는 중…"
         let stem = fileTitle.replacingOccurrences(of: " ", with: "_")
         let day = TeamSheet.dateFormatter.string(from: destination.service.date)
         let name = "\(day)-\(stem)-\(Int(Date().timeIntervalSince1970)).\(capture.isPDF ? "pdf" : "jpg")"
@@ -433,8 +479,12 @@ struct ScoreFinderView: View {
             note = "첨부했지만 찾지 못했습니다. 예배표에서 열어 주세요."
             return
         }
+        // The stand has the file already: not fetched back from Drive.
+        ScoreFileCache.save(data, for: attached.fileId)
+        var item = ScoreStandItem(attachment: attached, song: destination.song, teamKey: destination.key)
+        item.videoId = videoId
+        standNext = item
         self.capture = nil
-        stand = ScoreStandItem(attachment: attached, song: destination.song, teamKey: destination.key)
     }
 
     private func close() { closer.action() }
