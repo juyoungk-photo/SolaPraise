@@ -2,16 +2,13 @@
 //  SharedEdits.swift
 //  SolaPraise
 //
-//  The team's hand corrections to a chart — kept on the team sheet's
-//  hidden 「교정」 tab (CorrectionsTab), one row per chart, as XFDF.
+//  A chart's corrections in the standard form — XFDF — as they travel:
+//  between the stands in the room (RehearsalLink), in the exports for other
+//  PDF apps, and on the team sheet's hidden 「교정」 tab for the one thing
+//  kept there, a 콘티 file's page map (which page is which song).
 //
-//  WHY: one person fixes a misread chord, and every other member's stand
-//  still showed the misreading — corrections lived on the device that made
-//  them. Now any member opening the chart takes them up — and a chart
-//  already open takes them up within seconds (ScoreStandModel.watchTeam).
-//  Two members' fixes are put together, not the last one's whole chart over
-//  the other's (EditMerge), and a member's own unshared edits are never
-//  overwritten by someone else's.
+//  Charts' chord and lyric corrections are not kept on the sheet: they go
+//  from stand to stand in the room, and to everyone else as a PDF.
 //
 //  A row is a key — 「all」 for a whole chart, the page list for one song's
 //  pages of a 콘티 file, 「pages-map」 for which page is which song.
@@ -34,16 +31,10 @@ enum SharedEdits {
         var chords: [[ScoreChord]]? = nil
         var lyrics: [LyricFix]? = nil
         var pages: [String: String]? = nil
-        /// One member's drawing (a row of its own — `inkPart`), and whose.
+        /// One member's drawing, and whose — for the XFDF exports.
         var inks: [XFDF.Ink]? = nil
         var author: String? = nil
     }
-
-    /// The row a member's drawing on a chart is kept in: theirs alone, so
-    /// two people drawing never write over each other — and an eraser
-    /// only ever takes the strokes of whoever holds it.
-    static func inkPart(_ part: String, author: String) -> String { "\(part)~ink~\(author)" }
-    static func isInk(_ part: String) -> Bool { part.contains("~ink~") }
 
 }
 

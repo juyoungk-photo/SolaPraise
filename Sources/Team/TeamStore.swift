@@ -1960,9 +1960,8 @@ final class TeamStore: ObservableObject {
 
     // MARK: - The 교정 tab
 
-    /// What a share came to: the writing it is (「tab#3」), and the chart's
-    /// corrections as the team now has them — this device's put together
-    /// with anyone else's since (EditMerge).
+    /// What a write came to: the writing it is (「tab#3」), and the row as
+    /// the team now has it.
     struct SharedResult {
         let revision: String
         let entry: SharedEdits.Entry
@@ -1972,30 +1971,10 @@ final class TeamStore: ObservableObject {
     private var correctionRows: [String: CorrectionsTab.Row] = [:]
     private var hasCorrectionsTab = false
 
-    /// Which writing of a chart's corrections the team has, as last seen:
-    /// its row of the 교정 tab.
-    func knownRevision(fileId: String, part: String) -> String? {
-        if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
-            return CorrectionsTab.token(row.revision)
-        }
-        // Pages assigned again since: the rows that hold them, as one
-        // writing (fetchCorrection puts them together).
-        if let wanted = Self.pageList(part) {
-            let held = correctionRows.filter { key, _ in
-                key.hasPrefix(fileId + "|pages:")
-                    && !Set(Self.pageList(String(key.dropFirst(fileId.count + 1))) ?? []).isDisjoint(with: wanted)
-            }
-            if !held.isEmpty {
-                return "remap#" + wanted.map(String.init).joined(separator: ",") + "@"
-                    + held.values.map { "\($0.row).\($0.revision)" }.sorted().joined(separator: ",")
-            }
-        }
-        return nil
-    }
-
-    /// One look at what changed: the tab's file, part and writing columns,
-    /// in a single request. Every 3 seconds while a chart is open.
-    func correctionRevisions() async -> [String: String]? {
+    /// The tab's rows: its file, part and writing columns, in one request.
+    /// Read when a 콘티's page map is read or written — charts' corrections
+    /// travel between the stands in the room, not through the sheet.
+    private func correctionRevisions() async -> [String: String]? {
         guard let client, let sheetId = TeamSheetSource.current else { return nil }
         guard hasCorrectionsTab,
               let columns = try? await client.readColumns(
@@ -2008,33 +1987,12 @@ final class TeamStore: ObservableObject {
         return out
     }
 
-    /// A chart part's corrections, the writing they are, and who wrote it.
-    func fetchCorrection(fileId: String, part: String) async -> (revision: String, entry: SharedEdits.Entry, by: String?)? {
-        guard let client, let sheetId = TeamSheetSource.current else { return nil }
-        if let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)] {
-            guard let read = await correctionRow(row.row, sheetId: sheetId, client: client) else { return nil }
-            return (CorrectionsTab.token(row.revision), read.entry, read.by)
-        }
-        // A song of a 콘티 file whose pages were assigned again since it was
-        // corrected: its corrections are under the old page list. Taken page
-        // by page from whichever rows hold them, rather than lost.
-        if let wanted = Self.pageList(part) {
-            var byPage: [Int: [ScoreChord]] = [:]
-            var who: String?
-            for (key, row) in correctionRows where key.hasPrefix(fileId + "|pages:") {
-                guard let theirs = Self.pageList(String(key.dropFirst(fileId.count + 1))),
-                      !Set(theirs).isDisjoint(with: wanted),
-                      let read = await correctionRow(row.row, sheetId: sheetId, client: client),
-                      let chords = read.entry.chords else { continue }
-                for (index, page) in theirs.enumerated() where chords.indices.contains(index) { byPage[page] = chords[index] }
-                who = read.by
-            }
-            if !byPage.isEmpty {
-                return (knownRevision(fileId: fileId, part: part) ?? "remap",
-                        SharedEdits.Entry(chords: wanted.map { byPage[$0] ?? [] }), who)
-            }
-        }
-        return nil
+    /// A part's row of the tab, the writing it is, and who wrote it.
+    private func fetchCorrection(fileId: String, part: String) async -> (revision: String, entry: SharedEdits.Entry, by: String?)? {
+        guard let client, let sheetId = TeamSheetSource.current,
+              let row = correctionRows[CorrectionsTab.key(fileId: fileId, part: part)],
+              let read = await correctionRow(row.row, sheetId: sheetId, client: client) else { return nil }
+        return (CorrectionsTab.token(row.revision), read.entry, read.by)
     }
 
     /// A row's corrections and who wrote them.
@@ -2045,13 +2003,6 @@ final class TeamStore: ObservableObject {
               let text = cells.first, let entry = CorrectionsBody.decode(text) else { return nil }
         let by = cells.count > layout.by - layout.body ? cells[layout.by - layout.body] : ""
         return (entry, by.isEmpty ? nil : by)
-    }
-
-    /// 「pages:2,3」 → [2, 3].
-    private static func pageList(_ part: String) -> [Int]? {
-        guard part.hasPrefix("pages:") else { return nil }
-        let pages = part.dropFirst(6).split(separator: ",").compactMap { Int($0) }
-        return pages.isEmpty ? nil : pages
     }
 
     /// The tab, made the first time and hidden: it is the app's, written
@@ -2076,7 +2027,7 @@ final class TeamStore: ObservableObject {
     /// back, and made again on top of anyone else's that landed first.
     /// - pdfPages, sizes: the chart's pages in the file and their size in
     ///   points, for the XFDF rectangles other PDF readers place chords by.
-    func shareCorrection(fileId: String, part: String, pdfPages: [Int] = [], sizes: [CGSize] = [],
+    private func shareCorrection(fileId: String, part: String, pdfPages: [Int] = [], sizes: [CGSize] = [],
                          _ change: (inout SharedEdits.Entry) -> Void) async -> Result<SharedResult, ShareEditsError> {
         guard let client, let sheetId = TeamSheetSource.current else { return .failure(.noAccess) }
         let item = attachment(fileId: fileId)

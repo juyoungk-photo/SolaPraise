@@ -312,7 +312,7 @@ struct ScoreStandView: View {
                             fullPage.toggle()
                         }
                     if showsChrome, let transport {
-                        PracticeControls(coordinator: transport, withTransport: true)
+                        PracticeControls(coordinator: transport)
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             .tint(.white)
@@ -356,8 +356,6 @@ struct ScoreStandView: View {
             model.nearbyName = team.lastActingEmail.flatMap { team.rosterName(for: $0) } ?? UIDevice.current.name
             model.joinRoom(items: items, team: TeamSheetSource.current)
         }
-        // The team's corrections, as they are made, while this is open.
-        .task { await model.watchTeam() }
         #if DEBUG
         // -uiTestRehearsalEdit: take the first chord off, as a hand would,
         // once the room has had time to connect — to watch it leave the
@@ -375,8 +373,6 @@ struct ScoreStandView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             model.leaveRoom()
-            // Corrections waiting to be shared go now, not lost with the stand.
-            model.shareNow()
         }
         .focusable()
         .onKeyPress(.rightArrow) { go(1); return .handled }
@@ -774,11 +770,9 @@ struct ScoreStandView: View {
 
     // MARK: - Pages
 
-    /// A page's drawing: everyone else's strokes, and this member's own.
+    /// A page's drawing: everyone else's, and this member's own.
     private func inkFor(_ item: ScoreStandItem, page: Int) -> PageInk {
-        let layers = model.inks[item.id] ?? ScoreInkStore.Layers()
-        let others = layers.byAuthor.filter { $0.key != ScoreInkStore.mine }.values.joined().filter { $0.part == page }
-        return ScoreStandModel.pageInk(layers, page: page)
+        ScoreStandModel.pageInk(model.inks[item.id] ?? ScoreInkStore.Layers(), page: page)
     }
 
     @ViewBuilder
@@ -811,7 +805,7 @@ struct ScoreStandView: View {
                             onPopoverDismiss: { entry = nil },
                             ink: inkFor(item, page: pageIndex),
                             drawing: drawing,
-                            onInk: { data, strokes in model.setMyInk(item, page: pageIndex, drawing: data, strokes: strokes) })
+                            onInk: { data in model.setMyInk(item, page: pageIndex, drawing: data) })
                     }
                 }
                 .padding(.horizontal, 12)
@@ -1295,7 +1289,7 @@ private struct ScorePageView: View {
     /// The page's drawing (ScoreInk), and whether this member is drawing.
     var ink = PageInk()
     var drawing = false
-    var onInk: (RichPage, [XFDF.Ink]) -> Void = { _, _ in }
+    var onInk: (RichPage) -> Void = { _ in }
 
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
@@ -1359,12 +1353,11 @@ private struct ScorePageView: View {
             .overlay {
                 if !original {
                     ZStack {
-                        InkLayerView(strokes: ink.others)
                         ForEach(Array(ink.othersRich.enumerated()), id: \.offset) { _, rich in
                             InkRichView(page: rich)
                         }
-                        if drawing || !ink.mine.isEmpty || ink.mineDrawing != nil {
-                            InkCanvas(part: 0, drawing: ink.mineDrawing, strokes: ink.mine,
+                        if drawing || ink.mineDrawing != nil {
+                            InkCanvas(drawing: ink.mineDrawing,
                                       active: drawing, onChange: onInk)
                         }
                     }
@@ -1566,28 +1559,6 @@ final class ScoreStandModel: ObservableObject {
         // it by hand — then their corrections win over any new reading.
         var saved = ScoreEditStore.load(item.id)
         removed[item.id] = ScoreRemovedStore.load(item.id)
-        // The team's corrections, when someone has shared newer ones than
-        // this copy holds and this device has none of its own unshared.
-        // Not after 다시 읽기, which asked for the chart as read.
-        let part = SharedEdits.key(pages: item.pages)
-        if team?.knownRevision(fileId: item.attachment.fileId, part: part) == nil { _ = await team?.correctionRevisions() }
-        let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: part)
-        if let remoteId, saved?.sharedFrom != remoteId, saved?.dirty != true, !rereading.contains(item.id),
-           let fetched = await team?.fetchCorrection(fileId: item.attachment.fileId, part: part),
-           let pages = fetched.entry.chords {
-            // Marked when the sender's app marks corrections: any chord
-            // carrying the field at all.
-            let marked = pages.joined().contains { $0.corrected != nil }
-            let lyrics = fetched.entry.lyrics ?? []
-            let shared = ScoreEditStore.Saved(pages: pages, edited: true, version: ScoreRecognition.version,
-                                              sharedFrom: fetched.revision, dirty: false,
-                                              marksCorrections: marked ? true : nil,
-                                              base: pages, lyricBase: lyrics)
-            ScoreEditStore.write(shared, for: item.id)
-            ScoreLyricFixStore.save(lyrics, for: item.id)
-            saved = shared
-            shareStatus[item.id] = "\(fetched.by ?? "팀원") 님이 고친 코드를 받았습니다"
-        }
         if let old = saved, !old.edited, old.version != ScoreRecognition.version { saved = nil }
         // The pages only: what is shown at once. Chords come from a kept
         // reading, or are read when a key change, 코드표 or 편집 asks.
@@ -1619,10 +1590,6 @@ final class ScoreStandModel: ObservableObject {
         states[item.id] = state
         Self.cache[item.id] = state
         if state.isRead { recordKey(item) }
-        // Fixed here and never shared — the stand closed, the app was
-        // quit, the network was down: sent now, merged with whatever the
-        // team shared meanwhile. It used to wait for the next edit.
-        if saved?.dirty == true { scheduleShare(item) }
         // After 다시 읽기, read again now: that is what was asked.
         if rereading.contains(item.id) { await ensureRead(item) }
         // Corrections kept before they were marked: found by reading the
@@ -1656,11 +1623,9 @@ final class ScoreStandModel: ObservableObject {
                 }
             }
         }
-        // Kept marked, as it was otherwise: not made dirty, so nothing is
-        // shared again for it.
+        // Kept marked, as it was otherwise: no newer than it was.
         guard let now = states[item.id], let before = ScoreEditStore.load(item.id) else { return }
-        ScoreEditStore.save(now.pages.map(\.chords), edited: true, for: item.id,
-                            sharedFrom: before.sharedFrom, dirty: before.dirty == true)
+        ScoreEditStore.save(now.pages.map(\.chords), edited: true, for: item.id, correctedAt: before.correctedAt)
     }
 
     /// How much of the smaller box the two share.
@@ -1716,11 +1681,7 @@ final class ScoreStandModel: ObservableObject {
             applyKeys(&state, item)
             states[item.id] = state
             Self.cache[item.id] = state
-            // After 다시 읽기, the shared corrections it set aside are
-            // remembered as seen, so they are not taken up again.
-            let remoteId = team?.knownRevision(fileId: item.attachment.fileId, part: SharedEdits.key(pages: item.pages))
-            ScoreEditStore.save(state.pages.map(\.chords), edited: false, for: item.id,
-                                sharedFrom: rereading.contains(item.id) ? remoteId : nil)
+            ScoreEditStore.save(state.pages.map(\.chords), edited: false, for: item.id)
             rereading.remove(item.id)
             recordKey(item)
         }
@@ -2054,7 +2015,7 @@ final class ScoreStandModel: ObservableObject {
         ScoreChartStore.save(systems, for: item.id, signature: signature)
     }
 
-    /// A 코드표 line's lyrics, corrected by hand — and shared with the team.
+    /// A 코드표 line's lyrics, corrected by hand — and sent to the room.
     func fixLyrics(_ item: ScoreStandItem, line index: Int, edited: ScoreChart.System) {
         guard var systems = charts[item.id], systems.indices.contains(index) else { return }
         let fixes = LyricFixes.merge(ScoreLyricFixStore.load(item.id), system: index,
@@ -2062,14 +2023,13 @@ final class ScoreStandModel: ObservableObject {
         ScoreLyricFixStore.save(fixes, for: item.id)
         systems[index] = edited
         charts[item.id] = systems
-        // Shared with the chords: the team reads the same words — the room
-        // at once, the sheet a moment later.
-        send(.lyrics, item, xfdf: XFDF.encode(CorrectionsBody.document([], lyrics: fixes), pdfPages: [], sizes: []))
+        // The room reads the same words at once.
         if var saved = ScoreEditStore.load(item.id) {
-            saved.dirty = true
+            saved.correctedAt = Date()
             ScoreEditStore.write(saved, for: item.id)
-            scheduleShare(item)
         }
+        send(.lyrics, item, xfdf: XFDF.encode(CorrectionsBody.document([], lyrics: fixes), pdfPages: [], sizes: []),
+             corrected: ScoreEditStore.load(item.id)?.correctedAt)
     }
 
     /// Forgets every hand edit and reads the chart again.
@@ -2103,30 +2063,24 @@ final class ScoreStandModel: ObservableObject {
         guard let state = states[item.id] else { return }
         let before = ScoreEditStore.load(item.id)
         let now = state.pages.map(\.chords)
-        ScoreEditStore.save(now, edited: true, for: item.id,
-                            sharedFrom: before?.sharedFrom, dirty: true,
-                            base: before?.base, lyricBase: before?.lyricBase)
-        // The room first: only what changed, to the stands nearby at once.
-        // The sheet gets the whole correction a moment later.
+        let at = Date()
+        // Only what changed, to the stands nearby at once — before the disk.
+        defer { ScoreEditStore.save(now, edited: true, for: item.id, correctedAt: at) }
         if let old = before?.pages, let delta = ChartDelta.between(old, now), !delta.isEmpty {
             let (pdfPages, sizes) = placement(item, count: now.count)
             func marks(_ pick: (ChartDelta<ScoreChord>.Page) -> [ScoreChord]) -> [XFDF.Mark] {
                 delta.pages.flatMap { page in pick(page).map { CorrectionsBody.mark($0, part: page.index) } }
             }
             send(.delta, item, xfdf: XFDF.command(add: marks(\.added), modify: marks(\.changed),
-                                                  delete: marks(\.removed), pdfPages: pdfPages, sizes: sizes))
+                                                  delete: marks(\.removed), pdfPages: pdfPages, sizes: sizes),
+                 corrected: at)
         }
-        scheduleShare(item)
     }
 
     // MARK: 그리기
 
     /// Every layer of each chart on this device (ScoreInkStore).
     @Published var inks: [String: ScoreInkStore.Layers] = [:]
-    private var inkTasks: [String: Task<Void, Never>] = [:]
-    /// When a layer last came from the room, by chart and author — every
-    /// point; the sheet's thinned copy of it does not replace it then.
-    private var heardInk: [String: Date] = [:]
 
     /// This member, as their layers are named: the same on all their
     /// devices, and no address on the sheet.
@@ -2139,17 +2093,11 @@ final class ScoreStandModel: ObservableObject {
         inks[item.id] ?? ScoreInkStore.load(item.id)
     }
 
-    /// A page's drawing: everyone else's — as drawn where the room sent it,
-    /// as strokes otherwise — and this member's own.
+    /// A page's drawing: everyone else's as their stands drew it, and this
+    /// member's own.
     static func pageInk(_ layers: ScoreInkStore.Layers, page: Int) -> PageInk {
-        var others: [XFDF.Ink] = [], othersRich: [RichPage] = []
-        for (author, strokes) in layers.byAuthor where author != ScoreInkStore.mine {
-            if let rich = layers.rich[author]?[String(page)] { othersRich.append(rich) }
-            else { others += strokes.filter { $0.part == page } }
-        }
-        return PageInk(others: others, othersRich: othersRich,
-                       mine: (layers.byAuthor[ScoreInkStore.mine] ?? []).filter { $0.part == page },
-                       mineDrawing: layers.mineDrawings[String(page)])
+        PageInk(othersRich: layers.rich.values.compactMap { $0[String(page)] },
+                mineDrawing: layers.mineDrawings[String(page)])
     }
 
     /// The pages with their drawings laid on, for a PDF or photos.
@@ -2163,100 +2111,30 @@ final class ScoreStandModel: ObservableObject {
     }
 
     /// The drawer's own page changed on their canvas.
-    func setMyInk(_ item: ScoreStandItem, page: Int, drawing: RichPage, strokes: [XFDF.Ink]) {
+    func setMyInk(_ item: ScoreStandItem, page: Int, drawing: RichPage) {
         var layers = inkLayers(item)
         layers.mineDrawings[String(page)] = drawing
-        let others = (layers.byAuthor[ScoreInkStore.mine] ?? []).filter { $0.part != page }
-        layers.byAuthor[ScoreInkStore.mine] = others + strokes.enumerated().map { index, stroke in
-            var ink = stroke
-            ink.part = page
-            ink.name = "p\(page)s\(index)"
-            return ink
-        }
-        layers.dirty = true
         inks[item.id] = layers
+        // To the room before the disk: the stands nearby are waiting.
+        sendInk(item, page: page)
         ScoreInkStore.save(layers, for: item.id)
-        // The room at once, every point.
-        let mine = layers.byAuthor[ScoreInkStore.mine] ?? []
-        let (pdfPages, sizes) = placement(item, count: states[item.id]?.pages.count ?? 1)
+    }
+
+    /// This member's drawing of one page, to the room, as PencilKit drew it.
+    private func sendInk(_ item: ScoreStandItem, page: Int) {
+        guard let drawing = inkLayers(item).mineDrawings[String(page)] else { return }
         RehearsalLink.shared.send(.init(kind: .ink, fileId: item.attachment.fileId, key: SharedEdits.key(pages: item.pages),
-                                        xfdf: XFDF.encode(XFDF.Document(pages: [], inks: mine, author: nearbyName),
-                                                          pdfPages: pdfPages, sizes: sizes),
                                         author: inkAuthor, page: page, rich: drawing, from: nearbyName))
-        // The sheet a moment after the pen lifts for good.
-        inkTasks[item.id]?.cancel()
-        inkTasks[item.id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            await self?.shareInk(item)
-        }
     }
 
-    private func shareInk(_ item: ScoreStandItem) async {
-        guard let team else { return }
+    /// A member's drawing of a page, from the room. This member's own,
+    /// drawn on another of their devices, replaces this device's.
+    private func takeInk(_ item: ScoreStandItem, author: String, page: Int, rich: RichPage) {
         var layers = inkLayers(item)
-        guard layers.dirty else { return }
-        let mine = layers.byAuthor[ScoreInkStore.mine] ?? []
-        let part = SharedEdits.inkPart(SharedEdits.key(pages: item.pages), author: inkAuthor)
-        let (pdfPages, sizes) = placement(item, count: states[item.id]?.pages.count ?? 1)
-        let name = nearbyName
-        switch await team.shareCorrection(fileId: item.attachment.fileId, part: part, pdfPages: pdfPages, sizes: sizes, { entry in
-            entry = SharedEdits.Entry(inks: mine, author: name)
-        }) {
-        case .success(let result):
-            layers = inkLayers(item)
-            layers.seen[part] = result.revision
-            layers.dirty = layers.byAuthor[ScoreInkStore.mine] != mine
-            inks[item.id] = layers
-            ScoreInkStore.save(layers, for: item.id)
-        case .failure(.failed(let reason)):
-            shareStatus[item.id] = "그림을 공유하지 못했습니다: \(reason)"
-        case .failure:
-            shareStatus[item.id] = "그림은 이 기기와 근처 기기에만 — 팀 시트에 쓸 수 있는 계정이 필요합니다"
-        }
-    }
-
-    /// A layer from the room or the sheet. This member's own, drawn on
-    /// another of their devices, replaces this device's — unless this one
-    /// has strokes the sheet has not had yet.
-    private func takeInk(_ item: ScoreStandItem, author: String, strokes: [XFDF.Ink], full: Bool,
-                         page: Int? = nil, rich: RichPage? = nil) {
-        var layers = inkLayers(item)
-        if author == inkAuthor {
-            guard !layers.dirty else { return }
-            layers.byAuthor[ScoreInkStore.mine] = strokes
-            if let page, let rich { layers.mineDrawings[String(page)] = rich } else { layers.mineDrawings = [:] }
-        } else {
-            let key = "\(item.id)|\(author)"
-            if !full, let heard = heardInk[key], Date().timeIntervalSince(heard) < 60 { return }
-            if full { heardInk[key] = Date() }
-            layers.byAuthor[author] = strokes
-            if let page, let rich {
-                layers.rich[author, default: [:]][String(page)] = rich
-            } else if !full {
-                // From the sheet, drawn since they left the room: their
-                // strokes now, not an older page as drawn.
-                layers.rich[author] = nil
-            }
-        }
+        if author == inkAuthor { layers.mineDrawings[String(page)] = rich }
+        else { layers.rich[author, default: [:]][String(page)] = rich }
         inks[item.id] = layers
         ScoreInkStore.save(layers, for: item.id)
-    }
-
-    /// The sheet's ink rows for this chart that changed since last taken.
-    private func takeSheetInk(_ item: ScoreStandItem, ids: [String: String]) async {
-        guard let team else { return }
-        let prefix = CorrectionsTab.key(fileId: item.attachment.fileId, part: SharedEdits.key(pages: item.pages) + "~ink~")
-        for (key, revision) in ids where key.hasPrefix(prefix) {
-            let part = String(key.dropFirst(item.attachment.fileId.count + 1))
-            guard inkLayers(item).seen[part] != revision,
-                  let fetched = await team.fetchCorrection(fileId: item.attachment.fileId, part: part) else { continue }
-            takeInk(item, author: String(key.dropFirst(prefix.count)), strokes: fetched.entry.inks ?? [], full: false)
-            var layers = inkLayers(item)
-            layers.seen[part] = revision
-            inks[item.id] = layers
-            ScoreInkStore.save(layers, for: item.id)
-        }
     }
 
     // MARK: The room
@@ -2264,17 +2142,11 @@ final class ScoreStandModel: ObservableObject {
     /// The name shown to the devices nearby.
     var nearbyName = ""
     private var linkToken: UUID?
-    /// When a change last came from the room, per chart — the same change
-    /// arriving through the sheet a moment later is not announced again.
-    private var heardNearby: [String: Date] = [:]
 
     /// While the stand is open: the team's devices in the room, and every
     /// chart of the set, so a change to a song not on screen lands too.
     func joinRoom(items: [ScoreStandItem], team sheetId: String?) {
         for item in items where knownItems[item.id] == nil { knownItems[item.id] = item }
-        // Fixes never shared — to any song of the set, not only the one on
-        // screen: sent now. They used to wait for that song to be opened.
-        for item in items where ScoreEditStore.load(item.id)?.dirty == true { scheduleShare(item) }
         guard linkToken == nil else { return }
         RehearsalLink.shared.start(team: RehearsalLink.teamTag(sheetId), name: nearbyName)
         linkToken = RehearsalLink.shared.listen { [weak self] message in self?.heard(message) }
@@ -2294,20 +2166,20 @@ final class ScoreStandModel: ObservableObject {
     private var roomWatch: AnyCancellable?
     private var onScreen: ScoreStandItem?
 
-    /// With someone in the room, the chart on screen has its chords ahead —
-    /// theirs if they have read it, else read here: a change is laid on
-    /// chords, and reading them only when the first change came took
-    /// seconds, on the one change that most needed to be seen at once.
+    /// With someone in the room — someone just come in, or a chart just
+    /// opened — the chart on screen is made the room's: its chords ahead,
+    /// theirs if they have read it, else read here; which chart this stand
+    /// has, so two that differ settle on the one corrected last; and this
+    /// member's drawing on it, for whoever has not seen it.
     private func readIfInRoom() {
         guard !RehearsalLink.shared.peers.isEmpty, let item = onScreen,
               states[item.id]?.isReady == true, states[item.id]?.isReading != true else { return }
-        // Read here already: say which reading, so a stand that read it on
-        // its own before the room met finds out.
         if let pages = readChords(item) {
-            send(.digest, item, digest: Self.digest(pages))
+            send(.digest, item, digest: digest(item, pages), corrected: ScoreEditStore.load(item.id)?.correctedAt)
         } else {
             askRoom(item)
         }
+        for page in inkLayers(item).mineDrawings.keys.compactMap(Int.init) { sendInk(item, page: page) }
     }
 
     /// One printed chord on two devices: the same id, or — read on each
@@ -2323,27 +2195,37 @@ final class ScoreStandModel: ObservableObject {
             if let to = message.to, to != RehearsalLink.shared.me_ { continue }
             switch message.kind {
             case .want:
-                // Answered by whoever has the chords read.
+                // Answered by whoever has the chords read: chords and lyric
+                // fixes, and when they were last corrected.
                 if let pages = readChords(item) {
                     let (pdfPages, sizes) = placement(item, count: pages.count)
-                    send(.chords, item, xfdf: XFDF.encode(CorrectionsBody.document(pages), pdfPages: pdfPages, sizes: sizes),
+                    let document = CorrectionsBody.document(pages, lyrics: ScoreLyricFixStore.load(item.id))
+                    send(.chords, item, xfdf: XFDF.encode(document, pdfPages: pdfPages, sizes: sizes),
+                         corrected: ScoreEditStore.load(item.id)?.correctedAt, root: states[item.id]?.scoreRoot,
                          to: message.sender)
                 }
                 continue
             case .ink:
-                guard let author = message.author, let document = message.xfdf.flatMap(XFDF.decode) else { continue }
-                takeInk(item, author: author, strokes: document.inks, full: true, page: message.page, rich: message.rich)
+                guard let author = message.author, let page = message.page, let rich = message.rich else { continue }
+                takeInk(item, author: author, page: page, rich: rich)
                 continue
             case .digest:
-                // Two readings of one chart in the room: the device that
-                // sorts later takes the other's, so the room ends on one.
+                // Two charts of one song in the room: the one corrected
+                // later is the room's — a stand that was not corrected, or
+                // was corrected before, takes it. Corrected at the same
+                // moment, or never: the device that sorts later takes the
+                // other's, so the room ends on one.
                 guard let pages = readChords(item), let theirs = message.digest,
-                      theirs != Self.digest(pages), RehearsalLink.shared.me_ > message.sender else { continue }
+                      theirs != digest(item, pages) else { continue }
+                guard RoomRule.takesTheirs(mine: ScoreEditStore.load(item.id)?.correctedAt, theirs: message.corrected,
+                                           me: RehearsalLink.shared.me_, them: message.sender) else { continue }
                 send(.want, item, to: message.sender)
                 continue
             case .chords:
                 guard let document = message.xfdf.flatMap(XFDF.decode) else { continue }
-                takeChords(item, pages: document.pages.map { $0.map(CorrectionsBody.chord) })
+                takeChords(item, pages: document.pages.map { $0.map(CorrectionsBody.chord) },
+                           lyrics: document.lyrics.map(CorrectionsBody.lyric), corrected: message.corrected,
+                           root: message.root)
             case .delta:
                 guard let command = message.xfdf.flatMap(XFDF.decodeCommand) else { continue }
                 let parts = Set((command.add + command.modify + command.delete).map(\.part))
@@ -2360,8 +2242,7 @@ final class ScoreStandModel: ObservableObject {
                     continue
                 }
                 let laid = delta.applied(to: current, same: Self.samePrinted)
-                keep(item, pages: laid.pages, pending: true)
-                makeSure(item)
+                keep(item, pages: laid.pages, corrected: message.corrected ?? Date())
                 // Fell partly on nothing: this copy was read differently.
                 // The whole chart, from the one who changed it.
                 if laid.missed > 0 { askRoom(item) }
@@ -2370,15 +2251,17 @@ final class ScoreStandModel: ObservableObject {
                 ScoreLyricFixStore.save(fixes, for: item.id)
                 charts[item.id] = nil
                 if var saved = ScoreEditStore.load(item.id) {
-                    if saved.dirty != true { saved.lyricBase = saved.lyricBase ?? [] }
-                    saved.dirty = true
+                    saved.correctedAt = message.corrected ?? Date()
                     ScoreEditStore.write(saved, for: item.id)
-                    makeSure(item)
                 }
             }
-            heardNearby[item.id] = Date()
+            let who = message.from.isEmpty ? "팀원" : message.from
             if message.kind != .chords {
-                shareStatus[item.id] = "\(message.from.isEmpty ? "팀원" : message.from) 님이 고친 것을 바로 받았습니다"
+                shareStatus[item.id] = "\(who) 님이 고친 것을 바로 받았습니다"
+            } else if message.corrected != nil {
+                // The room's chart replaced this stand's: said, so nobody
+                // wonders where their copy went.
+                shareStatus[item.id] = "\(who) 님이 마지막으로 고친 악보로 맞췄습니다"
             }
         }
     }
@@ -2388,31 +2271,25 @@ final class ScoreStandModel: ObservableObject {
         states[item.id].flatMap { $0.isRead ? $0.pages.map(\.chords) : nil } ?? ScoreEditStore.load(item.id)?.pages
     }
 
-    /// Kept as this device's copy, not as its own fix: the sender shares it
-    /// with the sheet, and this device's own unshared fixes stay marked.
-    /// - pending: a fix heard from the room, not yet known to be on the
-    ///   sheet: marked as this device's to share until it is, with what the
-    ///   sheet had before as the base it is measured from — so the sheet's
-    ///   next writing is put together with it, not laid over it.
-    private func keep(_ item: ScoreStandItem, pages: [[ScoreChord]], pending: Bool = false) {
+    /// The room's chart, kept as this device's copy — corrected when the
+    /// room's was.
+    private func keep(_ item: ScoreStandItem, pages: [[ScoreChord]], corrected: Date?) {
         var saved = ScoreEditStore.load(item.id) ?? .init(pages: pages, edited: true, version: ScoreRecognition.version)
-        if pending, saved.dirty != true {
-            saved.base = saved.base ?? saved.pages
-            saved.dirty = true
-        }
         saved.pages = pages
         saved.edited = true
+        saved.correctedAt = corrected
         ScoreEditStore.write(saved, for: item.id)
         if states[item.id]?.isReady == true { adopt(item, pages: pages) }
     }
 
-    /// Another device's reading, whole. Fixes of this device's own that are
-    /// not yet shared are laid on top of it.
-    private func takeChords(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
+    /// Another device's chart, whole: its chords and lyric fixes.
+    private func takeChords(_ item: ScoreStandItem, pages: [[ScoreChord]], lyrics: [LyricFix], corrected: Date?,
+                            root: Int?) {
         if let at = tookChords[item.id], Date().timeIntervalSince(at) < 2 { return }
-        let saved = ScoreEditStore.load(item.id)
-        let mine = saved?.dirty == true ? EditMerge.pages(base: saved?.base, local: saved!.pages, remote: pages) : pages
-        keep(item, pages: mine)
+        keep(item, pages: pages, corrected: corrected)
+        if let root { useRoot(item, root) }
+        ScoreLyricFixStore.save(lyrics, for: item.id)
+        charts[item.id] = nil
         tookChords[item.id] = Date()
         waitingForRoom.remove(item.id)
     }
@@ -2434,18 +2311,42 @@ final class ScoreStandModel: ObservableObject {
     }
 
     private func send(_ kind: RehearsalLink.Message.Kind, _ item: ScoreStandItem, xfdf: String? = nil,
-                      digest: String? = nil, to: String? = nil) {
+                      digest: String? = nil, corrected: Date? = nil, root: Int? = nil, to: String? = nil) {
         RehearsalLink.shared.send(.init(kind: kind, fileId: item.attachment.fileId,
                                         key: SharedEdits.key(pages: item.pages), xfdf: xfdf, digest: digest,
-                                        to: to, from: nearbyName))
+                                        corrected: corrected, root: root, to: to, from: nearbyName))
     }
 
-    /// A reading, as a few characters the same on every device that has
-    /// it: each chord's text and place, in order.
-    static func digest(_ pages: [[ScoreChord]]) -> String {
-        let text = pages.enumerated().map { page, chords in
-            chords.map { "\(page):\($0.original)@\(Int($0.box.midX * 200)),\(Int($0.box.midY * 200))" }.sorted().joined(separator: ";")
-        }.joined(separator: "|")
+    /// This stand's chart as the room compares it: chords, lyric fixes and
+    /// the key it is taken to be in.
+    private func digest(_ item: ScoreStandItem, _ pages: [[ScoreChord]]) -> String {
+        Self.digest(pages, lyrics: ScoreLyricFixStore.load(item.id)) + "k\(states[item.id]?.scoreRoot ?? -1)"
+    }
+
+    /// The room's key for a chart: the key the stand it came from takes it
+    /// to be in. A key in the chart's name is the same on every stand
+    /// already; a guess from its chords is not, read from another copy.
+    private func useRoot(_ item: ScoreStandItem, _ root: Int) {
+        update(item) { state in
+            guard state.writtenKey == nil, state.scoreRoot != root else { return }
+            state.estimatedRoot = root
+            state.scoreRoot = root
+            state.defaultShift = ScoreRecognition.shift(fromRoot: root, toKey: item.teamKey)
+            state.shift = Self.savedShift(for: item.id) ?? state.defaultShift ?? 0
+        }
+    }
+
+    /// A chart, as a few characters the same on every device that has it:
+    /// each chord's text and place, in order, and its lyric fixes.
+    static func digest(_ pages: [[ScoreChord]], lyrics: [LyricFix] = []) -> String {
+        let chords: [String] = pages.enumerated().map { page, chords in
+            chords.map { chord -> String in
+                let at = chord.placed
+                return "\(page):\(chord.original)@\(Int(at.midX * 200)),\(Int(at.midY * 200))"
+            }.sorted().joined(separator: ";")
+        }
+        let words: [String] = lyrics.map { "\($0.system).\($0.bar).\($0.cell).\($0.verse)=\($0.to)" }.sorted()
+        let text = chords.joined(separator: "|") + "#" + words.joined(separator: ";")
         return SHA256.hash(data: Data(text.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -2455,195 +2356,31 @@ final class ScoreStandModel: ObservableObject {
         (item.pages ?? Array(0..<count), states[item.id]?.pages.map(\.pointSize) ?? [])
     }
 
-    // MARK: Sharing corrections
-
-    /// Set by the view: where shared corrections are read and written.
+    /// Set by the view: the team, for who this member is.
     weak var team: TeamStore?
-    /// Charts being read again on request, whose shared corrections are
-    /// set aside.
+    /// Charts being read again on request (다시 읽기).
     private var rereading: Set<String> = []
-    private var shareTasks: [String: Task<Void, Never>] = [:]
-    /// A line for the header: shared, sharing, or why not.
+    /// A line for the header: what just came from the room.
     @Published var shareStatus: [String: String] = [:]
-
-    /// Shares a chart's corrections a second after the last change — one
-    /// upload for a run of quick fixes, not one per tap, and soon enough for
-    /// the members not in the room.
-    private func scheduleShare(_ item: ScoreStandItem) {
-        shareTasks[item.id]?.cancel()
-        backstop.remove(item.id)
-        shareStatus[item.id] = "고친 코드를 팀과 공유하는 중…"
-        shareTasks[item.id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            await self?.share(item)
-        }
-    }
-
-    /// A fix heard from a stand in the room, made sure of on the sheet a
-    /// few seconds later — by every stand that heard it, each after its own
-    /// wait — in case the one who made it could not share it (an account
-    /// that cannot write the sheet, the network). Where it is there
-    /// already, sharing writes nothing (TeamStore.shareCorrection).
-    private func makeSure(_ item: ScoreStandItem) {
-        guard shareTasks[item.id] == nil || backstop.contains(item.id) else { return }
-        shareTasks[item.id]?.cancel()
-        backstop.insert(item.id)
-        shareTasks[item.id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Double.random(in: 4...9)))
-            guard !Task.isCancelled else { return }
-            await self?.share(item)
-            self?.backstop.remove(item.id)
-            self?.shareTasks[item.id] = nil
-        }
-    }
-    /// Charts being made sure of: failing to share them says nothing — the
-    /// fix was someone else's.
-    private var backstop: Set<String> = []
-
-    /// Shares now whatever is waiting — when the stand closes.
-    func shareNow() {
-        for (id, task) in shareTasks {
-            task.cancel()
-            if let item = knownItems[id] { Task { await share(item) } }
-        }
-        shareTasks = [:]
-    }
 
     private var knownItems: [String: ScoreStandItem] = [:]
 
-    private func share(_ item: ScoreStandItem) async {
-        guard let saved = ScoreEditStore.load(item.id), saved.dirty == true else { return }
-        guard let team else {
-            shareStatus[item.id] = "이 기기에만 저장됨"
-            return
-        }
-        let key = SharedEdits.key(pages: item.pages)
-        let lyrics = ScoreLyricFixStore.load(item.id)
-        let sizes = states[item.id]?.pages.map(\.pointSize) ?? []
-        let result = await team.shareCorrection(fileId: item.attachment.fileId, part: key,
-                                                pdfPages: item.pages ?? Array(0..<saved.pages.count),
-                                                sizes: sizes) { entry in
-            entry.chords = EditMerge.pages(base: saved.base, local: saved.pages, remote: entry.chords)
-            let words = EditMerge.list(base: saved.lyricBase, local: lyrics, remote: entry.lyrics,
-                                       same: { $0.samePlace($1) })
-            entry.lyrics = words.isEmpty ? nil : words
-        }
-        switch result {
-        case .success(let result):
-            // What the team has now — this device's fixes and anyone
-            // else's since, put together — is what this device shows.
-            let merged = result.entry.chords ?? saved.pages
-            let mergedLyrics = result.entry.lyrics ?? lyrics
-            var now = ScoreEditStore.load(item.id) ?? saved
-            // Fixed again while this was being sent: kept, on top.
-            let editedMeanwhile = now.pages != saved.pages
-            now.pages = editedMeanwhile ? EditMerge.pages(base: saved.pages, local: now.pages, remote: merged) : merged
-            now.sharedFrom = result.revision
-            now.base = merged
-            now.lyricBase = mergedLyrics
-            now.dirty = editedMeanwhile
-            ScoreEditStore.write(now, for: item.id)
-            if now.pages != states[item.id]?.pages.map(\.chords) { adopt(item, pages: now.pages) }
-            if mergedLyrics != lyrics {
-                ScoreLyricFixStore.save(mergedLyrics, for: item.id)
-                charts[item.id] = nil
-            }
-            // Made sure of for someone else: theirs to announce, not this one's.
-            if !backstop.contains(item.id) {
-                shareStatus[item.id] = merged != saved.pages
-                    ? "공유했습니다 — 팀원이 고친 곳도 함께 들어왔습니다"
-                    : "고친 코드를 팀과 공유했습니다"
-            }
-            if editedMeanwhile { scheduleShare(item) }
-        case .failure where backstop.contains(item.id):
-            break
-        case .failure(.noAccess):
-            shareStatus[item.id] = "이 기기에만 저장됨 — 팀 시트에 쓸 수 있는 계정이 필요합니다"
-        case .failure(.moved), .failure(.notFound):
-            shareStatus[item.id] = "이 기기에만 저장됨 — 시트를 새로 고친 뒤 다시 고치면 공유됩니다"
-        case .failure(.failed(let reason)):
-            shareStatus[item.id] = "공유하지 못했습니다: \(reason) — 다음에 열 때 다시 보냅니다"
-        }
-    }
-
-    /// Chords from the team on the page as it stands: the key, the
-    /// position, everything else kept.
+    /// Chords from the room, on the chart on screen.
+    ///
+    /// The chart's key is worked out once, when its chords are first had —
+    /// not again on every change: a chord taken off on one stand moved the
+    /// guess on the stands that heard it, and they transposed by another
+    /// step than the stand that made the change, showing other chords.
     private func adopt(_ item: ScoreStandItem, pages: [[ScoreChord]]) {
         guard var state = states[item.id], state.pages.count == pages.count else { return }
+        let first = !state.isRead
         for index in pages.indices { state.pages[index].chords = pages[index] }
         state.isEdited = true
         state.isRead = true
-        applyKeys(&state, item)
+        if first { applyKeys(&state, item) }
         states[item.id] = state
         Self.cache[item.id] = state
         charts[item.id] = nil
-    }
-
-    /// While the stand is open: the team's newer corrections, taken up as
-    /// they are shared — every 3 seconds, one read of the 「교정」 tab's
-    /// writing numbers (twenty a minute, a third of what Google allows one
-    /// person), and the row itself only when a chart's number changed. For the members not in
-    /// the room; those in it have had the change from RehearsalLink.
-    ///
-    /// WHY: corrections reached another member only when they closed the
-    /// chart and opened it again after a reload. In a rehearsal the person
-    /// fixing the bridge and the people reading it are looking at it at
-    /// the same moment.
-    func watchTeam() async {
-        var misses = 0
-        while !Task.isCancelled {
-            // Every 3 seconds alone; every 10 with the room connected, whose
-            // changes come straight from the stands nearby. Further apart
-            // after a failed look — Google refuses a team of ten looking
-            // every 3 seconds at once — and back once one goes through.
-            let pace: Double = RehearsalLink.shared.peers.isEmpty ? 3 : 10
-            try? await Task.sleep(for: .seconds(min(30, pace * pow(2, Double(misses)))))
-            guard !Task.isCancelled, let team else { continue }
-            guard let ids = await team.correctionRevisions() else { misses = min(misses + 1, 4); continue }
-            misses = 0
-            for item in knownItems.values where states[item.id]?.isReady == true { await takeSheetInk(item, ids: ids) }
-            for (id, item) in knownItems where states[id]?.isReady == true {
-                let part = SharedEdits.key(pages: item.pages)
-                guard let remote = ids[CorrectionsTab.key(fileId: item.attachment.fileId, part: part)],
-                      !remote.isEmpty else { continue }
-                let saved = ScoreEditStore.load(id)
-                guard remote != saved?.sharedFrom else { continue }
-                // Fixes of its own waiting: sharing merges the two.
-                if saved?.dirty == true { scheduleShare(item); continue }
-                guard let fetched = await team.fetchCorrection(fileId: item.attachment.fileId, part: part) else {
-                    // Nothing for this chart's part (another song of the
-                    // file changed): seen, so not asked again.
-                    if var kept = saved { kept.sharedFrom = remote; ScoreEditStore.write(kept, for: id) }
-                    continue
-                }
-                receive(item, entry: fetched.entry, revision: fetched.revision, by: fetched.by, saved: saved)
-            }
-        }
-    }
-
-    private func receive(_ item: ScoreStandItem, entry: SharedEdits.Entry, revision fileId: String,
-                         by who: String? = nil, saved: ScoreEditStore.Saved?) {
-        guard let pages = entry.chords else {
-            if var kept = saved { kept.sharedFrom = fileId; ScoreEditStore.write(kept, for: item.id) }
-            return
-        }
-        let lyrics = entry.lyrics ?? []
-        let changed = pages != saved?.pages || lyrics != ScoreLyricFixStore.load(item.id)
-        ScoreEditStore.write(.init(pages: pages, edited: true, version: ScoreRecognition.version,
-                                   sharedFrom: fileId, dirty: false,
-                                   marksCorrections: pages.joined().contains { $0.corrected != nil } ? true : nil,
-                                   base: pages, lyricBase: lyrics), for: item.id)
-        ScoreLyricFixStore.save(lyrics, for: item.id)
-        guard changed else { return }
-        adopt(item, pages: pages)
-        // Already had from the room: the sheet's copy only settles the ids.
-        if let heard = heardNearby[item.id], Date().timeIntervalSince(heard) < 30 { return }
-        let name = who ?? "팀원"
-        shareStatus[item.id] = "\(name) 님이 고친 코드를 받았습니다"
-        let song = item.song.isEmpty ? (item.attachment.name as NSString).deletingPathExtension
-                                     : PlanSongTitle.split(item.song).title
-        Toast.shared.show("「\(song)」 \(name) 님이 고친 악보를 받았습니다", symbol: "arrow.down.circle.fill", tint: .blue)
     }
 
     private func update(_ item: ScoreStandItem, _ change: (inout State) -> Void) {
@@ -2793,7 +2530,7 @@ final class ScoreStandModel: ObservableObject {
             // The marks drawn by hand, as ink annotations — one width a
             // stroke, which is what a PDF's ink can say.
             let layers = inkLayers(item)
-            let strokes = layers.byAuthor.values.joined().filter { $0.part == part }
+            let strokes = layers.strokes(page: part)
             for stroke in strokes where stroke.points.count > 1 {
                 let annotation = PDFAnnotation(bounds: bounds, forType: .ink, withProperties: nil)
                 let path = UIBezierPath()
@@ -2828,7 +2565,7 @@ final class ScoreStandModel: ObservableObject {
         }
         let (pdfPages, sizes) = placement(item, count: pages.count)
         var document = CorrectionsBody.document(pages, lyrics: ScoreLyricFixStore.load(item.id))
-        document.inks = Array(inkLayers(item).byAuthor.values.joined())
+        document.inks = inkLayers(item).strokes()
         let xml = XFDF.encode(document, pdfPages: pdfPages, sizes: sizes)
         share(Data(xml.utf8), named: baseName(item) + ".xfdf")
     }
@@ -3071,20 +2808,13 @@ enum ScoreEditStore {
         var edited: Bool
         /// ScoreRecognition.version that read it; nil before versions.
         var version: Int?
-        /// The shared corrections file this copy came from or was last
-        /// sent as — see SharedEdits.
-        var sharedFrom: String? = nil
-        /// Changed here and not yet shared with the team.
-        var dirty: Bool? = nil
         /// Its corrected chords carry ScoreChord.corrected. Nil for edits
         /// kept before the mark existed, or received from a teammate's
         /// older app — marked once, by reading the page again.
         var marksCorrections: Bool? = nil
-        /// The chords and lyric fixes as of `sharedFrom` — what this device
-        /// and the team last agreed on, which a merge measures changes
-        /// from (EditMerge).
-        var base: [[ScoreChord]]? = nil
-        var lyricBase: [LyricFix]? = nil
+        /// When it was last corrected by hand, here or on a stand in the
+        /// room: of two charts of one song, the later is the room's.
+        var correctedAt: Date? = nil
     }
 
     private static var folder: URL? {
@@ -3106,12 +2836,9 @@ enum ScoreEditStore {
         return (try? JSONDecoder().decode([[ScoreChord]].self, from: data)).map { Saved(pages: $0, edited: true, version: nil) }
     }
 
-    static func save(_ pages: [[ScoreChord]], edited: Bool, for id: String,
-                     sharedFrom: String? = nil, dirty: Bool = false,
-                     base: [[ScoreChord]]? = nil, lyricBase: [LyricFix]? = nil) {
+    static func save(_ pages: [[ScoreChord]], edited: Bool, for id: String, correctedAt: Date? = nil) {
         write(Saved(pages: pages, edited: edited, version: ScoreRecognition.version,
-                    sharedFrom: sharedFrom, dirty: dirty, marksCorrections: true,
-                    base: base, lyricBase: lyricBase), for: id)
+                    marksCorrections: true, correctedAt: correctedAt), for: id)
     }
 
     static func write(_ saved: Saved, for id: String) {
@@ -3181,13 +2908,11 @@ private struct NearbyBadge: View {
     }
 }
 
-/// One page's drawing: the team's strokes, and this member's own — as
-/// PencilKit kept them on this device, where it drew them.
+/// One page's drawing: the team's and this member's own, as their
+/// PencilKit drew them.
 struct PageInk {
-    var others: [XFDF.Ink] = []
-    /// Others' pages as their PencilKit drew them, heard from the room.
+    /// Others' pages, heard from the room.
     var othersRich: [RichPage] = []
-    var mine: [XFDF.Ink] = []
     var mineDrawing: RichPage? = nil
 }
 

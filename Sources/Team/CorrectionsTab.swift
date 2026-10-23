@@ -2,16 +2,14 @@
 //  CorrectionsTab.swift
 //  SolaPraise
 //
-//  The team sheet's hidden 「교정」 tab: every chart's hand corrections, one
-//  row per chart — per song, for a 콘티 file of several — with which
-//  writing it is, who wrote it and when.
+//  The team sheet's hidden 「교정」 tab: a 콘티 file's page map — which page
+//  is which song — one row per file, with which writing it is, who wrote
+//  it and when.
 //
-//  WHY: corrections used to be a small file in the Drive of whoever fixed
-//  the chart, its id in the chart's Edits cell. Every member who fixed
-//  anything had files of their own piling up, named after charts, that
-//  meant nothing to them; and every share went through Drive and the
-//  sheet both. Here the sheet holds them itself: one tab, hidden, written
-//  and read by the app — a row read, merged, written over.
+//  Charts' chord corrections and drawings were kept here too, read every
+//  few seconds by every open stand; they now go from stand to stand in the
+//  room (RehearsalLink), and to everyone else as a PDF. What a member sets
+//  once for the team and everyone opens by stays.
 //
 //  Pure, so Tools/check-corrections-tab.swift runs it.
 //

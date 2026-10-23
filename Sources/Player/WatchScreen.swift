@@ -486,21 +486,6 @@ struct WatchScreen: View {
 
             actionRow
 
-            // 연습 — 찬양 only: a reading has nothing to learn by repeating.
-            // A row of its own: at the end of the action row it was past
-            // the edge of a phone, where nobody scrolls to look.
-            if showsChordButton {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    PracticeControls(coordinator: player)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .font(.subheadline)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.vertical, 1)
-                }
-                .scrollBounceBehavior(.basedOnSize)
-            }
-
             if showsChordButton { searchSuggestionRow } else { seriesRow }
 
             // Unfolds directly under the player the moment 코드 is pressed.

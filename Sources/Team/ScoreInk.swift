@@ -12,11 +12,12 @@
 //  layer, drawn under everyone else's.
 //
 //  To the stands in the room a page goes as PencilKit drew it — pressure,
-//  texture, a highlighter's wash — and is drawn there as drawn. To the 교정
-//  tab, for members out of the room, it goes as XFDF <ink>, the standard
-//  form PDF apps use for hand-drawn marks, thinned to its shape
-//  (CorrectionsBody): a line of one width in its colour. The drawer's own
-//  canvas, and a PDF made from it, keep the drawing as drawn.
+//  texture, a highlighter's wash — and is drawn there as drawn; a stand
+//  that comes in later is sent each member's pages then. The drawer's own
+//  canvas, and a PDF made from it, keep the drawing as drawn — that PDF is
+//  how it reaches anyone not in the room. The strokes also go as XFDF
+//  <ink>, the standard form PDF apps use for hand-drawn marks, for the
+//  annotated-PDF and XFDF exports.
 //
 //  Drawn as on paper: the page is white whatever the app's appearance, so
 //  ink is never turned light for dark mode — black stays black.
@@ -45,21 +46,6 @@ enum InkBridge {
             return XFDF.Ink(name: "p\(part)s\(index)", part: part, points: points, width: width,
                             color: hex(stroke.ink.color), opacity: marker ? 0.35 : 1, marker: marker)
         }
-    }
-
-    /// Strokes back as a drawing, for the drawer's own canvas.
-    static func drawing(from strokes: [XFDF.Ink], size: CGSize) -> PKDrawing {
-        PKDrawing(strokes: strokes.compactMap { ink -> PKStroke? in
-            guard ink.points.count > 1 else { return nil }
-            let width = max(1, ink.width * size.width)
-            let controls = ink.points.enumerated().map { index, point in
-                PKStrokePoint(location: CGPoint(x: point.x * size.width, y: point.y * size.height),
-                              timeOffset: TimeInterval(index) * 0.01, size: CGSize(width: width, height: width),
-                              opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
-            }
-            return PKStroke(ink: PKInk(ink.marker ? .marker : .pen, color: color(ink.color)),
-                            path: PKStrokePath(controlPoints: controls, creationDate: Date()))
-        })
     }
 
     static func hex(_ color: UIColor) -> String {
@@ -100,12 +86,6 @@ struct RichPage: Codable, Equatable {
 /// other member's as last heard — by chart (the stand item's id).
 enum ScoreInkStore {
     struct Layers: Codable, Equatable {
-        /// Author → strokes. The drawer's own under `mine`.
-        var byAuthor: [String: [XFDF.Ink]] = [:]
-        /// Each layer's writing on the 교정 tab, as last taken.
-        var seen: [String: String] = [:]
-        /// This device's own layer has changes the sheet does not.
-        var dirty = false
         /// The drawer's own pages as PencilKit keeps them — pressure,
         /// texture and all — by page: what their own canvas shows, and what
         /// goes to the stands in the room.
@@ -113,6 +93,23 @@ enum ScoreInkStore {
         /// Other members' pages as their PencilKit drew them, heard from the
         /// room: author → page → drawing. Drawn instead of their strokes.
         var rich: [String: [String: RichPage]] = [:]
+
+        /// Every page drawn on, by whom — this member's own as `mine`.
+        var all: [(author: String, page: Int, drawing: RichPage)] {
+            mineDrawings.compactMap { key, page in Int(key).map { (ScoreInkStore.mine, $0, page) } }
+                + rich.flatMap { author, pages in
+                    pages.compactMap { key, page in Int(key).map { (author, $0, page) } }
+                }
+        }
+
+        /// Everyone's strokes as XFDF <ink>, worked out of the drawings —
+        /// only when an export asks: drawing and sending need none of it.
+        func strokes(page: Int? = nil) -> [XFDF.Ink] {
+            all.filter { page == nil || $0.page == page }.flatMap { _, page, rich -> [XFDF.Ink] in
+                guard let drawing = try? PKDrawing(data: rich.data) else { return [] }
+                return InkBridge.strokes(from: drawing, size: CGSize(width: rich.width, height: rich.height), part: page)
+            }
+        }
     }
 
     static let mine = "mine"
@@ -136,36 +133,13 @@ enum ScoreInkStore {
     }
 }
 
-/// Other members' strokes on a page, drawn as they reach this stand.
-struct InkLayerView: View {
-    let strokes: [XFDF.Ink]
-
-    var body: some View {
-        Canvas { context, size in
-            for ink in strokes where ink.points.count > 1 {
-                var path = Path()
-                path.move(to: CGPoint(x: ink.points[0].x * size.width, y: ink.points[0].y * size.height))
-                for point in ink.points.dropFirst() {
-                    path.addLine(to: CGPoint(x: point.x * size.width, y: point.y * size.height))
-                }
-                context.stroke(path, with: .color(Color(InkBridge.color(ink.color)).opacity(ink.opacity)),
-                               style: StrokeStyle(lineWidth: max(1, ink.width * size.width), lineCap: .round, lineJoin: .round))
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 /// The drawer's own layer on one page, to draw on: PencilKit's canvas with
 /// its tool picker, transparent over the page.
 struct InkCanvas: UIViewRepresentable {
-    let part: Int
-    /// The drawer's own page as PencilKit keeps it, when this device drew it.
+    /// The drawer's own page as PencilKit keeps it.
     let drawing: RichPage?
-    /// Else their strokes as shared — drawn on another of their devices.
-    let strokes: [XFDF.Ink]
     let active: Bool
-    let onChange: (RichPage, [XFDF.Ink]) -> Void
+    let onChange: (RichPage) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
 
@@ -190,9 +164,7 @@ struct InkCanvas: UIViewRepresentable {
     func updateUIView(_ canvas: PageCanvas, context: Context) {
         let coordinator = context.coordinator
         coordinator.onChange = onChange
-        coordinator.part = part
         coordinator.drawing = drawing
-        coordinator.strokes = strokes
         canvas.isUserInteractionEnabled = active
         // Again when what it holds came from elsewhere.
         coordinator.load(canvas, sizeOnly: false)
@@ -218,20 +190,15 @@ struct InkCanvas: UIViewRepresentable {
     }()
 
     final class Coordinator: NSObject, PKCanvasViewDelegate {
-        var onChange: (RichPage, [XFDF.Ink]) -> Void
+        var onChange: (RichPage) -> Void
         var loaded = ""
         var size: CGSize = .zero
-        var part = 0
         var loading = false
         var drawing: RichPage?
-        var strokes: [XFDF.Ink] = []
 
-        init(onChange: @escaping (RichPage, [XFDF.Ink]) -> Void) { self.onChange = onChange }
+        init(onChange: @escaping (RichPage) -> Void) { self.onChange = onChange }
 
-        private var key: String {
-            drawing.map { "d" + $0.key }
-                ?? "s\(strokes.count)|\(strokes.map { "\($0.name):\($0.points.count)" }.joined(separator: ","))"
-        }
+        private var key: String { drawing.map { "d" + $0.key } ?? "none" }
 
         /// What it holds, at this page's size now — turned, or on another
         /// screen. On a layout only when the size changed, so a stroke
@@ -240,11 +207,7 @@ struct InkCanvas: UIViewRepresentable {
             let size = canvas.bounds.size
             guard size.width > 0, size != self.size || (!sizeOnly && loaded != key) else { return }
             loading = true
-            if let drawing, let kept = drawing.drawing(for: size) {
-                canvas.drawing = kept
-            } else {
-                canvas.drawing = InkBridge.drawing(from: strokes, size: size)
-            }
+            canvas.drawing = drawing?.drawing(for: size) ?? PKDrawing()
             loading = false
             loaded = key
             self.size = size
@@ -255,7 +218,7 @@ struct InkCanvas: UIViewRepresentable {
             let size = canvasView.bounds.size
             let page = RichPage(data: canvasView.drawing.dataRepresentation(), width: size.width, height: size.height)
             loaded = "d" + page.key
-            onChange(page, InkBridge.strokes(from: canvasView.drawing, size: size, part: part))
+            onChange(page)
         }
     }
 }
@@ -312,7 +275,7 @@ final class PageCanvas: PKCanvasView {
 /// drawer's own as drawn — to lay over it in a PDF or a photo.
 enum InkRender {
     static func image(_ ink: PageInk, size: CGSize) -> UIImage? {
-        guard !ink.others.isEmpty || !ink.othersRich.isEmpty || !ink.mine.isEmpty || ink.mineDrawing != nil else { return nil }
+        guard !ink.othersRich.isEmpty || ink.mineDrawing != nil else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 3
         format.opaque = false
@@ -326,26 +289,12 @@ enum InkRender {
 
     private static func render(_ ink: PageInk, size: CGSize, format: UIGraphicsImageRendererFormat) -> UIImage {
         UIGraphicsImageRenderer(size: size, format: format).image { context in
-            for stroke in ink.others where stroke.points.count > 1 {
-                let path = UIBezierPath()
-                path.move(to: CGPoint(x: stroke.points[0].x * size.width, y: stroke.points[0].y * size.height))
-                for point in stroke.points.dropFirst() {
-                    path.addLine(to: CGPoint(x: point.x * size.width, y: point.y * size.height))
-                }
-                path.lineWidth = max(1, stroke.width * size.width)
-                path.lineCapStyle = .round
-                path.lineJoinStyle = .round
-                InkBridge.color(stroke.color).withAlphaComponent(stroke.opacity).setStroke()
-                path.stroke()
-            }
             let bounds = CGRect(origin: .zero, size: size)
             for rich in ink.othersRich {
                 rich.drawing(for: size)?.image(from: bounds, scale: 3).draw(in: bounds)
             }
             if let mine = ink.mineDrawing?.drawing(for: size) {
                 mine.image(from: bounds, scale: 3).draw(in: bounds)
-            } else if !ink.mine.isEmpty {
-                InkBridge.drawing(from: ink.mine, size: size).image(from: bounds, scale: 3).draw(in: bounds)
             }
         }
     }
