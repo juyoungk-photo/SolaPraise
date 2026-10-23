@@ -113,6 +113,9 @@ struct ScoreStandView: View {
     /// on the page toggles it; editing brings everything back, since a tap
     /// there belongs to the chords.
     @State private var fullPage = false
+    /// The song the pager was swiped to — as opposed to one turned to by
+    /// the arrows or the leader, which the pager is brought to.
+    @State private var swipedTo: Int?
     private var showsChrome: Bool { !fullPage || editing }
     /// How far apart the 코드표's lyrics sit, apart from their size.
     @AppStorage("score.chartSpacing") private var chartSpacing: Double = 1.35
@@ -264,8 +267,15 @@ struct ScoreStandView: View {
         if let root = lead.root { model.show(items[target], in: root) }
     }
 
+    /// Written only when the page really changed. A song's scroll says
+    /// where it is as it comes on screen — mid-swipe, as the pager slides
+    /// to it — and writing that every time redrew the stand under the
+    /// pager's own animation, which then stopped between two songs.
     private func pagePosition(_ item: ScoreStandItem) -> Binding<Int?> {
-        Binding(get: { pagePositions[item.id] }, set: { pagePositions[item.id] = $0 })
+        Binding(get: { pagePositions[item.id] }, set: { page in
+            guard let page, page != (pagePositions[item.id] ?? 0) else { return }
+            pagePositions[item.id] = page
+        })
     }
 
     private func leadControl(inRow: Bool) -> some View {
@@ -894,7 +904,7 @@ struct ScoreStandView: View {
 
     /// A page's drawing: everyone else's, and this member's own.
     private func inkFor(_ item: ScoreStandItem, page: Int) -> PageInk {
-        ScoreStandModel.pageInk(model.inks[item.id] ?? ScoreInkStore.Layers(), page: page)
+        ScoreStandModel.pageInk(model.inkLayers(item), page: page)
     }
 
     @ViewBuilder
@@ -1004,18 +1014,60 @@ struct ScoreStandView: View {
         if editing || drawing || items.count < 2, let item {
             songContent(item)
         } else {
-            TabView(selection: $index) {
-                ForEach(Array(items.enumerated()), id: \.offset) { position, song in
-                    songContent(song)
-                        .task { await model.load(song) }
-                        .tag(position)
+            // One song a swipe, however fast the flick. A paged TabView let a
+            // flick carry on past the next song — two songs on, or stopped
+            // between two on an iPad. Each song is exactly the pager's size,
+            // measured, and the scroll snaps a page at a time.
+            //
+            // Which song is up is read from where the scroll has come to
+            // rest — exactly on a song — not bound to it: written while the
+            // snap was still moving, it pulled the snap short, and a phone's
+            // swipe stopped with part of the song before still showing.
+            ScrollViewReader { proxy in
+                GeometryReader { pager in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 0) {
+                            ForEach(Array(items.enumerated()), id: \.offset) { position, song in
+                                songContent(song)
+                                    .frame(width: pager.size.width, height: pager.size.height)
+                                    .task { await model.load(song) }
+                                    .id(position)
+                            }
+                        }
+                        .scrollTargetLayout()
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("pager")).minX } action: { x in
+                            let width = pager.size.width
+                            guard width > 0 else { return }
+                            let page = (-x / width).rounded()
+                            // At rest on a song, not passing through.
+                            guard abs(-x - page * width) < 1 else { return }
+                            let song = Int(page)
+                            guard song != index, items.indices.contains(song) else { return }
+                            swipedTo = song
+                            index = song
+                        }
+                    }
+                    .coordinateSpace(name: "pager")
+                    .scrollIndicators(.hidden)
+                    .scrollTargetBehavior(.paging)
                 }
+                // Turned by the arrows, a key, or the session leader: the
+                // scroll is brought there.
+                .onChange(of: index) { _, song in
+                    guard song != swipedTo else { swipedTo = nil; return }
+                    swipedTo = nil
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(song, anchor: .leading) }
+                }
+                .onAppear { proxy.scrollTo(index, anchor: .leading) }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .task(id: "\(index)|\(showsChart)") {
                 // The next song read ahead, so the swipe lands on it ready —
-                // its 코드표 too, when that is what is showing.
-                guard items.indices.contains(index + 1) else { return }
+                // its 코드표 too, when that is what is showing. Once the swipe
+                // has settled: loading it changes the stand, and a change
+                // while the pager was still sliding left it stopped between
+                // two songs.
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled, items.indices.contains(index + 1) else { return }
                 await model.load(items[index + 1])
                 if showsChartFor(items[index + 1]) { await model.loadChart(items[index + 1]) }
             }
@@ -1105,11 +1157,11 @@ struct ScoreStandView: View {
 
     // MARK: - Controls
 
-    /// Key on the left, 원본 in the middle, tools on the right and the
-    /// song arrows at the far right edge — one row where it fits, two where
-    /// it does not. The arrows were split, ‹ at the left end and › at the
-    /// right; on a stand both are reached with the same hand, so they sit
-    /// together.
+    /// 원본 and the key on the left; the tools on the right, ending in one
+    /// slot that holds 공유 and the song arrows, or — in 편집 — + 코드 and
+    /// 되돌리기. The slot keeps its width either way, so 편집 and 완료 are one
+    /// button in one place, and the pencil beside it. One line on an iPad
+    /// in both modes; two on a phone.
     ///
     /// The first layout was one scrolling row: on a phone it ran off the
     /// edge, and the key itself was never shown — only "+1" and a lone ♭
@@ -1117,50 +1169,64 @@ struct ScoreStandView: View {
     /// is the biggest thing in the row.
     private func controls(_ item: ScoreStandItem) -> some View {
         ViewThatFits(in: .horizontal) {
-            // One line: 원본 centred on the bar, in 편집 and out — it stays
-            // where the finger knows it. Room kept for it in the middle.
             HStack(spacing: 8) {
+                originalButton(item)
                 keyGroup(item)
-                if editing {
-                    // Paused while the page is shown as printed.
-                    editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
-                }
-                Spacer(minLength: 76)
+                Spacer(minLength: 12)
                 Built { toolGroup(item) }
-                songNav()
+                Built { endSlot(item) }
             }
             .padding(.horizontal, 16)
-            .overlay { originalButton(item) }
 
             VStack(spacing: 8) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    originalButton(item)
                     keyGroup(item)
-                    if editing {
-                    // Paused while the page is shown as printed.
-                    editGroup(item).disabled(model.states[item.id]?.showsOriginal == true)
-                }
-                    Spacer(minLength: 8)
-                    if !editing || sizeClass == .regular { originalButton(item) }
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 16)
-                HStack(spacing: 10) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) {
-                            Spacer(minLength: 0)
-                            Built { toolGroup(item) }
-                        }
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) { Built { toolGroup(item) } }
-                        }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        Built { toolGroup(item) }
+                        Built { endSlot(item) }
                     }
-                    // Outside the scroll: the arrows never scroll away.
-                    songNav()
+                    .padding(.horizontal, 16)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            Built { toolGroup(item) }
+                            Built { endSlot(item) }
+                        }
+                        .padding(.horizontal, 16)
+                    }
                 }
-                .padding(.horizontal, 16)
             }
         }
         .padding(.vertical, 10)
         .background(Color.white.opacity(0.06))
+    }
+
+    /// The end of the bar: 공유 and the song arrows; in 편집, + 코드 and
+    /// 되돌리기 in their place. Both laid out, one shown, so the slot is the
+    /// same width in both modes and nothing before it moves.
+    private func endSlot(_ item: ScoreStandItem) -> some View {
+        ZStack(alignment: .leading) {
+            HStack(spacing: 8) {
+                shareButton(item)
+                songNav()
+            }
+            .opacity(editing ? 0 : 1)
+            .allowsHitTesting(!editing)
+            .accessibilityHidden(editing)
+            HStack(spacing: 8) {
+                editGroup(item)
+                    // Paused while the page is shown as printed.
+                    .disabled(model.states[item.id]?.showsOriginal == true)
+            }
+            .opacity(editing ? 1 : 0)
+            .allowsHitTesting(editing)
+            .accessibilityHidden(!editing)
+        }
     }
 
     @ViewBuilder
@@ -1213,8 +1279,8 @@ struct ScoreStandView: View {
         .disabled(!ready)
     }
 
-    /// What editing adds, on the left beside the key — so 완료 stays where
-    /// 편집 was and the finger that pressed one finds the other.
+    /// What editing adds, at the end of the bar after 완료 and the pencil,
+    /// in the place 공유 and the arrows leave.
     @ViewBuilder
     private func editGroup(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
@@ -1295,55 +1361,46 @@ struct ScoreStandView: View {
             } label: {
                 pill(Text(editing ? "완료" : "편집"), active: editing, wide: true)
             }
-            .disabled(!(state?.isReady ?? false) || drawing)
+            .disabled(!(state?.isReady ?? false))
             .accessibilityLabel(editing ? "편집 끝내기" : "코드 위치·글자 편집")
             // 그리기: Pencil or finger on the page — this member's own marks,
-            // seen by the team.
+            // seen by the team. From 편집 it goes straight to 그리기: it was
+            // greyed out there, and read as broken.
             Button {
-                drawing.toggle()
-                if drawing { editing = false }
+                if drawing { drawing = false } else { editing = false; drawing = true }
             } label: {
                 pill(drawing ? AnyView(Text("완료")) : AnyView(Image(systemName: "pencil.tip.crop.circle")),
                      active: drawing)
             }
-            .disabled(!(state?.isReady ?? false) || editing)
+            .disabled(!(state?.isReady ?? false))
             .accessibilityLabel(drawing ? "그리기 끝내기" : "그리기")
         }
+    }
 
-        // Not while editing — sharing an edit in progress is what 완료 then
-        // 공유 is for — but their place is kept, so 완료 sits exactly where
-        // 편집 did.
-        // A view of its own, not built here: the stand's body, its bar and
-        // this menu were built as one value nested many calls deep, and on
-        // a Debug build opened from 작업실 that ran the main thread out of
-        // stack. Its own body is built apart, at the top of the stack.
-        StandShareMenu(model: model, item: item, isReady: state?.isReady == true, ready: ready,
-                       shift: state?.shift ?? 0, notice: notices[item.song],
-                       setLabel: items.count > 1
-                           ? (setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로")
-                           : nil,
-                       exportSet: {
-                           await model.exportSet(contiItems, title: setTitle, fileName: setFileName,
-                                                 captions: setCaptions, notices: notices, upload: uploadSet)
-                       },
-                       uploadTransposed: uploadTransposed)
-        .opacity(editing ? 0 : 1)
-        .allowsHitTesting(!editing)
-        .accessibilityHidden(editing)
-        // While editing, 원본 takes the place 공유 leaves: beside 완료, a
-        // check to make often, and the row stays one line on iPad.
-        // (On a phone. iPad keeps 원본 where it always is.)
-        .overlay(alignment: .leading) {
-            if editing && sizeClass != .regular { originalButton(item) }
-        }
-
+    /// 저장·공유, and the transposed chart up to Drive.
+    ///
+    /// A view of its own, not built here: the stand's body, its bar and
+    /// this menu were built as one value nested many calls deep, and on a
+    /// Debug build opened from 작업실 that ran the main thread out of stack.
+    /// Its own body is built apart, at the top of the stack.
+    private func shareButton(_ item: ScoreStandItem) -> some View {
+        let state = model.states[item.id]
+        let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
+        return StandShareMenu(model: model, item: item, isReady: state?.isReady == true, ready: ready,
+                              shift: state?.shift ?? 0, notice: notices[item.song],
+                              setLabel: items.count > 1
+                                  ? (setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로")
+                                  : nil,
+                              exportSet: {
+                                  await model.exportSet(contiItems, title: setTitle, fileName: setFileName,
+                                                        captions: setCaptions, notices: notices, upload: uploadSet)
+                              },
+                              uploadTransposed: uploadTransposed)
     }
 
     /// Previous and next song, side by side at the right edge.
     @ViewBuilder
     private func songNav() -> some View {
-        // While editing there is one song on the stand and no pager; the
-        // arrows keep their place, unseen, for the same reason as 공유.
         if items.count > 1 {
             HStack(spacing: 6) {
                 Button { go(-1) } label: { pill(Image(systemName: "chevron.left")) }
@@ -1353,10 +1410,6 @@ struct ScoreStandView: View {
                     .disabled(index >= items.count - 1)
                     .accessibilityLabel("다음 곡")
             }
-            .padding(.leading, 4)
-            .opacity(editing ? 0 : 1)
-            .allowsHitTesting(!editing)
-            .accessibilityHidden(editing)
         }
     }
 
@@ -1669,7 +1722,6 @@ final class ScoreStandModel: ObservableObject {
     func load(_ item: ScoreStandItem) async {
         knownItems[item.id] = item
         onScreen = item
-        if inks[item.id] == nil { inks[item.id] = ScoreInkStore.load(item.id) }
         defer { readIfInRoom() }
         if states[item.id] != nil { return }
         if let cached = Self.cache[item.id] {
@@ -2221,6 +2273,10 @@ final class ScoreStandModel: ObservableObject {
 
     /// Every layer of each chart on this device (ScoreInkStore).
     @Published var inks: [String: ScoreInkStore.Layers] = [:]
+    /// As read from the device, before anything changed: kept apart from
+    /// `inks`, so reading a song's drawings as it comes on screen does not
+    /// redraw the stand — mid-swipe, that stopped the pager between songs.
+    private var inksRead: [String: ScoreInkStore.Layers] = [:]
 
     /// This member, as their layers are named: the same on all their
     /// devices, and no address on the sheet.
@@ -2230,7 +2286,10 @@ final class ScoreStandModel: ObservableObject {
     }
 
     func inkLayers(_ item: ScoreStandItem) -> ScoreInkStore.Layers {
-        inks[item.id] ?? ScoreInkStore.load(item.id)
+        if let layers = inks[item.id] ?? inksRead[item.id] { return layers }
+        let layers = ScoreInkStore.load(item.id)
+        inksRead[item.id] = layers
+        return layers
     }
 
     /// A page's drawing: everyone else's as their stands drew it, and this
