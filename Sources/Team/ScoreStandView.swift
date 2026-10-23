@@ -207,6 +207,9 @@ struct ScoreStandView: View {
         .onChange(of: pagePositions) { _, _ in
             if model.leading, let item { model.leaderMoved(item, page: pagePositions[item.id] ?? 0) }
         }
+        .onChange(of: item.flatMap { model.states[$0.id]?.targetRoot }) { _, _ in
+            if let item { model.leaderChangedKey(item) }
+        }
     }
 
     /// The songs. A tap goes into 연주 모드 and out again — the page alone,
@@ -258,6 +261,7 @@ struct ScoreStandView: View {
             withAnimation(.easeOut(duration: 0.2)) { index = target }
         }
         withAnimation(.easeOut(duration: 0.25)) { pagePositions[items[target].id] = lead.page }
+        if let root = lead.root { model.show(items[target], in: root) }
     }
 
     private func pagePosition(_ item: ScoreStandItem) -> Binding<Int?> {
@@ -429,6 +433,16 @@ struct ScoreStandView: View {
                     if DebugHarness.exportScoreSet { await model.exportSet(contiItems, title: setTitle, fileName: setFileName, captions: setCaptions, notices: notices, upload: uploadSet) }
                 }
                 #endif
+            }
+
+            // 연주 모드: the key up or down mid-song — a song that steps up
+            // for its last chorus — without bringing the bars back.
+            if fullPage, !editing, !drawing, let item, model.states[item.id]?.isRead == true {
+                KeyNudge(model: model, item: item)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 24)
+                    .transition(.opacity)
             }
 
             // Nothing to show — said, rather than a black screen.
@@ -2272,6 +2286,9 @@ final class ScoreStandModel: ObservableObject {
         let fileId: String
         let key: String
         let page: Int
+        /// The key the leader has the song in, as a root (0 = C): a key
+        /// raised mid-song is raised on every stand following.
+        var root: Int? = nil
 
         func matches(_ item: ScoreStandItem) -> Bool {
             item.attachment.fileId == fileId && SharedEdits.key(pages: item.pages) == key
@@ -2311,7 +2328,29 @@ final class ScoreStandModel: ObservableObject {
     private func sendLead() {
         guard leading, let (item, page) = leadAt else { return }
         RehearsalLink.shared.send(.init(kind: .lead, fileId: item.attachment.fileId,
-                                        key: SharedEdits.key(pages: item.pages), page: page, from: nearbyName))
+                                        key: SharedEdits.key(pages: item.pages),
+                                        root: states[item.id]?.targetRoot, page: page, from: nearbyName))
+    }
+
+    /// The leader changed key: the room hears it at once.
+    func leaderChangedKey(_ item: ScoreStandItem) {
+        guard leading, leadAt?.item.id == item.id else { return }
+        sendLead()
+    }
+
+    /// A chart shown in a key — the leader's — when its chords are read
+    /// and its own key is known; nothing is read for it.
+    func show(_ item: ScoreStandItem, in root: Int) {
+        guard let state = states[item.id], state.isRead, let from = state.scoreRoot,
+              state.targetRoot != root else { return }
+        var shift = ((root - from) % 12 + 12) % 12
+        if shift > 6 { shift -= 12 }
+        update(item) { state in
+            state.shift = shift
+            state.showsOriginal = false
+        }
+        Self.saveShift(shift, for: item.id)
+        recordKey(item)
     }
 
     private func heardLead(_ message: RehearsalLink.Message) {
@@ -2321,7 +2360,7 @@ final class ScoreStandModel: ObservableObject {
             if leading { leading = false }
             leadHeard = Date()
             let heard = Lead(sender: message.sender, name: message.from.isEmpty ? "세션 리더" : message.from,
-                             fileId: message.fileId, key: message.key, page: message.page ?? 0)
+                             fileId: message.fileId, key: message.key, page: message.page ?? 0, root: message.root)
             if heard != lead { lead = heard }
         case .leadEnd:
             if lead?.sender == message.sender { lead = nil }
@@ -3154,6 +3193,37 @@ private struct ScreenPage: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// ▲ key ▼, small in a corner in 연주 모드: a song that steps up for its
+/// last chorus is stepped up there and then, the bars left away. Faint, so
+/// it is not read as part of the page.
+private struct KeyNudge: View {
+    @ObservedObject var model: ScoreStandModel
+    let item: ScoreStandItem
+
+    var body: some View {
+        let state = model.states[item.id]
+        VStack(spacing: 2) {
+            Button { model.step(item, 1) } label: {
+                Image(systemName: "chevron.up").frame(width: 44, height: 36)
+            }
+            .accessibilityLabel("키 반음 올리기")
+            Text(state?.targetRoot.map { ScoreStandModel.name($0, flats: state?.useFlats ?? false) } ?? "–")
+                .font(.system(size: 15, weight: .bold))
+                .monospacedDigit()
+                .accessibilityHidden(true)
+            Button { model.step(item, -1) } label: {
+                Image(systemName: "chevron.down").frame(width: 44, height: 36)
+            }
+            .accessibilityLabel("키 반음 내리기")
+        }
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+        .opacity(0.75)
     }
 }
 
