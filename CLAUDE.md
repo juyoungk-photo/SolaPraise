@@ -48,6 +48,10 @@ found by the user rather than by me:
 
 ## UI rules
 
+- **The 악보 has three modes, in this order of work:** 일반 (key and
+  transposition, comparing with the print) → 편집 (correcting chords and
+  marking up) → 연주 (the page alone, to play from). The key can still be
+  stepped in 연주 모드 — a song that steps up mid-song — without leaving it.
 - **The 악보 never moves when a mode changes.** Entering or leaving 편집,
   그리기 or 연주 모드 leaves the page where it was, the same size: a chord
   is checked against the page as it was, and a player mid-song loses
