@@ -927,7 +927,7 @@ struct ScoreStandView: View {
                             page: page,
                             shift: state.showsOriginal ? 0 : state.shift,
                             useFlats: state.useFlats,
-                            scale: model.chordScale,
+                            scale: model.chordScale(item),
                             // 원본 while editing is a check: the page as
                             // printed, nothing drawn or editable on it.
                             original: state.showsOriginal,
@@ -1325,18 +1325,18 @@ struct ScoreStandView: View {
     private func toolGroup(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
         let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        // Size, for what is on screen: the chords on the page — for charts
-        // printed small; applies to the export too — or the 코드표, each
-        // its own setting, remembered on this device.
-        let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale <= 0.71
-        let larger = showsChart ? model.chartScale >= 2.39 : model.chordScale >= 2.49
+        // Size, for what is on screen: the chords on this chart — each chart
+        // its own, as each is printed at its own size; applies to the export
+        // too — or the 코드표, one size for all. Remembered on this device.
+        let smaller = showsChart ? model.chartScale <= 0.61 : model.chordScale(item) <= 0.71
+        let larger = showsChart ? model.chartScale >= 2.39 : model.chordScale(item) >= 2.49
         Button {
-            if showsChart { model.resizeChart(by: -0.05) } else { model.resize(by: -0.05) }
+            if showsChart { model.resizeChart(by: -0.05) } else { model.resize(item, by: -0.05) }
         } label: { pill(Text("A").font(.system(size: 13, weight: .bold))) }
             .disabled(!ready || smaller)
             .accessibilityLabel(showsChart ? "코드표 글자 작게" : "코드 글자 작게")
         Button {
-            if showsChart { model.resizeChart(by: 0.05) } else { model.resize(by: 0.05) }
+            if showsChart { model.resizeChart(by: 0.05) } else { model.resize(item, by: 0.05) }
         } label: { pill(Text("A").font(.system(size: 21, weight: .bold))) }
             .disabled(!ready || larger)
             .accessibilityLabel(showsChart ? "코드표 글자 크게" : "코드 글자 크게")
@@ -1686,15 +1686,25 @@ final class ScoreStandModel: ObservableObject {
     var pendingExport: ExportFile?
     @Published var isExporting = false
     @Published var isUploading = false
-    /// The reader's chord size, 1 = as printed. Per device: a stand at arm's
-    /// length and a keyboard at two metres want different sizes.
-    @Published private(set) var chordScale: CGFloat =
+    /// The chords' size on a chart, 1 = as printed — each chart its own:
+    /// one is printed small and wants them large, the next is printed large.
+    /// Remembered on this device, by chart (and by song, for a 콘티 file).
+    /// A chart not yet sized starts at the size this device used before
+    /// sizes were kept per chart.
+    @Published private(set) var chordScales: [String: CGFloat] =
+        ((UserDefaults.standard.dictionary(forKey: "score.chordScales") as? [String: Double]) ?? [:])
+            .mapValues { CGFloat($0) }
+    private static let startingChordScale: CGFloat =
         (UserDefaults.standard.object(forKey: "score.chordScale") as? Double).map { CGFloat($0) } ?? 1
 
-    func resize(by step: CGFloat) {
+    func chordScale(_ item: ScoreStandItem) -> CGFloat {
+        chordScales[item.id] ?? Self.startingChordScale
+    }
+
+    func resize(_ item: ScoreStandItem, by step: CGFloat) {
         // Steps of 0.05: 0.1 jumped past the size wanted.
-        chordScale = min(2.5, max(0.7, ((chordScale + step) * 20).rounded() / 20))
-        UserDefaults.standard.set(Double(chordScale), forKey: "score.chordScale")
+        chordScales[item.id] = min(2.5, max(0.7, ((chordScale(item) + step) * 20).rounded() / 20))
+        UserDefaults.standard.set(chordScales.mapValues { Double($0) }, forKey: "score.chordScales")
     }
 
     /// The 코드표's own size, apart from the chords on the page: they
@@ -2728,7 +2738,7 @@ final class ScoreStandModel: ObservableObject {
         let pages = inked(item, state.pages)
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
-        let scale = chordScale
+        let scale = chordScale(item)
         return await Task.detached(priority: .userInitiated) {
             ScoreTransposer.transposed(pages: pages, by: shift, useFlats: flats, scale: scale,
                                        caption: caption, notice: notice)
@@ -2744,7 +2754,7 @@ final class ScoreStandModel: ObservableObject {
         let pages = inked(item, state.pages)
         let shift = state.showsOriginal ? 0 : state.shift
         let flats: Bool? = state.useFlats
-        let scale = chordScale
+        let scale = chordScale(item)
         let images = await Task.detached(priority: .userInitiated) {
             ScoreTransposer.images(pages: pages, by: shift, useFlats: flats, scale: scale)
         }.value
