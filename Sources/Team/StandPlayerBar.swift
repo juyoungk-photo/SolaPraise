@@ -10,7 +10,8 @@
 //  means its recording: the bridge again, the key change again. A place
 //  marked once (책갈피) is a tap away from then on, on this device.
 //
-//  Same on both devices: one thin line, no thumbnail.
+//  Same on both devices: one thin line, no thumbnail — ten seconds back,
+//  play, ten seconds on, where it is, the bar, its length, 책갈피.
 //
 
 import SwiftUI
@@ -60,13 +61,29 @@ struct StandPlayerBar: View {
         let playing = isThis(videoId)
         let duration = playing ? player.duration : 0
         let now = scrub ?? (playing ? player.currentTime : 0)
-        return HStack(spacing: 10) {
+        return HStack(spacing: 6) {
+            // Ten seconds back and on, either side of play: a bar missed,
+            // heard again, without aiming for it on the bar.
+            Button { player.skip(forward: false) } label: {
+                Image(systemName: "gobackward.10")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 30, height: 30)
+            }
+            .disabled(!playing)
+            .accessibilityLabel("10초 뒤로")
             Button { playPause(videoId) } label: {
                 Image(systemName: playing && player.state == .playing ? "pause.fill" : "play.fill")
                     .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 34, height: 30)
+                    .frame(width: 30, height: 30)
             }
             .accessibilityLabel(playing && player.state == .playing ? "일시정지" : "이 곡 재생")
+            Button { player.skip(forward: true) } label: {
+                Image(systemName: "goforward.10")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 30, height: 30)
+            }
+            .disabled(!playing)
+            .accessibilityLabel("10초 앞으로")
 
             Text(Self.clock(now))
                 .monospacedDigit()
