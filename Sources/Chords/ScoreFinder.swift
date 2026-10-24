@@ -75,6 +75,7 @@ enum ScoreFinder {
             .environmentObject(quota)
             .environmentObject(player)
             .environment(\.playerActions, player)
+            .environment(\.quotaLedger, quota)
             .environment(\.modelContext, context)
         let host = UIHostingController(rootView: AnyView(view))
         host.modalPresentationStyle = .fullScreen

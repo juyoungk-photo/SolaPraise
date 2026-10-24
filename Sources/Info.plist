@@ -70,7 +70,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>연주 모드의 악보를 지금 키 그대로 사진에 저장합니다.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>SolaPraise listens to the song playing to detect its musical key and chords.</string>
+	<string>재생 중인 찬양을 들어 키와 코드를 찾고, 연결한 오디오 장치로 연주를 녹음합니다.</string>
 	<key>TeamSheetId</key>
 	<string>$(TEAM_SHEET_ID)</string>
 	<key>UIBackgroundModes</key>

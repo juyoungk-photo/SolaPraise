@@ -126,8 +126,9 @@ final class LocalScores: ObservableObject {
     }
 
     /// A chart, not a print: at most 3000 px on the long side, as JPEG —
-    /// the same as a chart attached in 예배 준비.
-    static func chartJPEG(_ data: Data) -> Data? {
+    /// the same as a chart attached in 예배 준비. Touches nothing of the
+    /// store's, so it runs off the main thread — a photo takes a second.
+    nonisolated static func chartJPEG(_ data: Data) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         let long = max(image.size.width * image.scale, image.size.height * image.scale)
         let factor = min(1, 3000 / max(long, 1))
