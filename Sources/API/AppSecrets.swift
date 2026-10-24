@@ -82,11 +82,13 @@ enum AppSecrets {
         return trimmed
     }
 
-    /// Addresses that see features still under development.
+    /// Addresses that see features still under development, each as its
+    /// SHA-256 (DevGate.digest) — never the address, which would ship in
+    /// the app's Info.plist for anyone to read.
     ///
     /// Out of the gitignored config rather than the source: the repository
-    /// is public and these are real people's addresses. Empty everywhere
-    /// but the developer's own build, which is correct.
+    /// is public and these are real people's. Empty everywhere but the
+    /// developer's own build, which is correct.
     static var devAccounts: Set<String> {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: "DevAccounts") as? String
         else { return [] }

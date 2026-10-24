@@ -10,11 +10,13 @@
 //  visible to the person developing it and invisible to everyone else, in
 //  the same build, rather than living on a branch that drifts.
 //
-//  THE ADDRESSES ARE NOT IN THIS FILE. The repository is public, and the
-//  history was scrubbed once already to get a personal handle and a church
-//  domain out of it. They are read from the gitignored Secrets.xcconfig,
-//  the same way the API keys are — a build without that file simply has no
-//  developer accounts, which is the right answer for every build but one.
+//  THE ADDRESSES ARE NOT IN THIS FILE, NOR IN THE APP. The repository is
+//  public, and the history was scrubbed once already to get a personal
+//  handle and a church domain out of it. The gitignored Secrets.xcconfig
+//  holds each developer address as its SHA-256 (Tools/dev-account-hash.sh)
+//  — what goes into the app's Info.plist, which anyone who downloads the
+//  app can read. A build without that file has no developer accounts, the
+//  right answer for every build but one.
 //
 //  NOT A SECURITY BOUNDARY, and not pretending to be. Anyone can read this
 //  source and see what it gates; the point is to keep an unfinished feature
@@ -22,6 +24,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 enum DevGate {
 
@@ -44,13 +47,17 @@ enum DevGate {
             .contains { matches($0, allowed) }
     }
 
-    /// Matches the whole address or just its local part, so a config may say
-    /// either "someone@example.org" or "someone".
+    /// Matches the whole address or just its local part, so a config may
+    /// hold the hash of either "someone@example.org" or "someone".
     private static func matches(_ email: String, _ allowed: Set<String>) -> Bool {
         let address = email.trimmingCharacters(in: .whitespaces).lowercased()
         guard !address.isEmpty else { return false }
-        if allowed.contains(address) { return true }
         let local = address.split(separator: "@").first.map(String.init) ?? address
-        return allowed.contains(local)
+        return allowed.contains(digest(address)) || allowed.contains(digest(local))
+    }
+
+    /// SHA-256, lowercase hex — as `printf %s ADDRESS | shasum -a 256` prints it.
+    static func digest(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
