@@ -949,16 +949,24 @@ struct ScoreStandView: View {
             let fits = sizeClass == .regular
             ScrollView {
                 VStack(spacing: fits ? 0 : 12) {
-                    // The 헌금송's prayer and call, read before the song.
-                    // On an iPad a screen of its own, the card in its middle:
-                    // read first, then the chart a swipe down. Atop the first
-                    // page it sat under the bars that float over the pages.
-                    if let notice = notices[item.song], !editing {
+                    // The 헌금송's prayer and call, read before the song. On
+                    // a phone, above its first page. On an iPad, on the first
+                    // screen with that page, the page fitted under it — a
+                    // screen of its own hid the chart a swipe away, and atop
+                    // the page it sat under the bars that float there.
+                    let notice = editing ? nil : notices[item.song]
+                    if let notice, !fits {
                         noticeCard(notice)
-                            .frame(maxWidth: fits ? 720 : .infinity)
-                            .modifier(ScreenPage(on: fits))
                     }
                     ForEach(Array(state.pages.enumerated()), id: \.offset) { pageIndex, page in
+                        VStack(spacing: 10) {
+                        if fits, pageIndex == 0, let notice {
+                            noticeCard(notice)
+                                // Clear of the header bar, in every mode alike:
+                                // the page does not move when the bars go.
+                                .padding(.top, 84)
+                                .padding(.horizontal, 8)
+                        }
                         Built { ScorePageView(
                             page: page,
                             shift: state.showsOriginal ? 0 : state.shift,
@@ -979,6 +987,7 @@ struct ScoreStandView: View {
                             ink: inkFor(item, page: pageIndex),
                             drawing: drawing,
                             onInk: { data in model.setMyInk(item, page: pageIndex, drawing: data) }) }
+                        }
                         .modifier(ScreenPage(on: fits))
                         .id(pageIndex)
                     }
