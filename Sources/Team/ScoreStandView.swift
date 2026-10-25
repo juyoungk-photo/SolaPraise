@@ -531,22 +531,43 @@ struct ScoreStandView: View {
 
     /// A notice for the song — its first line the heading — on the stand
     /// as it is on the printed chart.
+    /// Read out from a stand mid-service: large — the call in body text and
+    /// the name in a headline were too small to read at a music stand's
+    /// distance. Who prays stands out on a line of its own.
     private func noticeCard(_ notice: String) -> some View {
         let lines = notice.components(separatedBy: "\n")
-        return VStack(alignment: .leading, spacing: 6) {
-            Label(lines.first ?? "", systemImage: (lines.first ?? "").hasPrefix("헌금송") ? "gift" : "note.text")
-                .font(.headline)
+        let first = lines.first ?? ""
+        let isOffering = first.hasPrefix("헌금")
+        // 「헌금 찬양 · 헌금기도: 홍길동 형제님」 → the heading and the name.
+        let parts = first.components(separatedBy: "헌금기도:")
+        let heading = parts[0].trimmingCharacters(in: CharacterSet(charactersIn: " ·"))
+        let prayer = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : nil
+        let wide = sizeClass == .regular
+        return VStack(alignment: .leading, spacing: wide ? 12 : 8) {
+            Label(heading, systemImage: isOffering ? "gift" : "note.text")
+                .font(.system(size: wide ? 24 : 20, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
+            if let prayer, !prayer.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("헌금기도")
+                        .font(.system(size: wide ? 22 : 18, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(prayer)
+                        .font(.system(size: wide ? 30 : 24, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
             if lines.count > 1 {
                 Text(lines.dropFirst().joined(separator: "\n"))
-                    .font(.callout)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .font(.system(size: wide ? 24 : 20))
+                    .lineSpacing(wide ? 6 : 4)
+                    .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(14)
+        .padding(wide ? 22 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.1)))
     }
 
     /// The key the page is showing: the printed one under 원본, else the
@@ -922,8 +943,13 @@ struct ScoreStandView: View {
             ScrollView {
                 VStack(spacing: fits ? 0 : 12) {
                     // The 헌금송's prayer and call, read before the song.
+                    // On an iPad a screen of its own, the card in its middle:
+                    // read first, then the chart a swipe down. Atop the first
+                    // page it sat under the bars that float over the pages.
                     if let notice = notices[item.song], !editing {
                         noticeCard(notice)
+                            .frame(maxWidth: fits ? 720 : .infinity)
+                            .modifier(ScreenPage(on: fits))
                     }
                     ForEach(Array(state.pages.enumerated()), id: \.offset) { pageIndex, page in
                         Built { ScorePageView(
