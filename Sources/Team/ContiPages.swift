@@ -39,6 +39,11 @@ enum ContiPages {
         UserDefaults.standard.set(counts, forKey: key + ".count")
     }
 
+    /// A 콘티 the app made: its pages known as it was put together, not read.
+    static func remember(_ pages: [Int: String], count: Int, for fileId: String) {
+        store(pages, count: count, for: fileId)
+    }
+
     /// The app's own 「콘티 PDF 만들기」 output, which is already in order and
     /// is not split again.
     static func isBuilt(_ attachment: Attachment) -> Bool {

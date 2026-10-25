@@ -363,8 +363,8 @@ struct ServicePrepView: View {
                                shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
                                    await team.chooseForConti(item, service: service, sheetId: sheetId!)
                                },
-                               uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name in
-                                   await team.uploadConti(data, name: name, service: service, sheetId: sheetId!,
+                               uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name, pages in
+                                   await team.uploadConti(data, name: name, pages: pages, service: service, sheetId: sheetId!,
                                                           by: team.actingEmail(auth: auth, planning: planning) ?? "")
                                })
             }

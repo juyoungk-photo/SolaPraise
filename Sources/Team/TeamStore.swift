@@ -1152,10 +1152,26 @@ final class TeamStore: ObservableObject {
     /// account may write there, else the app's 악보 folder — either way on
     /// the Attachments tab as the service's file, so every app lists it as
     /// the newest 콘티 and the sheet links to it. A message for the person.
-    func uploadConti(_ data: Data, name: String, service: TeamService, sheetId: String, by who: String) async -> String {
+    /// - pages: which page is which song, as the 콘티 was put together. Kept
+    ///   for the file, with the file itself, so it is never downloaded
+    ///   again and read page by page to find out what was just known —
+    ///   which it was, at once, every time a 콘티 was made.
+    func uploadConti(_ data: Data, name: String, pages: [Int: String] = [:],
+                     service: TeamService, sheetId: String, by who: String) async -> String {
         if let failure = await attach(data: data, name: name, mimeType: "application/pdf", song: "",
                                       to: service, sheetId: sheetId, by: who, folder: ContiFolder.folderId) {
             return "팀에 올리지 못했습니다: \(failure)\n공유 창에서 직접 저장하세요."
+        }
+        if let uploaded = attachments(for: service).last(where: { $0.name == name }) {
+            ScoreFileCache.save(data, for: uploaded.fileId)
+            let songs = plan(for: service).filter { $0.kind == .song }.map(\.title)
+            // Songs of the 순서 only: a page carried over from an older 콘티
+            // is no song, and is shown as the rest.
+            let placed = pages.compactMap { page, song -> (Int, String)? in
+                songs.first { PlanSongTitle.sameSong($0, song) }.map { (page, $0) }
+            }
+            ContiPages.remember(Dictionary(placed, uniquingKeysWith: { first, _ in first }),
+                                count: (pages.keys.max() ?? -1) + 1, for: uploaded.fileId)
         }
         await loadContiFolder()
         return lastUploadWentToFolder
