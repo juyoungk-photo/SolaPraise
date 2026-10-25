@@ -4,9 +4,11 @@
 //
 //  One more line in the order of service.
 //
-//  헌신 찬양 is offered by name at the top: it goes in most weeks, and the
-//  same song for months — the last ones sung are there to pick, with their
-//  video and key, and only who prays is asked. Its 악보 follow by
+//  헌신 찬양 has its own shortcut in 순서 추가 및 조정: it goes in most
+//  weeks, and the same song for months — the last ones sung are there to
+//  pick, with their video and key, and only who prays is asked. On a sheet
+//  that keeps its 순서 as the Songs tab's 찬양 alone (no Plan tab), it is
+//  written there, as 콘티에 추가 writes a song. Its 악보 follow by
 //  themselves: a song with no chart this week shows the one it was last
 //  played from. The call said before it is the church's, set in 설정.
 //
@@ -20,6 +22,8 @@ import SwiftUI
 
 struct AddPlanItemSheet: View {
     let service: TeamService
+    /// Adding the 헌신 찬양: a song, with who prays.
+    var dedication = false
     @EnvironmentObject private var team: TeamStore
     @Environment(\.dismiss) private var dismiss
 
@@ -27,9 +31,8 @@ struct AddPlanItemSheet: View {
     @State private var kind: PlanItem.Kind = .other
     @State private var minutes = ""
     @State private var isSaving = false
-    /// Adding the 헌신 찬양: a song, with who prays.
-    @State private var dedication = false
     @State private var prayer = ""
+    @State private var failure: String?
     /// The earlier 헌신찬양 picked: its video and key come with it.
     @State private var picked: PlanItem?
 
@@ -40,24 +43,17 @@ struct AddPlanItemSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Toggle(isOn: $dedication.animation()) {
-                        Label("헌신 찬양", systemImage: "gift")
-                    }
-                } footer: {
-                    Text("헌금 때 부르는 찬양입니다. 지난번 곡을 고르고 헌금기도자만 적으면 됩니다.")
-                }
                 if dedication {
                     dedicationSections
                 } else {
                     plainSection
                 }
 
-                if let message = team.errorMessage {
+                if let message = failure ?? team.errorMessage {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
             }
-            .navigationTitle("순서 추가")
+            .navigationTitle(dedication ? "헌신 찬양" : "순서 추가")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -80,7 +76,7 @@ struct AddPlanItemSheet: View {
     private var dedicationSections: some View {
         let recent = team.recentOfferingSongs(before: service.date)
         if !recent.isEmpty {
-            Section("지난 헌신찬양") {
+            Section("최근 헌신찬양") {
                 ForEach(recent, id: \.item.id) { entry in
                     Button {
                         picked = entry.item
@@ -139,6 +135,22 @@ struct AddPlanItemSheet: View {
         isSaving = true
         defer { isSaving = false }
         let name = title.trimmingCharacters(in: .whitespaces)
+        failure = nil
+        // No Plan tab: the 순서 is the Songs tab's 찬양, and a song goes there.
+        if (dedication || kind == .song), !team.hasPlanTab {
+            let result = await team.appendSong(
+                title: name, videoId: dedication ? picked?.videoId : nil, key: dedication ? picked?.key : nil,
+                channel: nil,
+                notes: dedication ? OfferingNote.notes(isOffering: true, prayer: prayer, rest: nil, word: "헌신찬양") : nil,
+                to: service, sheetId: sheetId)
+            switch result {
+            case .added: dismiss()
+            case .alreadyThere: failure = "이 곡은 이미 이 예배에 있습니다."
+            case .misplaced: failure = "시트의 다른 칸에 들어갔습니다 — 예배 준비에서 확인하세요."
+            case .failed(let message): failure = message
+            }
+            return
+        }
         let ok = dedication
             ? await team.appendPlanItem(
                 title: name, kind: .song, minutes: picked?.minutes,

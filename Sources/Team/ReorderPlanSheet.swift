@@ -46,6 +46,8 @@ struct ReorderPlanSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var adding = false
+    /// The 헌신 찬양 shortcut: 순서 추가 opened as it.
+    @State private var addingDedication = false
     /// The song whose 헌금송 mark is being set.
     @State private var offeringFor: Line?
 
@@ -102,6 +104,13 @@ struct ReorderPlanSheet: View {
                     Button { adding = true } label: {
                         Label("순서 추가", systemImage: "plus.circle.fill")
                     }
+                    // Most weeks, the same song for months: one tap to the
+                    // last ones sung, and who prays.
+                    Button { addingDedication = true } label: {
+                        Label("헌신 찬양", systemImage: "gift")
+                    }
+                } footer: {
+                    Text("헌신 찬양: 지난번 곡을 고르고 헌금기도자만 적으면 됩니다.")
                 }
 
                 if let errorMessage {
@@ -133,6 +142,9 @@ struct ReorderPlanSheet: View {
         // A line added is written at once, at the end of the 순서.
         .sheet(isPresented: $adding, onDismiss: merge) {
             AddPlanItemSheet(service: service).environmentObject(team)
+        }
+        .sheet(isPresented: $addingDedication, onDismiss: merge) {
+            AddPlanItemSheet(service: service, dedication: true).environmentObject(team)
         }
         .sheet(item: $offeringFor) { line in
             OfferingSheet(song: line.item.title, prayer: line.item.offering.prayer,

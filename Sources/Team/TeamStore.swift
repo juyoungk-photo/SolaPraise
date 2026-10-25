@@ -2515,7 +2515,7 @@ final class TeamStore: ObservableObject {
         guard let header = try? await client.readTable(
             sheetId: sheetId, tab: TeamSheet.planTab
         ).first, !header.isEmpty else {
-            errorMessage = "시트에 Plan 탭이 없습니다. 먼저 Plan 탭을 만들어 주세요."
+            errorMessage = "이 팀 시트는 순서를 Songs 탭의 찬양으로만 관리합니다(Plan 탭 없음). 찬양은 「헌신 찬양」이나 「콘티에 추가」로 넣을 수 있고, 기도·광고 같은 순서를 넣으려면 시트에 Plan 탭이 있어야 합니다."
             return false
         }
 
@@ -2556,18 +2556,36 @@ final class TeamStore: ObservableObject {
         }
     }
 
-    /// The offering songs (헌금송, 헌신찬양) sung before `day`, newest first,
-    /// one per song — to bring back as this week's, with its video and key.
-    /// A church that sings the same one for months finds it at the top.
+    /// The offering songs (헌금송, 헌신찬양) to bring back as this week's,
+    /// newest first, one per song: those marked so in the team's 순서
+    /// before `day`, and those the church sheet names as 헌신찬양 — up to
+    /// and including `day`, which the church office may have filled in
+    /// already. A name from the church sheet takes the video and key the
+    /// team last sang it with. A church that sings the same one for months
+    /// finds it at the top.
     func recentOfferingSongs(before day: Date, limit: Int = 6) -> [(item: PlanItem, date: Date)] {
         let start = Calendar.current.startOfDay(for: day)
-        var out: [(item: PlanItem, date: Date)] = []
-        for service in services.filter({ $0.date < start }).sorted(by: { $0.date > $1.date }) {
+        let past = services.filter { $0.date < start }.sorted { $0.date > $1.date }
+        var found: [(item: PlanItem, date: Date)] = []
+        for service in past {
             for item in plan(for: service) where item.kind == .song && item.offering.isOffering {
-                guard !out.contains(where: { PlanSongTitle.sameSong($0.item.title, item.title) }) else { continue }
-                out.append((item, service.date))
-                if out.count >= limit { return out }
+                found.append((item, service.date))
             }
+        }
+        // The church sheet's 헌신찬양, with what the team sang it with.
+        let sung = past.flatMap { service in plan(for: service).filter { $0.kind == .song } }
+        for note in churchNotes.values where note.date <= start.addingTimeInterval(86_399) {
+            guard let name = note.dedicationSong?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
+            let known = sung.first { PlanSongTitle.sameSong($0.title, name) && $0.url != nil }
+            found.append((known ?? PlanItem(order: 0, kind: .song, title: name, minutes: nil, person: nil,
+                                            key: nil, url: nil, notes: nil, row: nil),
+                          note.date))
+        }
+        var out: [(item: PlanItem, date: Date)] = []
+        for entry in found.sorted(by: { $0.date > $1.date }) {
+            guard !out.contains(where: { PlanSongTitle.sameSong($0.item.title, entry.item.title) }) else { continue }
+            out.append(entry)
+            if out.count >= limit { break }
         }
         return out
     }
@@ -2889,11 +2907,15 @@ final class TeamStore: ObservableObject {
         case failed(String)
     }
 
+    /// - videoId: nil for a song added by its name alone — the 헌신 찬양
+    ///   typed in rather than picked; then it is not checked for twice.
+    /// - notes: the Notes cell — 「헌신찬양 · 헌금기도: 이름」.
     func appendSong(
         title: String,
-        videoId: String,
+        videoId: String?,
         key: String?,
         channel: String? = nil,
+        notes: String? = nil,
         to service: TeamService,
         sheetId: String
     ) async -> AppendResult {
@@ -2904,11 +2926,11 @@ final class TeamStore: ObservableObject {
         // driven in a simulator without a sheet.
         if isSample {
             let day = Calendar.current.startOfDay(for: service.date)
-            if (plans[day] ?? []).contains(where: { $0.videoId == videoId }) { return .alreadyThere }
+            if let videoId, (plans[day] ?? []).contains(where: { $0.videoId == videoId }) { return .alreadyThere }
             let order = ((plans[day] ?? []).map(\.order).max() ?? 0) + 1
             plans[day, default: []].append(PlanItem(
                 order: order, kind: .song, title: title, minutes: nil, person: nil,
-                key: key, url: YouTubeID.watchURL(videoId), notes: nil, row: nil))
+                key: key, url: videoId.flatMap(YouTubeID.watchURL), notes: notes, row: nil))
             return .added
         }
         #endif
@@ -2926,7 +2948,7 @@ final class TeamStore: ObservableObject {
             // 콘티 ended up with the same video seven times. Checked against
             // the whole row, not the parsed view, so a copy sitting in the
             // wrong columns (invisible to the parser) still counts.
-            let already = existing.dropFirst().contains { row in
+            let already = videoId != nil && existing.dropFirst().contains { row in
                 row.contains { TeamSheet.day($0).map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
                     && row.contains { TeamSheet.videoKey($0) == videoId }
             }
@@ -2949,10 +2971,10 @@ final class TeamStore: ObservableObject {
                     date: dayText,
                     order: String(next),
                     title: tidy.title,
-                    url: YouTubeID.watchURL(videoId)?.absoluteString ?? "",
+                    url: videoId.flatMap(YouTubeID.watchURL)?.absoluteString ?? "",
                     key: key ?? "",
                     transpose: "",
-                    notes: "",
+                    notes: notes ?? "",
                     reference: tidy.reference,
                     existing: nil
                 )
@@ -2973,8 +2995,9 @@ final class TeamStore: ObservableObject {
             // And checked: the song must now be in the 콘티 as the app reads
             // it. If it is not, saying so is the whole difference between a
             // person retrying blindly and a person seeing the warning above.
-            let landed = (songs[day] ?? []).contains {
-                $0.url.flatMap { TeamSheet.videoKey($0.absoluteString) } == videoId
+            let landed = (songs[day] ?? []).contains { song in
+                if let videoId { return song.url.flatMap { TeamSheet.videoKey($0.absoluteString) } == videoId }
+                return song.title == tidy.title
             }
             return landed ? .added : .misplaced
         } catch {
