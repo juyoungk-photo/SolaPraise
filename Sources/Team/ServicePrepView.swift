@@ -1226,14 +1226,19 @@ struct ServicePrepView: View {
                 let offering = item.offering
                 if item.kind == .song, offering.isOffering {
                     // Not a Label: in a list row it takes the row's icon
-                    // column and spreads apart.
+                    // column and spreads apart. A tap changes who prays.
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Image(systemName: "gift")
-                        Text("헌금송" + (offering.prayer.map { " · 헌금기도 \($0)" } ?? ""))
+                        Text("헌금송" + (offering.prayer.map { " · 헌금기도 \($0)" } ?? " · 헌금기도자 정하기"))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard !team.isReadOnly else { return }
+                        offeringEdit = OfferingEdit(service: service, item: item)
+                    }
                 }
                 if let notes = item.kind == .song ? offering.rest : item.notes {
                     Text(notes).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
@@ -1280,9 +1285,7 @@ struct ServicePrepView: View {
                                channel: channelTitle(forVideo: item.videoId),
                                published: sheetLinks(forVideo: item.videoId),
                                finds: ScoreDestination(service: service, song: item.title, key: item.key),
-                               appChart: madeChart.map { chart in { openChart = chart } },
-                               offering: team.isReadOnly ? nil : item.offering,
-                               onOffering: { offeringEdit = OfferingEdit(service: service, item: item) }) {
+                               appChart: madeChart.map { chart in { openChart = chart } }) {
                     Image(systemName: "paperclip")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1307,6 +1310,7 @@ struct ServicePrepView: View {
         }
         .padding(.vertical, 3)
     }
+
 
     /// The channel a 순서 song's video came from, when the app has seen it —
     /// it names the team, which decides the 악보 menu's official store.

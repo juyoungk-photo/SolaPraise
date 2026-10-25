@@ -14,6 +14,9 @@
 //  schedule around a feature used once a week, the order gets its own
 //  List here, where dragging is native and works the same on both devices.
 //
+//  A song line says whether it is the 헌금송 (헌신찬양) and who prays, and
+//  sets it — here, with the 순서, not in the song's 📎 menu of files.
+//
 //  Nothing is written until 저장. Dragging is exploratory — you try the
 //  bridge before the second chorus, then put it back — and writing every
 //  intermediate order to a sheet the whole team is reading would broadcast
@@ -43,6 +46,8 @@ struct ReorderPlanSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var adding = false
+    /// The song whose 헌금송 mark is being set.
+    @State private var offeringFor: Line?
 
     var body: some View {
         NavigationStack {
@@ -60,6 +65,24 @@ struct ReorderPlanSheet: View {
                                 if let key = line.item.key {
                                     Text(key).font(.caption).foregroundStyle(.secondary)
                                 }
+                                let offering = line.item.offering
+                                if line.item.kind == .song, offering.isOffering {
+                                    Text("헌금송" + (offering.prayer.map { " · 헌금기도 \($0)" } ?? ""))
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            // 헌금송으로 지정, or who prays: written at once,
+                            // as a line added is.
+                            if line.item.kind == .song, !team.isReadOnly {
+                                Button { offeringFor = line } label: {
+                                    Image(systemName: line.item.offering.isOffering ? "gift.fill" : "gift")
+                                        .foregroundStyle(line.item.offering.isOffering ? Color.accentColor : .secondary)
+                                        .frame(width: 36, height: 32)
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel(line.item.offering.isOffering ? "헌금송 · 헌금기도자 바꾸기" : "헌금송으로 지정")
                             }
                         }
                     }
@@ -111,6 +134,29 @@ struct ReorderPlanSheet: View {
         .sheet(isPresented: $adding, onDismiss: merge) {
             AddPlanItemSheet(service: service).environmentObject(team)
         }
+        .sheet(item: $offeringFor) { line in
+            OfferingSheet(song: line.item.title, prayer: line.item.offering.prayer,
+                          isOffering: line.item.offering.isOffering,
+                          onSave: { prayer in await setOffering(line, isOffering: true, prayer: prayer) },
+                          onRemove: { await setOffering(line, isOffering: false, prayer: nil) },
+                          onCancel: { offeringFor = nil })
+        }
+    }
+
+    /// Written to the song's notes at once; the line here takes the new
+    /// notes without losing a drag not yet saved.
+    private func setOffering(_ line: Line, isOffering: Bool, prayer: String?) async -> String? {
+        guard let sheetId else { return "팀 시트가 연결되어 있지 않습니다." }
+        let failure = await team.setOffering(line.item, in: service, isOffering: isOffering,
+                                             prayer: prayer, sheetId: sheetId)
+        guard failure == nil else { return failure }
+        let fresh = team.plan(for: service)
+        if let at = lines.firstIndex(where: { $0.id == line.id }),
+           let item = fresh.first(where: { $0.row == line.item.row && $0.title == line.item.title }) {
+            lines[at] = Line(id: line.id, item: item)
+        }
+        offeringFor = nil
+        return nil
     }
 
     private func load() {

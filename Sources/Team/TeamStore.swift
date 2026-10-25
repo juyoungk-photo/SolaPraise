@@ -2498,6 +2498,9 @@ final class TeamStore: ObservableObject {
         title: String,
         kind: PlanItem.Kind,
         minutes: Int?,
+        key: String? = nil,
+        url: URL? = nil,
+        notes: String? = nil,
         to service: TeamService,
         sheetId: String
     ) async -> Bool {
@@ -2527,6 +2530,10 @@ final class TeamStore: ObservableObject {
         put(["type", "구분", "순서종류"], kind.label)
         put(["title", "내용", "순서"], title)
         if let minutes { put(["minutes", "분", "길이"], String(minutes)) }
+        // A song's own: what 헌신 찬양 brings from the week it was last sung.
+        if let key { put(["key", "키"], key) }
+        if let url { put(["youtubeurl", "url", "링크"], url.absoluteString) }
+        if let notes { put(["notes", "note", "비고", "메모"], notes) }
 
         do {
             isReadOnly = false
@@ -2535,7 +2542,7 @@ final class TeamStore: ObservableObject {
             )
             plans[day, default: []].append(
                 PlanItem(order: order, kind: kind, title: title, minutes: minutes,
-                         person: nil, key: nil, url: nil, notes: nil, row: row)
+                         person: nil, key: key, url: url, notes: notes, row: row)
             )
             errorMessage = nil
             return true
@@ -2547,6 +2554,22 @@ final class TeamStore: ObservableObject {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             return false
         }
+    }
+
+    /// The offering songs (헌금송, 헌신찬양) sung before `day`, newest first,
+    /// one per song — to bring back as this week's, with its video and key.
+    /// A church that sings the same one for months finds it at the top.
+    func recentOfferingSongs(before day: Date, limit: Int = 6) -> [(item: PlanItem, date: Date)] {
+        let start = Calendar.current.startOfDay(for: day)
+        var out: [(item: PlanItem, date: Date)] = []
+        for service in services.filter({ $0.date < start }).sorted(by: { $0.date > $1.date }) {
+            for item in plan(for: service) where item.kind == .song && item.offering.isOffering {
+                guard !out.contains(where: { PlanSongTitle.sameSong($0.item.title, item.title) }) else { continue }
+                out.append((item, service.date))
+                if out.count >= limit { return out }
+            }
+        }
+        return out
     }
 
     /// Takes one line out of a service's 순서.

@@ -74,9 +74,10 @@ enum OfferingNote {
 
     /// The Notes cell for a song: 「헌금송 · 헌금기도: 이름 · the rest」, or
     /// just the rest when it is not the offering song. Nil when empty.
-    static func notes(isOffering: Bool, prayer: String?, rest: String?) -> String? {
+    /// - word: what the team calls it — 「헌신찬양」 for a song added as such.
+    static func notes(isOffering: Bool, prayer: String?, rest: String?, word: String = "헌금송") -> String? {
         let name = prayer?.trimmingCharacters(in: .whitespaces)
-        let parts = [isOffering ? "헌금송" : nil,
+        let parts = [isOffering ? word : nil,
                      isOffering && name?.isEmpty == false ? "헌금기도: \(name!)" : nil,
                      rest?.trimmingCharacters(in: .whitespaces)]
             .compactMap { $0 }.filter { !$0.isEmpty }
