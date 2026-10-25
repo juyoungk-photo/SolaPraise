@@ -759,6 +759,9 @@ struct ScoreStandView: View {
                 Spacer(minLength: 0)
                 NearbyBadge(inRow: true)
                 leadControl(inRow: true)
+                // On an iPad in the title row; a phone's is full, so it
+                // goes on the line under it.
+                if sizeClass == .regular { DarkPagesButton() }
                 // The file itself, in Drive: to check what was uploaded.
                 if !item.attachment.fileId.hasPrefix("local-") {
                     Button { openFile(item.attachment.url) } label: {
@@ -794,6 +797,10 @@ struct ScoreStandView: View {
                     HStack(spacing: 6) {
                         NearbyBadge(inRow: false)
                         leadControl(inRow: false)
+                        if sizeClass != .regular {
+                            Spacer(minLength: 0)
+                            DarkPagesButton()
+                        }
                     }
                     // Shown from the start, before the page has loaded: which
                     // version to look at is the first choice, not the last.
@@ -3413,7 +3420,6 @@ private func standPill<V: View>(_ content: V, active: Bool = false, wide: Bool =
 /// 저장) or in a new 콘티.
 private struct StandShareMenu: View {
     @ObservedObject var model: ScoreStandModel
-    @AppStorage(DarkPages.key) private var darkPages = false
     let item: ScoreStandItem
     let isReady: Bool
     let notice: String?
@@ -3454,11 +3460,7 @@ private struct StandShareMenu: View {
             }
             // The page as it is will do: unread, it is the chart as printed.
             .disabled(!isReady)
-            Section("보기") {
-                Toggle(isOn: $darkPages) {
-                    Label("악보 어둡게 보기 (베타)", systemImage: "moon")
-                }
-            }
+
             if let setLabel {
                 Button { Task { await exportSet() } } label: {
                     Label(setLabel, systemImage: "doc.on.doc")
