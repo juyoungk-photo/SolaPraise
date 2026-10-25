@@ -373,7 +373,7 @@ struct ServicePrepView: View {
                                startAt: open.startSong.flatMap { song in items.firstIndex { $0.song == song } } ?? 0,
                                setTitle: service.date.formatted(.dateTime.month().day()) + " " + service.title,
                                versions: songVersions(service),
-                               setFileName: nextContiName(service),
+                               nextSetName: { nextContiName(service) },
                                exportOnOpen: makingConti,
                                setCaptions: contiCaptions(service),
                                notices: offeringNotices(service),

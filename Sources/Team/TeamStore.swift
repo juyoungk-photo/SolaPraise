@@ -1152,8 +1152,7 @@ final class TeamStore: ObservableObject {
     /// account may write there, else the app's 악보 folder — either way on
     /// the Attachments tab as the service's file, so every app lists it as
     /// the newest 콘티 and the sheet links to it. A message for the person.
-    func uploadConti(_ data: Data, name: String, pages: [Int: String] = [:],
-                     service: TeamService, sheetId: String, by who: String) async -> String {
+    func uploadConti(_ data: Data, name: String, service: TeamService, sheetId: String, by who: String) async -> String {
         if let failure = await attach(data: data, name: name, mimeType: "application/pdf", song: "",
                                       to: service, sheetId: sheetId, by: who, folder: ContiFolder.folderId) {
             return "팀에 올리지 못했습니다: \(failure)\n공유 창에서 직접 저장하세요."

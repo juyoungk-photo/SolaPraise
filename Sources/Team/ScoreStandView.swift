@@ -74,7 +74,11 @@ struct ScoreStandView: View {
     @State private var probeFound = false
     /// The file name for the whole set made into one PDF: the next 콘티
     /// version's, 「20261018 주일예배 찬양 v3」.
-    var setFileName: String?
+    /// The next 콘티's name, worked out when it is made — not when the
+    /// stand opened: made twice on one stand, the second came out under
+    /// the first one's name, 「v2」 twice.
+    var nextSetName: (() -> String)?
+    private var setFileName: String? { nextSetName?() }
     /// Make that file as soon as the stand opens — from 「새 콘티 버전 만들기」.
     var exportOnOpen = false
     /// Each song's corner line on the whole-set PDF, by song as written:
@@ -158,7 +162,7 @@ struct ScoreStandView: View {
     }
 
     init(items: [ScoreStandItem], startAt: Int = 0, setTitle: String? = nil,
-         versions: [String: [ScoreStandItem]] = [:], setFileName: String? = nil, exportOnOpen: Bool = false,
+         versions: [String: [ScoreStandItem]] = [:], nextSetName: (() -> String)? = nil, exportOnOpen: Bool = false,
          setCaptions: [String: String] = [:],
          notices: [String: String] = [:],
          contiScope: String? = nil,
@@ -172,7 +176,7 @@ struct ScoreStandView: View {
         self.removeVersion = removeVersion
         self.shareChoice = shareChoice
         self.uploadSet = uploadSet
-        self.setFileName = setFileName
+        self.nextSetName = nextSetName
         self.exportOnOpen = exportOnOpen
         self.setCaptions = setCaptions
         self.notices = notices
