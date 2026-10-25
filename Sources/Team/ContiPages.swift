@@ -13,6 +13,7 @@
 
 import Foundation
 import UIKit
+import PDFKit
 
 enum ContiPages {
 
@@ -39,15 +40,27 @@ enum ContiPages {
         UserDefaults.standard.set(counts, forKey: key + ".count")
     }
 
-    /// A 콘티 the app made: its pages known as it was put together, not read.
-    static func remember(_ pages: [Int: String], count: Int, for fileId: String) {
-        store(pages, count: count, for: fileId)
+    /// What the app puts in a PDF it makes, as its creator — how any
+    /// device knows the file is the app's output, not a chart.
+    static let creator = "SolaPraise"
+
+    /// A 콘티 the app made, known on this device: it uploaded it, or read
+    /// the mark in it.
+    static func markBuilt(_ fileId: String) {
+        var built = Set(UserDefaults.standard.stringArray(forKey: key + ".built") ?? [])
+        guard built.insert(fileId).inserted else { return }
+        UserDefaults.standard.set(Array(built), forKey: key + ".built")
     }
 
-    /// The app's own 「콘티 PDF 만들기」 output, which is already in order and
-    /// is not split again.
+    /// The app's own output — never split into songs' charts (chartContis).
+    /// Its 「콘티 PDF 만들기」 by name; a 콘티 made on the stand by the mark.
     static func isBuilt(_ attachment: Attachment) -> Bool {
         attachment.name.hasSuffix("-콘티.pdf")
+            || (UserDefaults.standard.stringArray(forKey: key + ".built") ?? []).contains(attachment.fileId)
+    }
+
+    static func isBuilt(data: Data) -> Bool {
+        (PDFDocument(data: data)?.documentAttributes?[PDFDocumentAttribute.creatorAttribute] as? String) == creator
     }
 
     /// Works the pages out for a file, reading it if needed. Nil when the
@@ -75,6 +88,7 @@ enum ContiPages {
             setManual(pages, for: attachment.fileId, count: max(pageCount(attachment.fileId) ?? 0, (pages.keys.max() ?? -1) + 1))
             return pages.filter { !$0.value.isEmpty }
         }
+        if isBuilt(attachment) { return [:] }
         if let known = cached(attachment.fileId) { return known }
         let data: Data
         if let kept = ScoreFileCache.load(attachment.fileId) {
@@ -83,6 +97,11 @@ enum ContiPages {
             guard let (bytes, _) = try? await URLSession.shared.data(from: attachment.url.directDownload)
             else { return nil }
             data = bytes
+        }
+        // Made by the app, on another member's device: its output, not charts.
+        if isBuilt(data: data) {
+            markBuilt(attachment.fileId)
+            return [:]
         }
         guard let read = await ScoreTransposer.read(data: data, recognise: false) else { return nil }
         ScoreFileCache.save(data, for: attachment.fileId)

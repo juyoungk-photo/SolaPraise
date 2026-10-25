@@ -65,7 +65,7 @@ struct ScoreStandView: View {
     var shareChoice: ((ScoreStandItem) async -> String?)?
     /// Puts a new 콘티 made here up for the team (TeamStore.uploadConti),
     /// returning what happened in words; nil where it cannot be put up.
-    var uploadSet: ((Data, String, [Int: String]) async -> String)?
+    var uploadSet: ((Data, String) async -> String)?
     /// Redrawn when a version is chosen for the 콘티 (kept in defaults).
     @State private var choiceTick = 0
     @State private var removing: ScoreStandItem?
@@ -164,7 +164,7 @@ struct ScoreStandView: View {
          contiScope: String? = nil,
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          shareChoice: ((ScoreStandItem) async -> String?)? = nil,
-         uploadSet: ((Data, String, [Int: String]) async -> String)? = nil,
+         uploadSet: ((Data, String) async -> String)? = nil,
          uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
@@ -2948,14 +2948,11 @@ final class ScoreStandModel: ObservableObject {
     ///   happened is said, and the share sheet follows.
     func exportSet(_ items: [ScoreStandItem], title: String?, fileName: String? = nil,
                    captions: [String: String] = [:], notices: [String: String] = [:],
-                   upload: ((Data, String, [Int: String]) async -> String)? = nil) async {
+                   upload: ((Data, String) async -> String)? = nil) async {
         isExporting = true
         defer { isExporting = false }
         let combined = PDFDocument()
         var skipped: [String] = []
-        /// Which page is which song, as they are put together — known here,
-        /// so the file uploaded is never read back to find it out.
-        var songOfPage: [Int: String] = [:]
         for item in items {
             await load(item)
             // Another load of the same song may be running — the one the
@@ -2971,12 +2968,12 @@ final class ScoreStandModel: ObservableObject {
                 continue
             }
             for index in 0..<document.pageCount {
-                if let page = document.page(at: index) {
-                    if !item.song.isEmpty { songOfPage[combined.pageCount] = item.song }
-                    combined.insert(page, at: combined.pageCount)
-                }
+                if let page = document.page(at: index) { combined.insert(page, at: combined.pageCount) }
             }
         }
+        // Marked as the app's own, so no device takes it back as charts.
+        combined.documentAttributes = [PDFDocumentAttribute.creatorAttribute: ContiPages.creator,
+                                       PDFDocumentAttribute.titleAttribute: title ?? "콘티"]
         guard combined.pageCount > 0, let data = combined.dataRepresentation() else {
             note = "PDF를 만들지 못했습니다."
             return
@@ -2989,7 +2986,7 @@ final class ScoreStandModel: ObservableObject {
         do {
             try data.write(to: url, options: .atomic)
             if let upload, fileName != nil {
-                let said = await upload(data, file, songOfPage)
+                let said = await upload(data, file)
                 pendingExport = ExportFile(url: url)
                 note = skipped.isEmpty ? said : said + "\n열 수 없는 악보는 빠졌습니다: \(skipped.joined(separator: ", "))"
             } else if skipped.isEmpty {

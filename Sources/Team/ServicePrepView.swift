@@ -363,8 +363,8 @@ struct ServicePrepView: View {
                                shareChoice: sheetId == nil || team.isReadOnly ? nil : { item in
                                    await team.chooseForConti(item, service: service, sheetId: sheetId!)
                                },
-                               uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name, pages in
-                                   await team.uploadConti(data, name: name, pages: pages, service: service, sheetId: sheetId!,
+                               uploadSet: sheetId == nil || !team.canAttach ? nil : { data, name in
+                                   await team.uploadConti(data, name: name, service: service, sheetId: sheetId!,
                                                           by: team.actingEmail(auth: auth, planning: planning) ?? "")
                                })
             }
@@ -1564,7 +1564,7 @@ struct ServicePrepView: View {
     private func songVersions(_ service: TeamService) -> [String: [ScoreStandItem]] {
         let plan = team.plan(for: service)
         let attachments = team.attachments(for: service)
-        let contis = Array(team.contis(for: service).prefix(3))
+        let contis = Array(team.chartContis(for: service).prefix(3))
         let day = DateFormatter()
         day.dateFormat = "M/d"
         var out: [String: [ScoreStandItem]] = [:]
@@ -1743,7 +1743,7 @@ struct ServicePrepView: View {
             .map { ScoreStandItem(attachment: $0, song: $0.song, teamKey: nil) }
         // What of the newest 콘티 is no song of the 순서, or all of it when
         // its pages could not be placed.
-        if let latest = team.contis(for: service).first {
+        if let latest = team.chartContis(for: service).first {
             let name = (latest.name as NSString).deletingPathExtension
             if let placed = ContiPages.cached(latest.fileId), !placed.isEmpty {
                 let count = ContiPages.pageCount(latest.fileId) ?? ((placed.keys.max() ?? 0) + 1)
@@ -1778,7 +1778,7 @@ struct ServicePrepView: View {
     /// which song.
     private func placeContiPages(_ service: TeamService) async {
         let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
-        for conti in team.contis(for: service).prefix(3) {
+        for conti in team.chartContis(for: service).prefix(3) {
             await ContiPages.compute(for: conti, songs: songs)
         }
     }

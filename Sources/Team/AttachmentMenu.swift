@@ -60,7 +60,7 @@ struct AttachmentMenu<Content: View>: View {
 
     /// This song's pages of the service's newest 콘티, as worked out.
     private var contiPages: [(file: Attachment, pages: [Int])] {
-        guard !song.isEmpty, let latest = team.contis(for: service).first else { return [] }
+        guard !song.isEmpty, let latest = team.chartContis(for: service).first else { return [] }
         let pages = ContiPages.pages(of: latest.fileId, for: song)
         return pages.isEmpty ? [] : [(latest, pages)]
     }

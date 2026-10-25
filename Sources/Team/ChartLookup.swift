@@ -49,7 +49,7 @@ enum ChartLookup {
             for file in team.attachments(for: service, song: song.title).reversed() {
                 add(ScoreStandItem(attachment: file, song: song.title, teamKey: song.key))
             }
-            if let latest = team.contis(for: service).first {
+            if let latest = team.chartContis(for: service).first {
                 let pages = ContiPages.pages(of: latest.fileId, for: song.title)
                 if !pages.isEmpty {
                     add(ScoreStandItem(attachment: latest, song: song.title, teamKey: song.key, pages: pages,
