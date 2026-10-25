@@ -7,7 +7,11 @@
 //
 //  The queue changes when 완료 is pressed; the song playing goes on where
 //  it now stands. When the queue is a whole YouTube playlist, the new order
-//  can be saved back to it — asked, since YouTube keeps no undo and each
+//  is saved back to it — on from the start when the playlist is the
+//  signed-in account's own, since that is what 관리 on a playlist means:
+//  the toggle was off by default, easily missed, and the playlist never
+//  changed. Someone else's playlist is changed for this playback only, and
+//  the sheet says why (a collaborator may still turn saving on). Each
 //  change is a write (PlaylistExport makes it the fewest). Videos the
 //  queue never showed — deleted, private — stay in the playlist, after.
 //
@@ -28,6 +32,8 @@ struct QueueManageSheet: View {
     @State private var lines: [Line] = []
     @State private var original: [String] = []
     @State private var saveToYouTube = false
+    /// The playlist is among the signed-in account's own; nil until known.
+    @State private var ownsPlaylist: Bool?
     @State private var saving = false
     @State private var message: String?
 
@@ -62,7 +68,23 @@ struct QueueManageSheet: View {
                     Section {
                         Toggle("YouTube 「\(source.title)」에도 저장", isOn: $saveToYouTube)
                     } footer: {
-                        Text("재생목록 자체의 순서를 바꾸고, 뺀 곡은 재생목록에서도 지웁니다. YouTube에서는 되돌릴 수 없습니다. 재생목록을 만든 계정(또는 공동 작업자)이어야 합니다.")
+                        Text(ownsPlaylist == false
+                             ? "다른 계정이 만든 재생목록이라 이번 재생에만 적용합니다. 이 재생목록의 공동 작업자라면 켜서 YouTube에도 저장할 수 있습니다."
+                             : "재생목록 자체의 순서를 바꾸고, 뺀 곡은 재생목록에서도 지웁니다. YouTube에서는 되돌릴 수 없습니다.")
+                    }
+                    .task {
+                        // Its own playlist: saved by default.
+                        guard ownsPlaylist == nil else { return }
+                        let mine = try? await AppServices.client(auth: auth, quota: quota).myPlaylists()
+                        let owns = mine?.contains { $0.id == source.playlistId } ?? false
+                        ownsPlaylist = owns
+                        if owns { saveToYouTube = true }
+                    }
+                } else if host.source != nil {
+                    Section {
+                        Text("YouTube 계정으로 로그인하면 재생목록 자체에도 저장할 수 있습니다. 지금은 이번 재생에만 적용합니다.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -99,6 +121,7 @@ struct QueueManageSheet: View {
                 message = failure
                 return
             }
+            Toast.shared.show("YouTube 「\(source.title)」에 저장했습니다", symbol: "checkmark.circle.fill", tint: .green)
         }
         host.rearrange(arranged)
         dismiss()
