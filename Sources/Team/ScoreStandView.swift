@@ -1514,6 +1514,8 @@ private struct ScorePageView: View {
     /// The chord being dragged and how far, in view points.
     @State private var dragging: (id: UUID, by: CGSize)?
 
+    @AppStorage(DarkPages.key) private var darkPages = false
+
     var body: some View {
         Image(uiImage: page.image)
             .resizable()
@@ -1584,6 +1586,8 @@ private struct ScorePageView: View {
                 }
             }
             .background(Color.white)
+            // 악보 어둡게 보기 (베타): the page as drawn, light on black.
+            .modifier(DarkPage(on: darkPages && !original))
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
@@ -3409,6 +3413,7 @@ private func standPill<V: View>(_ content: V, active: Bool = false, wide: Bool =
 /// 저장) or in a new 콘티.
 private struct StandShareMenu: View {
     @ObservedObject var model: ScoreStandModel
+    @AppStorage(DarkPages.key) private var darkPages = false
     let item: ScoreStandItem
     let isReady: Bool
     let notice: String?
@@ -3449,6 +3454,11 @@ private struct StandShareMenu: View {
             }
             // The page as it is will do: unread, it is the chart as printed.
             .disabled(!isReady)
+            Section("보기") {
+                Toggle(isOn: $darkPages) {
+                    Label("악보 어둡게 보기 (베타)", systemImage: "moon")
+                }
+            }
             if let setLabel {
                 Button { Task { await exportSet() } } label: {
                     Label(setLabel, systemImage: "doc.on.doc")

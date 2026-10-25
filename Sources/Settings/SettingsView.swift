@@ -13,6 +13,7 @@ import SwiftUI
 import SwiftData
 
 struct SettingsView: View {
+    @AppStorage(DarkPages.key) private var darkPages = false
     @EnvironmentObject private var auth: GoogleAuthManager
     @EnvironmentObject private var quota: QuotaLedger
     @Environment(\.modelContext) private var modelContext
@@ -224,6 +225,9 @@ struct SettingsView: View {
             } label: {
                 Label("헌금 안내 문구", systemImage: "gift")
             }
+            Toggle(isOn: $darkPages) {
+                Label("악보 어둡게 보기 (베타)", systemImage: "moon")
+            }
             Toggle(isOn: Binding(
                 get: { teamNotifications },
                 set: { on in
@@ -236,7 +240,7 @@ struct SettingsView: View {
         } header: {
             Text("찬양팀")
         } footer: {
-            Text("팀 콘티 재생목록은 예배표에서 콘티를 내보낼 재생목록입니다. 헌금 안내 문구는 헌금송 악보와 콘티 PDF에 헌금기도자와 함께 들어갑니다. 배정 · 응답 알림을 켜면, 앱이 아침에 팀 시트를 확인해 새로 배정된 파트와 이번 주 아직 응답하지 않은 예배를 알려 줍니다(iOS가 정하는 때에, 한 번씩).")
+            Text("팀 콘티 재생목록은 예배표에서 콘티를 내보낼 재생목록입니다. 헌금 안내 문구는 헌금송 악보와 콘티 PDF에 헌금기도자와 함께 들어갑니다. 악보 어둡게 보기는 악보를 검은 바탕에 흰 음표·가사로 보여 줍니다 — 화면에서만, PDF·인쇄는 그대로입니다. 배정 · 응답 알림을 켜면, 앱이 아침에 팀 시트를 확인해 새로 배정된 파트와 이번 주 아직 응답하지 않은 예배를 알려 줍니다(iOS가 정하는 때에, 한 번씩).")
         }
     }
 
