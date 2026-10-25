@@ -1808,7 +1808,12 @@ final class TeamStore: ObservableObject {
     /// Reading one never needs this — every file is shared by link — so a
     /// member without the second grant still opens everything the team has
     /// attached. Only putting a new file up requires it.
-    var canAttach: Bool { drive != nil }
+    var canAttach: Bool {
+        #if DEBUG
+        if isSample { return true }
+        #endif
+        return drive != nil
+    }
 
     /// A Drive folder's name as it is now, through the church account.
     func folderName(_ id: String) async -> String? {
@@ -1847,6 +1852,19 @@ final class TeamStore: ObservableObject {
         replacingSameName: Bool = false,
         folder: String? = nil
     ) async -> String? {
+        #if DEBUG
+        // The sample team has no Drive: kept on this device only, so the
+        // flow can be tried end to end (removeAttachment does the same).
+        if isSample {
+            let fileId = "sample-\(UUID().uuidString)"
+            ScoreFileCache.save(data, for: fileId)
+            attachments[Calendar.current.startOfDay(for: service.date), default: []].append(Attachment(
+                date: service.date, song: song, name: name, fileId: fileId,
+                url: URL(string: "https://example.com/\(fileId)")!, addedBy: email, row: nil,
+                hash: Self.fingerprint(data), addedAt: Date()))
+            return nil
+        }
+        #endif
         guard let client, let drive else { return "구글 계정에 연결되어 있지 않습니다." }
         lastUploadWentToFolder = false
 

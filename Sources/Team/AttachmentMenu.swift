@@ -12,6 +12,12 @@
 //  Uploading needs an account; opening does not. Every attachment is shared
 //  by link, so a teammate taps and reads without signing in to anything.
 //
+//  Several picked at once are asked about: the pages of one chart, joined
+//  into one PDF (ChartPages), or charts of their own. Each file of a song
+//  is a version of its chart, and a chart photographed a page at a time
+//  came up as rival versions, page 2 hidden behind a chip. Pages already
+//  up that way are joined from the list — 「여러 장을 한 악보로」.
+//
 
 import SwiftUI
 import PhotosUI
@@ -49,6 +55,15 @@ struct AttachmentMenu<Content: View>: View {
     @State private var note: String?
     @State private var stand: ScoreStandItem?
     @State private var assigning: Attachment?
+    /// Several picked at once, read and waiting for the answer: pages of
+    /// one chart, or charts of their own.
+    @State private var pending: [Picked] = []
+
+    struct Picked {
+        let data: Data
+        let name: String
+        let mime: String
+    }
 
     private var existing: [Attachment] {
         // The service's own: 콘티 files uploaded whole. The app's built 콘티
@@ -79,21 +94,43 @@ struct AttachmentMenu<Content: View>: View {
         // Never disabled outright: opening an attachment needs no account
         // at all, so a member without the second grant must still be able
         // to tap through to what the team has put up.
-        .disabled(isUploading || sheetId == nil)
+        .disabled(isUploading || target == nil)
         .photosPicker(isPresented: $showPhotos, selection: $photos,
                       matching: .any(of: [.images]))
         .fileImporter(isPresented: $showFiles,
                       allowedContentTypes: [.pdf, .image],
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
-            Task { for url in urls { await upload(from: url) } }
+            Task {
+                var read: [Picked] = []
+                for url in urls { if let one = picked(from: url) { read.append(one) } }
+                await take(read)
+            }
         }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             Task {
-                for item in items { await upload(from: item) }
+                var read: [Picked] = []
+                for item in items { if let one = await picked(from: item) { read.append(one) } }
                 photos = []
+                await take(read)
             }
+        }
+        .alert("\(pending.count)개를 어떻게 올릴까요?",
+               isPresented: Binding(get: { !pending.isEmpty }, set: { if !$0 { pending = [] } })) {
+            Button(song.isEmpty ? "한 콘티 파일 (\(pending.count)쪽)" : "한 악보의 \(pending.count)쪽") {
+                let parts = pending
+                pending = []
+                Task { await sendJoined(parts.map(\.data)) }
+            }
+            Button(song.isEmpty ? "각각 다른 콘티로" : "각각 다른 악보로") {
+                let parts = pending
+                pending = []
+                Task { for part in parts { await send(data: part.data, name: part.name, mime: part.mime) } }
+            }
+            Button("취소", role: .cancel) { pending = [] }
+        } message: {
+            Text("고른 순서대로 쪽이 됩니다. 각각 올리면 같은 곡의 다른 버전이 되어 하나만 보입니다.")
         }
         .sheet(item: $assigning) { file in
             ContiPagesSheet(attachment: file,
@@ -138,6 +175,20 @@ struct AttachmentMenu<Content: View>: View {
                                 } label: { Label("지우기", systemImage: "trash") }
                             }
                         }
+                    }
+                }
+                // Pages put up one at a time, joined after the fact.
+                if !song.isEmpty, existing.count >= 2, canUpload {
+                    Section {
+                        NavigationLink {
+                            JoinChartsView(files: Array(existing.reversed())) { files, removeOriginals in
+                                await join(files, removeOriginals: removeOriginals)
+                            }
+                        } label: {
+                            Label("여러 장을 한 악보로 합치기", systemImage: "doc.on.doc")
+                        }
+                    } footer: {
+                        Text("한 곡의 악보 여러 장이 각각 다른 버전으로 올라갔다면, 쪽 순서대로 골라 한 파일로 합칩니다.")
                     }
                 }
                 // The team's memo for the song — kept by song on the sheet's
@@ -263,14 +314,23 @@ struct AttachmentMenu<Content: View>: View {
                               teamKey: team.plan(for: service).first { PlanSongTitle.sameSong($0.title, song) }?.key)
     }
 
-    private var canUpload: Bool { team.canAttach && sheetId != nil }
+    private var canUpload: Bool { team.canAttach && target != nil }
+
+    /// The sheet written to. The sample team has none, and keeps its files
+    /// on the device (TeamStore.attach), so the flow can be tried.
+    private var target: String? {
+        #if DEBUG
+        if team.isSample { return sheetId ?? "sample" }
+        #endif
+        return sheetId
+    }
 
     /// A transposed chart becomes another attachment on the same song, so
     /// the team sees the version in their key without each person making
     /// it again.
     // MARK: - Uploading
 
-    private func upload(from item: PhotosPickerItem) async {
+    private func picked(from item: PhotosPickerItem) async -> Picked? {
         // Photos come as they were taken — usually HEIC — and went up as
         // that under a .jpg name, which a teammate's browser or Android
         // phone then could not show. Sent as a real JPEG, at most 3000 px
@@ -278,14 +338,14 @@ struct AttachmentMenu<Content: View>: View {
         guard let original = try? await item.loadTransferable(type: Data.self),
               let data = Self.chartJPEG(original) else {
             addNote("사진을 읽지 못했습니다.")
-            return
+            return nil
         }
         // Unique even for several picked in the same second.
         let name = "\(stem)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4)).jpg"
-        await send(data: data, name: name, mime: "image/jpeg")
+        return Picked(data: data, name: name, mime: "image/jpeg")
     }
 
-    private func upload(from url: URL) async {
+    private func picked(from url: URL) -> Picked? {
         // A file chosen through the browser is outside the sandbox until
         // asked for; without this the read fails with a permission error
         // that reads like the file being missing.
@@ -294,23 +354,64 @@ struct AttachmentMenu<Content: View>: View {
 
         guard var data = try? Data(contentsOf: url) else {
             addNote("파일을 읽지 못했습니다.")
-            return
+            return nil
         }
-        var uploadName = url.lastPathComponent
+        if url.pathExtension.lowercased() == "pdf" {
+            return Picked(data: data, name: url.lastPathComponent, mime: "application/pdf")
+        }
         // A photo from Files is a photo all the same: HEIC becomes JPEG.
-        if url.pathExtension.lowercased() != "pdf", let jpeg = Self.chartJPEG(data) {
+        var uploadName = url.lastPathComponent
+        if let jpeg = Self.chartJPEG(data) {
             data = jpeg
             uploadName = (uploadName as NSString).deletingPathExtension + ".jpg"
         }
-        let mime = url.pathExtension.lowercased() == "pdf"
-            ? "application/pdf"
-            : (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-               ?? "application/octet-stream")
-        await send(data: data, name: uploadName, mime: url.pathExtension.lowercased() == "pdf" ? mime : "image/jpeg")
+        return Picked(data: data, name: uploadName, mime: "image/jpeg")
     }
 
-    private func send(data: Data, name: String, mime: String) async {
-        guard let sheetId else { return }
+    /// One goes straight up; several wait for the question.
+    private func take(_ read: [Picked]) async {
+        if read.count > 1 {
+            pending = read
+        } else if let one = read.first {
+            await send(data: one.data, name: one.name, mime: one.mime)
+        }
+    }
+
+    /// The pages as one PDF, in the order picked.
+    @discardableResult
+    private func sendJoined(_ parts: [Data]) async -> Bool {
+        guard let joined = ChartPages.join(parts) else {
+            addNote("쪽을 합치지 못했습니다 — PDF나 사진이 아닌 파일이 있습니다.")
+            return false
+        }
+        let name = "\(stem)-\(Int(Date().timeIntervalSince1970))-\(parts.count)p.pdf"
+        return await send(data: joined, name: name, mime: "application/pdf")
+    }
+
+    /// Files already up, joined in the order given; the originals taken
+    /// off after, when asked, so the joined one is not one more rival.
+    private func join(_ files: [Attachment], removeOriginals: Bool) async -> String? {
+        var parts: [Data] = []
+        for file in files {
+            if let kept = ScoreFileCache.load(file.fileId) {
+                parts.append(kept)
+            } else if let (bytes, _) = try? await URLSession.shared.data(from: file.url.directDownload) {
+                parts.append(bytes)
+            } else {
+                return "「\(file.name)」을 내려받지 못했습니다. 연결을 확인하세요."
+            }
+        }
+        note = nil
+        guard await sendJoined(parts) else { return note ?? "합치지 못했습니다." }
+        if removeOriginals {
+            for file in files { await remove(file) }
+        }
+        return note
+    }
+
+    @discardableResult
+    private func send(data: Data, name: String, mime: String) async -> Bool {
+        guard let sheetId = target else { return false }
         isUploading = true
         defer { isUploading = false }
         let who = team.actingEmail(auth: auth, planning: planning) ?? ""
@@ -319,7 +420,7 @@ struct AttachmentMenu<Content: View>: View {
             song: song, to: service, sheetId: sheetId, by: who
         ) {
             addNote(failure)
-            return
+            return false
         }
         // A 콘티 file is split onto the 순서 straight away, so each song's
         // clip shows its pages without anyone opening the stand first.
@@ -332,6 +433,7 @@ struct AttachmentMenu<Content: View>: View {
                 await ContiPages.compute(for: file, songs: songs)
             }
         }
+        return true
     }
 
     /// Several files go up one after another; each one's message is kept.
@@ -360,7 +462,7 @@ struct AttachmentMenu<Content: View>: View {
     }
 
     private func remove(_ item: Attachment) async {
-        guard let sheetId else { return }
+        guard let sheetId = target else { return }
         if let failure = await team.removeAttachment(item, sheetId: sheetId) {
             note = failure
         }
@@ -373,5 +475,84 @@ struct AttachmentMenu<Content: View>: View {
         return "\(day)-\(title)"
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: " ", with: "_")
+    }
+}
+
+/// 여러 장을 한 악보로: the song's files picked in page order — a tap
+/// numbers one, a second tap takes it out — and joined into one.
+private struct JoinChartsView: View {
+    /// Oldest first: pages are usually put up in order.
+    let files: [Attachment]
+    let onJoin: ([Attachment], Bool) async -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var order: [String] = []
+    @State private var removeOriginals = true
+    @State private var joining = false
+    @State private var failure: String?
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(files) { file in
+                    Button {
+                        if let at = order.firstIndex(of: file.fileId) { order.remove(at: at) }
+                        else { order.append(file.fileId) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 1.5)
+                                if let at = order.firstIndex(of: file.fileId) {
+                                    Circle().fill(Color.accentColor)
+                                    Text("\(at + 1)").font(.callout.weight(.bold)).foregroundStyle(.white)
+                                }
+                            }
+                            .frame(width: 28, height: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(file.name).foregroundStyle(Color.primary).lineLimit(2)
+                                Text(file.addedAt.map { $0.formatted(.dateTime.month().day().hour().minute()) } ?? "")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("쪽 순서대로 누르세요")
+            } footer: {
+                Text("누른 순서가 1쪽, 2쪽…이 됩니다. 다시 누르면 빠집니다.")
+            }
+            Section {
+                Toggle("원래 파일 지우기", isOn: $removeOriginals)
+            } footer: {
+                Text(removeOriginals
+                     ? "합친 악보 하나만 남습니다. 원래 파일에 한 코드 교정과 그림은 합친 악보로 옮겨지지 않습니다."
+                     : "원래 파일도 다른 버전으로 남습니다.")
+            }
+            if let failure {
+                Section { Text(failure).font(.footnote).foregroundStyle(.orange) }
+            }
+        }
+        .navigationTitle("한 악보로 합치기")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                if joining {
+                    ProgressView()
+                } else {
+                    Button("\(order.count)쪽 합치기") {
+                        let picked = order.compactMap { id in files.first { $0.fileId == id } }
+                        joining = true
+                        failure = nil
+                        Task {
+                            failure = await onJoin(picked, removeOriginals)
+                            joining = false
+                            if failure == nil { dismiss() }
+                        }
+                    }
+                    .disabled(order.count < 2)
+                }
+            }
+        }
+        .disabled(joining)
     }
 }
