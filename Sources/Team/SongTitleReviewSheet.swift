@@ -18,6 +18,8 @@ import SwiftUI
 struct SongTitleReviewSheet: View {
     let playlistTitle: String
     let songs: [TeamSong]
+    /// Still reading the playlist: the sheet is up at once, and says so.
+    var loading = false
     /// The title said for a song's video before — chosen here, or on the
     /// team's sheet. It is where the title starts.
     var remembered: (TeamSong) -> String? = { _ in nil }
@@ -39,12 +41,46 @@ struct SongTitleReviewSheet: View {
     @State private var readings: [Reading] = []
     /// The songs taken, by position. All, until some are left out.
     @State private var taken: Set<Int> = []
-    @State private var started = false
 
     private var count: Int { taken.count }
 
     var body: some View {
         NavigationStack {
+            Group {
+                if loading || (readings.count != songs.count) {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large)
+                        Text("「\(playlistTitle)」을 불러오는 중…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    list
+                }
+            }
+            .navigationTitle("곡 제목 확인")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("취소", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(existing.isEmpty ? "\(count)곡 보내기" : "다음") {
+                        let songs = chosen()
+                        remember(songs)
+                        if existing.isEmpty { onSend(songs) } else { incoming = songs; merging = true }
+                    }
+                    .disabled(loading || count == 0 || taken.contains { titles[$0].trimmingCharacters(in: .whitespaces).isEmpty })
+                }
+            }
+            .navigationDestination(isPresented: $merging) {
+                MergeSongsView(existing: existing, incoming: incoming, onSend: onSend)
+            }
+        }
+        // Read once the songs are in: the sheet opens before they are.
+        .task(id: songs.count) { prepare() }
+    }
+
+    private var list: some View {
             List {
                 Section {
                     ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
@@ -66,34 +102,18 @@ struct SongTitleReviewSheet: View {
                          : "넣을 곡만 체크하세요. 이 예배에 이미 \(existing.count)곡이 있어, 다음 화면에서 어떻게 합칠지 정합니다. ") + Text("영상 제목에서 곡 이름을 골라 적었습니다 — 앨범이나 예배 시리즈 이름이 잘못 잡혔으면 「다른 이름」에서 고르거나 직접 고치세요. 원래 영상 제목은 참고버전에 남습니다.")
                 }
             }
-            .navigationDestination(isPresented: $merging) {
-                MergeSongsView(existing: existing, incoming: incoming, onSend: onSend)
-            }
-            .navigationTitle("곡 제목 확인")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("취소", action: onCancel) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(existing.isEmpty ? "\(count)곡 보내기" : "다음") {
-                        let songs = chosen()
-                        remember(songs)
-                        if existing.isEmpty { onSend(songs) } else { incoming = songs; merging = true }
-                    }
-                    .disabled(count == 0 || taken.contains { titles[$0].trimmingCharacters(in: .whitespaces).isEmpty })
-                }
-            }
+    }
+
+    /// Each song's title read every way, once the songs are in.
+    private func prepare() {
+        guard !songs.isEmpty, readings.count != songs.count else { return }
+        readings = songs.map { song in
+            Reading(fresh: PlanSongTitle.forSheet(song.title, channel: song.channel).title,
+                    remembered: remembered(song),
+                    options: PlanSongTitle.candidates(song.title, channel: song.channel))
         }
-        .onAppear {
-            guard !started else { return }
-            started = true
-            readings = songs.map { song in
-                Reading(fresh: PlanSongTitle.forSheet(song.title, channel: song.channel).title,
-                        remembered: remembered(song),
-                        options: PlanSongTitle.candidates(song.title, channel: song.channel))
-            }
-            titles = readings.map { $0.remembered ?? $0.fresh }
-            taken = Set(songs.indices)
-        }
+        titles = readings.map { $0.remembered ?? $0.fresh }
+        taken = Set(songs.indices)
     }
 
     @ViewBuilder

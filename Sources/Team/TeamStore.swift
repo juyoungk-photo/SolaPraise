@@ -589,6 +589,23 @@ final class TeamStore: ObservableObject {
         return out
     }
 
+    /// lastKey for many songs at once: the earlier services and their songs
+    /// gathered once, newest first, and each song looked up in them — not
+    /// every earlier 순서 built again for every song of a playlist.
+    func lastKeys(before day: Date) -> (_ videoId: String?, _ title: String) -> String? {
+        let start = Calendar.current.startOfDay(for: day)
+        let earlier = services.filter { $0.date < start }.sorted { $0.date > $1.date }
+            .map { plan(for: $0).filter { $0.kind == .song } }
+        return { videoId, title in
+            for songs in earlier {
+                guard let song = songs.first(where: { (videoId != nil && $0.videoId == videoId)
+                                                      || PlanSongTitle.sameSong($0.title, title) }) else { continue }
+                if let key = song.key?.trimmingCharacters(in: .whitespaces), !key.isEmpty { return key }
+            }
+            return nil
+        }
+    }
+
     /// The key the team last played a song in, from its most recent earlier
     /// 순서 that gave one. A song coming round again came in keyless.
     func lastKey(videoId: String?, title: String, before day: Date) -> String? {

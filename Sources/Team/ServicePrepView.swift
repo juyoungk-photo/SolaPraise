@@ -135,7 +135,9 @@ struct ServicePrepView: View {
     struct PushReview: Identifiable {
         let service: TeamService
         let playlistTitle: String
-        let songs: [TeamSong]
+        var songs: [TeamSong]
+        /// Open at once, while the playlist and the Songs tab are read.
+        var loading = false
         /// What the service already has on the Songs tab, to merge with.
         var existing: [TeamSong] = []
         /// The title each video carries on the sheet, read once.
@@ -143,6 +145,9 @@ struct ServicePrepView: View {
         let id = UUID()
     }
     @State private var exportingTo: TeamService?
+    /// The playlist chosen in the picker, filled in once it has closed —
+    /// the review opens then, not over a sheet still going away.
+    @State private var pendingFill: (playlistId: String, title: String, service: TeamService)?
     @State private var buildingPDF = false
     /// The service whose 악보 are open on the stand.
     /// 전체 악보 open: the service, and the song it opens at — the one
@@ -278,7 +283,7 @@ struct ServicePrepView: View {
                               onCancel: { offeringEdit = nil })
             }
             .sheet(item: $reviewing) { review in
-                SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs,
+                SongTitleReviewSheet(playlistTitle: review.playlistTitle, songs: review.songs, loading: review.loading,
                                      remembered: { song in
                                          song.videoId.flatMap { SongTitleChoices.title(for: $0) ?? review.sheetTitles[$0] }
                                      },
@@ -289,7 +294,11 @@ struct ServicePrepView: View {
                                      },
                                      onCancel: { reviewing = nil })
             }
-            .sheet(item: $fillingFrom) { service in
+            .sheet(item: $fillingFrom, onDismiss: {
+                guard let next = pendingFill else { return }
+                pendingFill = nil
+                Task { await push(next.playlistId, title: next.title, to: next.service) }
+            }) { service in
                 FillFromPlaylistSheet(
                     service: service,
                     pinned: pinnedPlaylists,
@@ -304,7 +313,8 @@ struct ServicePrepView: View {
                     // first of them, so a 콘티 could land on the wrong
                     // service entirely. The service is right here in the
                     // closure; there is no reason to go looking for it.
-                    Task { await push(playlistId, title: title, to: service) }
+                    // Read once the picker has gone (its onDismiss).
+                    pendingFill = (playlistId, title, service)
                 }
                 .environmentObject(auth)
                 .environmentObject(quota)
@@ -1821,18 +1831,34 @@ struct ServicePrepView: View {
 
     // MARK: - Pushing the 콘티
 
+    /// The review opens at once, saying it is reading; the playlist and the
+    /// Songs tab are read together, not one after the other; the keys songs
+    /// were last played in are looked up in one pass for all of them.
+    ///
+    /// WHY: choosing a playlist used to show nothing but a small spinner in
+    /// the button for the length of two reads in a row, a search of every
+    /// earlier service for every song, and a fixed wait for the picker to
+    /// close — seconds, with nothing on screen to say anything was coming.
     private func push(_ playlistId: String, title: String, to service: TeamService) async {
         guard let sheetId else { return }
-        isPushing = true
         pushNote = nil
-        defer { isPushing = false }
+        let review = PushReview(service: service, playlistTitle: title, songs: [], loading: true)
+        reviewing = review
 
         let client = AppServices.client(auth: auth, quota: quota)
-        guard let items = try? await client.playlistItems(playlistId: playlistId) else {
+        async let itemsRead = try? client.playlistItems(playlistId: playlistId)
+        async let rowsRead = try? team.rawSongRows(sheetId: sheetId)
+        let items = await itemsRead
+        let rows = await rowsRead
+        // Closed meanwhile: nothing more to fill in.
+        guard reviewing?.id == review.id else { return }
+        guard let items else {
+            reviewing = nil
             pushNote = "재생목록을 불러오지 못했습니다."
             return
         }
 
+        let lastKey = team.lastKeys(before: service.date)
         let songs: [TeamSong] = items.enumerated().compactMap { index, item -> TeamSong? in
             guard !item.isUnavailable, let id = item.videoId else { return nil }
             let chart = existingSheet(forTitle: item.title)
@@ -1842,23 +1868,21 @@ struct ServicePrepView: View {
                 url: YouTubeID.watchURL(id),
                 // The key the team last played it in; else a chart the app
                 // made of it; else blank for the leader to fill.
-                key: team.lastKey(videoId: id, title: item.title, before: service.date) ?? chart?.keyLabel,
+                key: lastKey(id, item.title) ?? chart?.keyLabel,
                 transpose: chart?.semitoneShift ?? 0,
                 notes: nil,
                 channel: item.channelTitle
             )
         }
         guard !songs.isEmpty else {
+            reviewing = nil
             pushNote = "재생할 수 있는 곡이 없습니다."
             return
         }
-        // Not written yet: the titles, read out of the videos', are checked
-        // first — an album or a series is sometimes read as the song.
-        // The picker sheet is still closing; the next one waits for it.
         // What is already there, each with its row — to merge with, never
         // to overwrite unasked.
         var existing: [TeamSong] = []
-        if let rows = try? await team.rawSongRows(sheetId: sheetId) {
+        if let rows {
             let day = Calendar.current.startOfDay(for: service.date)
             existing = (TeamStore.parseSongs(rows)[day] ?? []).sorted { $0.order < $1.order }.map { song in
                 var song = song
@@ -1874,9 +1898,11 @@ struct ServicePrepView: View {
             }
         }
         #endif
-        try? await Task.sleep(for: .milliseconds(450))
-        reviewing = PushReview(service: service, playlistTitle: title, songs: songs, existing: existing,
-                               sheetTitles: team.sheetTitles())
+        guard reviewing?.id == review.id else { return }
+        reviewing?.songs = songs
+        reviewing?.existing = existing
+        reviewing?.sheetTitles = team.sheetTitles()
+        reviewing?.loading = false
     }
 
     /// The checked songs, onto the Songs tab for this service.
