@@ -155,22 +155,21 @@ enum ScoreTransposer {
     ///   large enough to be read out from a stand (it was a tenth of an
     ///   inch high, and could not be).
     ///
-    /// Every page has a margin all round, white: a chart printed to its
-    /// edges ran into the printer's own edge, and on a screen sat against
-    /// the frame.
+    /// Every page is a sheet of paper (PrintLayout): the chart's page with
+    /// its caption and notice fitted whole onto it, inside a margin a
+    /// printer prints to — so each prints as one sheet, not shrunk, cut or
+    /// split each its own way.
     static func transposed(pages: [Page], by semitones: Int, useFlats: Bool? = nil,
                            scale: CGFloat = 1, caption: String? = nil, notice: String? = nil) -> Data? {
         guard !pages.isEmpty else { return nil }
-        let renderer = UIGraphicsPDFRenderer(
-            bounds: CGRect(origin: .zero, size: pages[0].pointSize))
+        let paper = PrintLayout.paper(region: Locale.current.region?.identifier)
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: paper))
         return renderer.pdfData { context in
             for (index, page) in pages.enumerated() {
                 let size = page.pointSize
                 let fontSize = max(9, size.width * 0.017)
                 // Close to the corner: the chart's own margin is below it.
                 let margin = max(6, size.width * 0.012)
-                // Round the whole page.
-                let pad = max(8, size.width * 0.022)
                 // The notice on the song's first page only: read once, before it.
                 let block = index == 0 ? notice.map { noticeText($0, fontSize: max(13, size.width * 0.028)) } : nil
                 let blockHeight = block.map {
@@ -179,13 +178,17 @@ enum ScoreTransposer {
                 } ?? 0
                 let captionHeight = caption == nil ? 0 : (fontSize * 2).rounded()
                 let strip = captionHeight + blockHeight
-                let full = CGSize(width: size.width + pad * 2, height: size.height + strip + pad * 2)
-                context.beginPage(withBounds: CGRect(origin: .zero, size: full), pageInfo: [:])
+                // The page with its strip, fitted onto one sheet.
+                let content = CGSize(width: size.width, height: size.height + strip)
+                let sheet = PrintLayout.sheet(for: content, paper: paper)
+                let placed = PrintLayout.place(content, on: sheet)
+                context.beginPage(withBounds: CGRect(origin: .zero, size: sheet), pageInfo: [:])
                 let cg = context.cgContext
                 cg.setFillColor(UIColor.white.cgColor)
-                cg.fill(CGRect(origin: .zero, size: full))
+                cg.fill(CGRect(origin: .zero, size: sheet))
                 cg.saveGState()
-                cg.translateBy(x: pad, y: pad)
+                cg.translateBy(x: placed.minX, y: placed.minY)
+                cg.scaleBy(x: placed.width / content.width, y: placed.height / content.height)
                 if let caption {
                     (caption as NSString).draw(
                         at: CGPoint(x: margin, y: (captionHeight - fontSize * 1.2) / 2),
