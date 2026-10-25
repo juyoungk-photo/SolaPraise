@@ -197,6 +197,9 @@ struct ScoreFinderView: View {
     @State private var standNext: ScoreStandItem?
     /// What the upload is doing, said under the spinner.
     @State private var savingStep = ""
+    /// Attached, and another version was chosen for the 콘티 before it:
+    /// asked which the 콘티 takes before the stand opens (NewChart).
+    @State private var asking: (item: ScoreStandItem, destination: ScoreDestination, standing: String)?
 
     var body: some View {
         NavigationStack {
@@ -460,6 +463,23 @@ struct ScoreFinderView: View {
             }
         }
         .presentationDetents([.large])
+        .alert("새 악보를 콘티에 쓸까요?",
+               isPresented: Binding(get: { asking != nil }, set: { _ in })) {
+            // Either way on to the stand; each button once.
+            Button("새 악보로") {
+                guard let asked = asking else { return }
+                play(asked.item)
+                Task {
+                    if let failure = await NewChart.makeDefault(asked.item.attachment, team: team, service: asked.destination.service,
+                                                                song: asked.destination.song, sheetId: TeamSheetSource.current) {
+                        Toast.shared.sheet(failure, saved: "")
+                    }
+                }
+            }
+            Button("그대로 두기", role: .cancel) { if let asked = asking { play(asked.item) } }
+        } message: {
+            Text("지금 콘티에는 「\(asking?.standing ?? "")」이 들어가 있습니다. 새 악보는 버전으로 남아, 악보 화면에서 언제든 바꿀 수 있습니다.")
+        }
     }
 
     private var fileTitle: String {
@@ -514,8 +534,21 @@ struct ScoreFinderView: View {
         ScoreFileCache.save(data, for: attached.fileId)
         var item = ScoreStandItem(attachment: attached, song: destination.song, teamKey: destination.key)
         item.videoId = videoId
+        // The 콘티 takes it — or, when another was chosen on purpose, asked.
+        if let standing = NewChart.standing(team: team, service: destination.service, song: destination.song,
+                                            except: attached.fileId) {
+            asking = (item, destination, standing)
+            return
+        }
+        NewChart.takeNewest(service: destination.service, song: destination.song)
+        play(item)
+    }
+
+    /// To the stand, once the review sheet has gone.
+    private func play(_ item: ScoreStandItem) {
+        asking = nil
         standNext = item
-        self.capture = nil
+        capture = nil
     }
 
     private func close() { closer.action() }

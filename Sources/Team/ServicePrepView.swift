@@ -1138,9 +1138,32 @@ struct ServicePrepView: View {
     /// read as five different things about one chart.
     @ViewBuilder
     private func chartButton(_ item: PlanItem, in service: TeamService) -> some View {
-        let uploaded = songVersions(service)[item.title]?.isEmpty == false
+        let versions = songVersions(service)[item.title] ?? []
+        let uploaded = !versions.isEmpty
+        // Only the chart it was played from before: shown as that, quiet,
+        // with the search beside it. It read as the week's chart, and a
+        // song added to the 콘티 looked as if its chart were already up.
+        let earlierOnly = uploaded && versions.allSatisfy { $0.earlierDay != nil }
         let made = uploaded ? nil : existingSheet(forTitle: item.title)
-        if uploaded || made != nil {
+        if earlierOnly, isWide {
+            HStack(spacing: 6) {
+                Button {
+                    standSong = SongStand(service: service, song: item.title)
+                } label: {
+                    ChartBadge(text: "지난 악보", systemImage: "clock.arrow.circlepath", tint: .secondary)
+                        .frame(minHeight: Self.rowButtonHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 지난 악보 보기")
+                searchButton(item, in: service)
+            }
+        } else if earlierOnly {
+            // A phone has room for one button beside the title: the search,
+            // marked, with the chart played before at the top of its menu.
+            searchButton(item, in: service, earlier: versions.first?.earlierDay)
+        } else if uploaded || made != nil {
             // The key the chart was last shown in, only when it is not the
             // 순서's: a chart left in the wrong key is caught before Sunday.
             let off = uploaded ? offKey(item, in: service) : nil
@@ -1160,19 +1183,44 @@ struct ServicePrepView: View {
             .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 보기"
                                 + (off.map { ", 악보는 \($0) 키" } ?? ""))
         } else {
-            // No chart yet — often, for a song just added to the 콘티: the
-            // search where the chart would be, the one found attached to
-            // this song of this service (ScoreFinder).
-            SheetMusicMenu(title: item.title, channel: channelTitle(forVideo: item.videoId),
-                           published: sheetLinks(forVideo: item.videoId), videoId: item.videoId,
-                           destination: ScoreDestination(service: service, song: item.title, key: item.key)) {
-                ChartBadge(text: isWide ? "악보 검색" : "", systemImage: "doc.text.magnifyingglass", tint: .secondary)
-                    .frame(minHeight: Self.rowButtonHeight)
-                    .contentShape(Rectangle())
-            }
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 검색")
+            // No chart yet — often, for a song just added to the 콘티.
+            searchButton(item, in: service)
         }
+    }
+
+    /// The search where the chart would be, the one found attached to this
+    /// song of this service (ScoreFinder).
+    private func searchButton(_ item: PlanItem, in service: TeamService, earlier: Date? = nil) -> some View {
+        Menu {
+            if let earlier {
+                Button {
+                    standSong = SongStand(service: service, song: item.title)
+                } label: {
+                    Label("지난 악보 보기 — \(earlier.formatted(.dateTime.month().day()))", systemImage: "clock.arrow.circlepath")
+                }
+                Divider()
+            }
+            SheetMusicLinks(title: item.title, channel: channelTitle(forVideo: item.videoId),
+                            published: sheetLinks(forVideo: item.videoId), videoId: item.videoId,
+                            destination: ScoreDestination(service: service, song: item.title, key: item.key))
+        } label: {
+            ChartBadge(text: isWide ? "악보 검색" : "", systemImage: "doc.text.magnifyingglass", tint: .secondary)
+                .overlay(alignment: .topTrailing) {
+                    if earlier != nil {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(2)
+                            .background(Circle().fill(Color(.systemBackground)))
+                            .offset(x: 4, y: -4)
+                    }
+                }
+                .frame(minHeight: Self.rowButtonHeight)
+                .contentShape(Rectangle())
+        }
+        // As written, wherever the button sits (SheetMusicMenu).
+        .menuOrder(.fixed)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 검색" + (earlier == nil ? "" : ", 지난 악보 있음"))
     }
 
     /// The key the song's chart was last shown in, when it differs from the

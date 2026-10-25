@@ -60,6 +60,9 @@ struct AttachmentMenu<Content: View>: View {
     @State private var pending: [Picked] = []
     /// From the file browser, ordered by name; photos keep the order tapped.
     @State private var fromFiles = false
+    /// Put up, and another version was chosen for the 콘티 before it:
+    /// which the 콘티 takes is asked (NewChart).
+    @State private var asking: (chart: Attachment, standing: String)?
 
     struct Picked {
         let data: Data
@@ -133,12 +136,33 @@ struct AttachmentMenu<Content: View>: View {
             Button(song.isEmpty ? "각각 다른 콘티로" : "각각 다른 악보로") {
                 let parts = pending
                 pending = []
-                Task { for part in parts { await send(data: part.data, name: part.name, mime: part.mime) } }
+                Task {
+                    // Asked once, about the last: they are rivals now anyway.
+                    for (i, part) in parts.enumerated() {
+                        await send(data: part.data, name: part.name, mime: part.mime, asks: i == parts.count - 1)
+                    }
+                }
             }
             Button("취소", role: .cancel) { pending = [] }
         } message: {
             Text((fromFiles ? "파일 이름 순서대로" : "고른 순서대로")
                  + " 쪽이 됩니다. 각각 올리면 같은 곡의 다른 버전이 되어 하나만 보입니다.")
+        }
+        .alert("새 악보를 콘티에 쓸까요?",
+               isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
+            Button("새 악보로") {
+                guard let asked = asking else { return }
+                asking = nil
+                Task {
+                    if let failure = await NewChart.makeDefault(asked.chart, team: team, service: service,
+                                                                song: song, sheetId: target) {
+                        addNote(failure)
+                    }
+                }
+            }
+            Button("그대로 두기", role: .cancel) { asking = nil }
+        } message: {
+            Text("지금 콘티에는 「\(asking?.standing ?? "")」이 들어가 있습니다. 새 악보는 버전으로 남아, 악보 화면에서 언제든 바꿀 수 있습니다.")
         }
         .sheet(item: $assigning) { file in
             ContiPagesSheet(attachment: file,
@@ -387,13 +411,13 @@ struct AttachmentMenu<Content: View>: View {
 
     /// The pages as one PDF, in the order picked.
     @discardableResult
-    private func sendJoined(_ parts: [Data]) async -> Bool {
+    private func sendJoined(_ parts: [Data], asks: Bool = true) async -> Bool {
         guard let joined = ChartPages.join(parts) else {
             addNote("쪽을 합치지 못했습니다 — PDF나 사진이 아닌 파일이 있습니다.")
             return false
         }
         let name = "\(stem)-\(Int(Date().timeIntervalSince1970))-\(parts.count)p.pdf"
-        return await send(data: joined, name: name, mime: "application/pdf")
+        return await send(data: joined, name: name, mime: "application/pdf", asks: asks)
     }
 
     /// Files already up, joined in the order given; the originals taken
@@ -410,15 +434,31 @@ struct AttachmentMenu<Content: View>: View {
             }
         }
         note = nil
-        guard await sendJoined(parts) else { return note ?? "합치지 못했습니다." }
+        // Was one of them the 콘티's? Then the joined chart takes its place
+        // — not asked: this list is a sheet, and the answer is plain.
+        let scope = ContiChoice.scope(service)
+        let chosen = ContiChoice.chosen(scope: scope, song: song)
+        let wasChosen = files.contains { $0.chosenForConti || $0.fileId == chosen }
+        let before = Set(team.attachments(for: service, song: song).map(\.fileId))
+        guard await sendJoined(parts, asks: false) else { return note ?? "합치지 못했습니다." }
         if removeOriginals {
             for file in files { await remove(file) }
+        }
+        if let joined = team.attachments(for: service, song: song).first(where: { !before.contains($0.fileId) }) {
+            if wasChosen {
+                if let failure = await NewChart.makeDefault(joined, team: team, service: service, song: song, sheetId: target,
+                                                            marked: files.contains(where: \.chosenForConti)) {
+                    addNote(failure)
+                }
+            } else if NewChart.standing(team: team, service: service, song: song, except: joined.fileId) == nil {
+                NewChart.takeNewest(service: service, song: song)
+            }
         }
         return note
     }
 
     @discardableResult
-    private func send(data: Data, name: String, mime: String) async -> Bool {
+    private func send(data: Data, name: String, mime: String, asks: Bool = true) async -> Bool {
         guard let sheetId = target else { return false }
         isUploading = true
         defer { isUploading = false }
@@ -439,6 +479,14 @@ struct AttachmentMenu<Content: View>: View {
                 && ContiPages.cached(file.fileId) == nil {
                 ScoreFileCache.save(data, for: file.fileId)
                 await ContiPages.compute(for: file, songs: songs)
+            }
+        } else if asks, let chart = team.attachments(for: service, song: song).last(where: { $0.name == name }) {
+            // A song's new chart is what its 콘티 takes — or, when another
+            // was chosen on purpose, asked.
+            if let standing = NewChart.standing(team: team, service: service, song: song, except: chart.fileId) {
+                asking = (chart, standing)
+            } else {
+                NewChart.takeNewest(service: service, song: song)
             }
         }
         return true
