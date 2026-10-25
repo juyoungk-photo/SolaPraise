@@ -88,21 +88,38 @@ enum ScoreFinder {
         var action: () -> Void = {}
     }
 
-    /// The largest picture in view, by what it holds: its own pixels, not
-    /// how big it is drawn. A preview's thumbnail is swapped for the full
-    /// image once that loads; `currentSrc` is whichever is showing.
+    /// The picture being looked at: the one taking the most of the screen,
+    /// as seen — visible, not hidden behind another picture — not the one
+    /// holding the most pixels. Google's image viewer keeps the next result
+    /// loaded, hidden, where the shown one is; ranked by pixels, the next
+    /// chart was taken when it was the larger file. A preview's thumbnail
+    /// is swapped for the full image once that loads; `currentSrc` is
+    /// whichever is showing.
     static let largestImageScript = """
     (function () {
-      var best = null, bestArea = 0;
       var vw = window.innerWidth, vh = window.innerHeight;
+      function shown(el) {
+        for (var e = el; e && e.nodeType === 1; e = e.parentElement) {
+          var s = window.getComputedStyle(e);
+          if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) < 0.2) return false;
+        }
+        return true;
+      }
+      var best = null, bestSeen = 0;
       var imgs = document.images;
       for (var i = 0; i < imgs.length; i++) {
         var img = imgs[i];
+        if (!img.naturalWidth) continue;
         var r = img.getBoundingClientRect();
-        if (r.width < 120 || r.height < 120) continue;
-        if (r.bottom < 0 || r.right < 0 || r.top > vh || r.left > vw) continue;
-        var area = (img.naturalWidth || 0) * (img.naturalHeight || 0);
-        if (area > bestArea) { bestArea = area; best = img; }
+        var w = Math.min(r.right, vw) - Math.max(r.left, 0);
+        var h = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+        if (w < 120 || h < 120) continue;
+        if (!shown(img)) continue;
+        // Under the finger where it shows: not another picture on top.
+        var top = document.elementFromPoint(Math.max(r.left, 0) + w / 2, Math.max(r.top, 0) + h / 2);
+        if (top && top !== img && top.tagName === 'IMG') continue;
+        var seen = w * h;
+        if (seen > bestSeen) { bestSeen = seen; best = img; }
       }
       if (!best) return null;
       return { src: best.currentSrc || best.src, w: best.naturalWidth, h: best.naturalHeight };
@@ -149,8 +166,9 @@ struct ScoreFinderView: View {
 
     /// A chart taken from the page, waiting for where it goes.
     struct Capture: Identifiable {
-        let id = UUID()
-        let data: Data
+        /// Kept through a crop, so the sheet stays up with the new picture.
+        var id = UUID()
+        var data: Data
         let isPDF: Bool
         /// Said in the sheet, over the picture: an alert raised as the sheet
         /// opened left one of the two unpresented.
@@ -385,6 +403,18 @@ struct ScoreFinderView: View {
                         Image(uiImage: image).resizable().scaledToFit()
                             .frame(maxHeight: 320)
                             .frame(maxWidth: .infinity)
+                        // To the chart alone: a page's margins, a site's
+                        // header, the next song begun below it.
+                        NavigationLink {
+                            ChartCropView(image: image) { cropped in
+                                guard let data = cropped.jpegData(compressionQuality: 0.92) else { return }
+                                var next = capture
+                                next.data = data
+                                self.capture = next
+                            }
+                        } label: {
+                            Label("자르기", systemImage: "crop")
+                        }
                     } else {
                         Label("PDF 악보", systemImage: "doc.richtext")
                     }
@@ -639,4 +669,131 @@ struct WebPageView: UIViewRepresentable {
     @ObservedObject var page: WebPage
     func makeUIView(context: Context) -> WKWebView { page.web }
     func updateUIView(_ view: WKWebView, context: Context) {}
+}
+
+// MARK: - 자르기
+
+/// The picture with a frame to drag in from its edges and corners; 완료
+/// keeps what is inside it.
+struct ChartCropView: View {
+    let image: UIImage
+    let onCrop: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+    /// The frame, as a share of the picture, 0…1 each way.
+    @State private var frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+    @State private var start: CGRect?
+
+    var body: some View {
+        GeometryReader { geo in
+            let shown = fitted(in: geo.size)
+            ZStack(alignment: .topLeading) {
+                Color.black
+                Image(uiImage: image).resizable()
+                    .frame(width: shown.width, height: shown.height)
+                    .offset(x: shown.minX, y: shown.minY)
+                // Outside the frame, dimmed.
+                Path { path in
+                    path.addRect(shown)
+                    path.addRect(box(in: shown))
+                }
+                .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
+                .allowsHitTesting(false)
+                Rectangle()
+                    .strokeBorder(Color.white, lineWidth: 2)
+                    .frame(width: box(in: shown).width, height: box(in: shown).height)
+                    .offset(x: box(in: shown).minX, y: box(in: shown).minY)
+                    .allowsHitTesting(false)
+                ForEach(Handle.allCases, id: \.self) { handle in
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 22, height: 22)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                        .position(handle.point(in: box(in: shown)))
+                        .gesture(DragGesture()
+                            .onChanged { value in
+                                let from = start ?? frame
+                                start = from
+                                frame = handle.moved(from, by: CGSize(width: value.translation.width / shown.width,
+                                                                      height: value.translation.height / shown.height))
+                            }
+                            .onEnded { _ in start = nil })
+                }
+            }
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .navigationTitle("자르기")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("완료") {
+                    if let cropped = crop() { onCrop(cropped) }
+                    dismiss()
+                }
+            }
+            ToolbarItem(placement: .bottomBar) {
+                Button("처음대로") { frame = CGRect(x: 0, y: 0, width: 1, height: 1) }
+            }
+        }
+    }
+
+    private func fitted(in size: CGSize) -> CGRect {
+        let inset = size.applying(.init(scaleX: 1, y: 1))
+        let scale = min((inset.width - 32) / image.size.width, (inset.height - 32) / image.size.height)
+        let w = image.size.width * scale, h = image.size.height * scale
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+
+    private func box(in shown: CGRect) -> CGRect {
+        CGRect(x: shown.minX + frame.minX * shown.width, y: shown.minY + frame.minY * shown.height,
+               width: frame.width * shown.width, height: frame.height * shown.height)
+    }
+
+    /// What is inside the frame, at the picture's own pixels.
+    private func crop() -> UIImage? {
+        let upright = UIGraphicsImageRenderer(size: image.size).image { _ in image.draw(at: .zero) }
+        guard let cg = upright.cgImage else { return nil }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        let area = CGRect(x: frame.minX * w, y: frame.minY * h, width: frame.width * w, height: frame.height * h).integral
+        return cg.cropping(to: area).map { UIImage(cgImage: $0) }
+    }
+
+    enum Handle: CaseIterable {
+        case topLeft, topRight, bottomLeft, bottomRight, top, bottom, left, right
+
+        func point(in box: CGRect) -> CGPoint {
+            switch self {
+            case .topLeft: return CGPoint(x: box.minX, y: box.minY)
+            case .topRight: return CGPoint(x: box.maxX, y: box.minY)
+            case .bottomLeft: return CGPoint(x: box.minX, y: box.maxY)
+            case .bottomRight: return CGPoint(x: box.maxX, y: box.maxY)
+            case .top: return CGPoint(x: box.midX, y: box.minY)
+            case .bottom: return CGPoint(x: box.midX, y: box.maxY)
+            case .left: return CGPoint(x: box.minX, y: box.midY)
+            case .right: return CGPoint(x: box.maxX, y: box.midY)
+            }
+        }
+
+        /// The frame with this edge or corner dragged, kept inside the
+        /// picture and at least a tenth of it each way.
+        func moved(_ frame: CGRect, by d: CGSize) -> CGRect {
+            var left = frame.minX, top = frame.minY, right = frame.maxX, bottom = frame.maxY
+            switch self {
+            case .topLeft: left += d.width; top += d.height
+            case .topRight: right += d.width; top += d.height
+            case .bottomLeft: left += d.width; bottom += d.height
+            case .bottomRight: right += d.width; bottom += d.height
+            case .top: top += d.height
+            case .bottom: bottom += d.height
+            case .left: left += d.width
+            case .right: right += d.width
+            }
+            let least: CGFloat = 0.1
+            left = min(max(0, left), right - least)
+            top = min(max(0, top), bottom - least)
+            right = max(min(1, right), left + least)
+            bottom = max(min(1, bottom), top + least)
+            return CGRect(x: left, y: top, width: right - left, height: bottom - top)
+        }
+    }
 }
