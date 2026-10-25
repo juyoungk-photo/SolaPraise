@@ -85,11 +85,15 @@ being asked — so what the user tries is what was just made. Only a
 device whose state is `connected` (`xcrun devicectl list devices`);
 never one merely `available (paired)` — that may be someone else's.
 
-    xcodebuild -project SolaPraise.xcodeproj -scheme SolaPraise -configuration Debug \
-      -destination 'generic/platform=iOS' -derivedDataPath /tmp/claude-501/sp/ddev \
+    xcodebuild -project SolaPraise.xcodeproj -scheme SolaPraise -configuration Release \
+      -destination 'generic/platform=iOS' -derivedDataPath /tmp/claude-501/sp/ddrel \
       -allowProvisioningUpdates build -quiet
     xcrun devicectl device install app --device <Identifier> \
-      /tmp/claude-501/sp/ddev/Build/Products/Debug-iphoneos/SolaPraise.app
+      /tmp/claude-501/sp/ddrel/Build/Products/Release-iphoneos/SolaPraise.app
+
+Release, not Debug: it is what the team will run — faster, and without
+the Debug build's stack depth that crashed the stand once — and it
+catches code that compiles only under `#if DEBUG`.
 
 Then say it was installed, and on which device. If signing or the
 install fails, say so rather than skip it.
