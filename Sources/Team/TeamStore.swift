@@ -866,7 +866,10 @@ final class TeamStore: ObservableObject {
     /// The sheet as last read, kept on the device, while nothing else is
     /// on screen. Said to be so (offlineSince) until a read replaces it.
     func showKept(sheetId: String) {
-        guard services.isEmpty, !isSample, let kept = TeamSnapshot.load(sheetId: sheetId) else { return }
+        #if DEBUG
+        if isSample { return }
+        #endif
+        guard services.isEmpty, let kept = TeamSnapshot.load(sheetId: sheetId) else { return }
         apply(kept)
         contiFiles = kept.contiFiles.map { ContiFolder.File(id: $0.id, name: $0.name, modified: $0.modified) }
         offlineSince = kept.savedAt
