@@ -77,6 +77,23 @@ found by the user rather than by me:
   and microphone behaviour cannot be driven from here; say so rather than
   implying they were tested.
 
+## When the work is done: onto the connected device
+
+At the end of every piece of work, if one of the user's own devices is
+connected by cable, build and install the new build on it — without
+being asked — so what the user tries is what was just made. Only a
+device whose state is `connected` (`xcrun devicectl list devices`);
+never one merely `available (paired)` — that may be someone else's.
+
+    xcodebuild -project SolaPraise.xcodeproj -scheme SolaPraise -configuration Debug \
+      -destination 'generic/platform=iOS' -derivedDataPath /tmp/claude-501/sp/ddev \
+      -allowProvisioningUpdates build -quiet
+    xcrun devicectl device install app --device <Identifier> \
+      /tmp/claude-501/sp/ddev/Build/Products/Debug-iphoneos/SolaPraise.app
+
+Then say it was installed, and on which device. If signing or the
+install fails, say so rather than skip it.
+
 ## Sanity checks — run them, and grow them
 
 Every serious bug in 예배 준비 was silent: rows written into the wrong
