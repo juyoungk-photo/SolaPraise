@@ -275,10 +275,13 @@ struct ServicePrepView: View {
                 ExportToPlaylistSheet(service: service)
                     .environmentObject(team)
             }
-            .confirmationDialog("이 콘티를 지울까요?",
-                                isPresented: Binding(get: { removingConti != nil }, set: { if !$0 { removingConti = nil } }),
-                                titleVisibility: .visible, presenting: removingConti) { target in
-                Button("「\((target.file.name as NSString).deletingPathExtension)」 지우기", role: .destructive) {
+            // An alert, not a confirmation dialog: on an iPad that is a
+            // popover pointing at the view it hangs from — here the whole
+            // screen — and it came up clipped, its button hard to find.
+            .alert("이 콘티를 지울까요?",
+                   isPresented: Binding(get: { removingConti != nil }, set: { if !$0 { removingConti = nil } }),
+                   presenting: removingConti) { target in
+                Button("지우기", role: .destructive) {
                     Task {
                         guard let sheetId else { return }
                         if let failure = await team.removeConti(target.file, sheetId: sheetId) {
@@ -289,8 +292,8 @@ struct ServicePrepView: View {
                     }
                 }
                 Button("취소", role: .cancel) {}
-            } message: { _ in
-                Text("파일 하나가 지워집니다 — 곡마다 나뉜 페이지도 함께 없어집니다. 팀 시트의 첨부에서 빠지고, 이 계정이 올린 파일이면 드라이브에서도 지워집니다. 되돌릴 수 없습니다.")
+            } message: { target in
+                Text("「\((target.file.name as NSString).deletingPathExtension)」 파일 하나가 지워집니다 — 곡마다 나뉜 페이지도 함께 없어집니다. 팀 시트의 첨부에서 빠지고, 이 계정이 올린 파일이면 드라이브에서도 지워집니다. 되돌릴 수 없습니다.")
             }
             .sheet(item: $offeringEdit) { edit in
                 OfferingSheet(song: edit.item.title, prayer: edit.item.offering.prayer,
@@ -822,8 +825,7 @@ struct ServicePrepView: View {
             } footer: {
                 Text("시트에서 바꾼 내용은 이 화면을 아래로 당겨 새로 고치면 반영됩니다.")
             }
-            .confirmationDialog("팀 시트를 정리할까요?", isPresented: $confirmTidy,
-                                titleVisibility: .visible) {
+            .alert("팀 시트를 정리할까요?", isPresented: $confirmTidy) {
                 Button("정리하기") {
                     guard let sheetId else { return }
                     Task {

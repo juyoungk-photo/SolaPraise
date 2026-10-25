@@ -287,9 +287,12 @@ struct ScoreStandView: View {
     /// line's lyrics, a chord typed or turned to.
     private func editPresentations<Content: View>(_ content: Content) -> some View {
         content
-        .confirmationDialog("이 악보를 지울까요?", isPresented: Binding(get: { removing != nil },
-                                                                     set: { if !$0 { removing = nil } }),
-                            titleVisibility: .visible, presenting: removing) { version in
+        // Alerts, not confirmation dialogs, for a yes or no: on an iPad a
+        // dialog is a popover pointing at what it hangs from — here the
+        // whole stand — and it came up clipped, its button hard to find.
+        .alert("이 악보를 지울까요?", isPresented: Binding(get: { removing != nil },
+                                                        set: { if !$0 { removing = nil } }),
+               presenting: removing) { version in
             Button("지우기", role: .destructive) { Task { await remove(version) } }
             Button("취소", role: .cancel) {}
         } message: { _ in
@@ -346,11 +349,13 @@ struct ScoreStandView: View {
         } message: { _ in
             Text("코드가 아닌 글자를 잘못 읽었다면 지우세요. 지우면 원래 인쇄된 글자가 그대로 보이고, 편집 중에는 점선 상자로 남아 누르면 되살아납니다.")
         }
-        .confirmationDialog("코드를 다시 읽을까요?", isPresented: $confirmingReread, titleVisibility: .visible) {
-            Button("다시 읽기 — 손으로 고친 것은 지워집니다", role: .destructive) {
+        .alert("코드를 다시 읽을까요?", isPresented: $confirmingReread) {
+            Button("다시 읽기", role: .destructive) {
                 if let item { Task { await model.resetEdits(item) } }
             }
             Button("취소", role: .cancel) {}
+        } message: {
+            Text("손으로 고친 코드는 지워집니다.")
         }
         .confirmationDialog("어느 쪽에 넣을까요?", isPresented: $choosingPage, titleVisibility: .visible) {
             ForEach(0..<(item.flatMap { model.states[$0.id]?.pages.count } ?? 0), id: \.self) { page in
