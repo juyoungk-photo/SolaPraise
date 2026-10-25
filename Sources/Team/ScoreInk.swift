@@ -139,6 +139,7 @@ struct InkCanvas: UIViewRepresentable {
     /// The drawer's own page as PencilKit keeps it.
     let drawing: RichPage?
     let active: Bool
+    var dark = false
     let onChange: (RichPage) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
@@ -165,10 +166,14 @@ struct InkCanvas: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onChange = onChange
         coordinator.drawing = drawing
+        canvas.overrideUserInterfaceStyle = dark ? .dark : .light
         canvas.isUserInteractionEnabled = active
         // Again when what it holds came from elsewhere.
         coordinator.load(canvas, sizeOnly: false)
         let picker = Self.picker
+        // Its colours as they will look on the page — a dark one too.
+        picker.colorUserInterfaceStyle = dark ? .dark : .light
+        picker.overrideUserInterfaceStyle = dark ? .dark : .light
         picker.addObserver(canvas)
         picker.setVisible(active, forFirstResponder: canvas)
         if active { canvas.becomeFirstResponder() } else if canvas.isFirstResponder { canvas.resignFirstResponder() }
@@ -226,6 +231,9 @@ struct InkCanvas: UIViewRepresentable {
 /// Another member's page as their PencilKit drew it: drawn as drawn.
 struct InkRichView: UIViewRepresentable {
     let page: RichPage
+    /// 악보 어둡게 보기: PencilKit shows the ink as on a dark page — black
+    /// ink white, colours kept.
+    var dark = false
 
     func makeUIView(context: Context) -> PageCanvas {
         let canvas = PageCanvas()
@@ -240,6 +248,7 @@ struct InkRichView: UIViewRepresentable {
 
     func updateUIView(_ canvas: PageCanvas, context: Context) {
         context.coordinator.page = page
+        canvas.overrideUserInterfaceStyle = dark ? .dark : .light
         context.coordinator.load(canvas)
     }
 

@@ -1532,10 +1532,12 @@ private struct ScorePageView: View {
 
     @AppStorage(DarkPages.key) private var darkPages = false
 
+    private var dark: Bool { darkPages && !original }
+
     var body: some View {
-        Image(uiImage: page.image)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
+        // 악보 어둡게 보기 (베타): the page made dark once (DarkPages), and
+        // what is laid on it drawn dark too.
+        DarkPageImage(image: page.image, dark: dark)
             .overlay {
                 if !original {
                 GeometryReader { geo in
@@ -1575,7 +1577,7 @@ private struct ScorePageView: View {
                         }
                         ForEach(labels.compactMap(\.cover).indices, id: \.self) { i in
                             let cover = labels.compactMap(\.cover)[i]
-                            Rectangle().fill(.white)
+                            Rectangle().fill(dark ? Color.black : Color.white)
                                 .frame(width: cover.width, height: cover.height)
                                 .position(x: cover.midX, y: cover.midY)
                         }
@@ -1592,18 +1594,16 @@ private struct ScorePageView: View {
                 if !original {
                     ZStack {
                         ForEach(Array(ink.othersRich.enumerated()), id: \.offset) { _, rich in
-                            InkRichView(page: rich)
+                            InkRichView(page: rich, dark: dark)
                         }
                         if drawing || ink.mineDrawing != nil {
                             InkCanvas(drawing: ink.mineDrawing,
-                                      active: drawing, onChange: onInk)
+                                      active: drawing, dark: dark, onChange: onInk)
                         }
                     }
                 }
             }
-            .background(Color.white)
-            // 악보 어둡게 보기 (베타): the page as drawn, light on black.
-            .modifier(DarkPage(on: darkPages && !original))
+            .background(dark ? Color.black : Color.white)
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
@@ -1646,12 +1646,12 @@ private struct ScorePageView: View {
         let moving = dragging?.id == label.id ? dragging!.by : .zero
         return Text(label.text)
             .font(.system(size: label.fontSize, weight: .bold))
-            .foregroundStyle(.black)
+            .foregroundStyle(dark ? Color.white : Color.black)
             .lineLimit(1)
             .fixedSize()
             .padding(.leading, label.textOrigin.x - label.patch.minX)
             .frame(width: label.patch.width, height: label.patch.height, alignment: .leading)
-            .background(Color.white)
+            .background(dark ? Color.black : Color.white)
             // Outlined lightly, so a reader can see which symbols were
             // changed — and which were not, the thing to check on a chart
             // that was read badly. Stronger while editing.

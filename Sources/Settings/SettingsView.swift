@@ -228,6 +228,9 @@ struct SettingsView: View {
             Toggle(isOn: $darkPages) {
                 Label("악보 어둡게 보기 (베타)", systemImage: "moon")
             }
+            if darkPages {
+                DarkPagesPanel()
+            }
             Toggle(isOn: Binding(
                 get: { teamNotifications },
                 set: { on in
