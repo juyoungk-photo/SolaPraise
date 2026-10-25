@@ -114,11 +114,14 @@ struct SheetMusicMenu<Label: View>: View {
     var published: [SheetMusicLink] = []
     var open: ((URL) -> Void)? = nil
     var videoId: String? = nil
+    /// Where a chart found goes, when the caller knows: a song on a 콘티.
+    var destination: ScoreDestination? = nil
     @ViewBuilder var label: Label
 
     var body: some View {
         Menu {
-            SheetMusicLinks(title: title, channel: channel, published: published, open: open, videoId: videoId)
+            SheetMusicLinks(title: title, channel: channel, published: published, open: open, videoId: videoId,
+                            destination: destination)
         } label: {
             label
         }

@@ -1124,6 +1124,19 @@ struct ServicePrepView: View {
             .foregroundStyle(tint)
             .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 보기"
                                 + (off.map { ", 악보는 \($0) 키" } ?? ""))
+        } else {
+            // No chart yet — often, for a song just added to the 콘티: the
+            // search where the chart would be, the one found attached to
+            // this song of this service (ScoreFinder).
+            SheetMusicMenu(title: item.title, channel: channelTitle(forVideo: item.videoId),
+                           published: sheetLinks(forVideo: item.videoId), videoId: item.videoId,
+                           destination: ScoreDestination(service: service, song: item.title, key: item.key)) {
+                ChartBadge(text: isWide ? "악보 검색" : "", systemImage: "doc.text.magnifyingglass", tint: .secondary)
+                    .frame(minHeight: Self.rowButtonHeight)
+                    .contentShape(Rectangle())
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("\(PlanSongTitle.split(item.title).title) 악보 검색")
         }
     }
 
