@@ -58,6 +58,8 @@ struct AttachmentMenu<Content: View>: View {
     /// Several picked at once, read and waiting for the answer: pages of
     /// one chart, or charts of their own.
     @State private var pending: [Picked] = []
+    /// From the file browser, ordered by name; photos keep the order tapped.
+    @State private var fromFiles = false
 
     struct Picked {
         let data: Data
@@ -101,9 +103,13 @@ struct AttachmentMenu<Content: View>: View {
                       allowedContentTypes: [.pdf, .image],
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
+            // By name: the file browser does not keep the order tapped,
+            // and pages are named in order — 「…1.jpg」, 「…2.jpg」.
+            let ordered = urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             Task {
                 var read: [Picked] = []
-                for url in urls { if let one = picked(from: url) { read.append(one) } }
+                for url in ordered { if let one = picked(from: url) { read.append(one) } }
+                fromFiles = true
                 await take(read)
             }
         }
@@ -113,6 +119,7 @@ struct AttachmentMenu<Content: View>: View {
                 var read: [Picked] = []
                 for item in items { if let one = await picked(from: item) { read.append(one) } }
                 photos = []
+                fromFiles = false
                 await take(read)
             }
         }
@@ -130,7 +137,8 @@ struct AttachmentMenu<Content: View>: View {
             }
             Button("취소", role: .cancel) { pending = [] }
         } message: {
-            Text("고른 순서대로 쪽이 됩니다. 각각 올리면 같은 곡의 다른 버전이 되어 하나만 보입니다.")
+            Text((fromFiles ? "파일 이름 순서대로" : "고른 순서대로")
+                 + " 쪽이 됩니다. 각각 올리면 같은 곡의 다른 버전이 되어 하나만 보입니다.")
         }
         .sheet(item: $assigning) { file in
             ContiPagesSheet(attachment: file,

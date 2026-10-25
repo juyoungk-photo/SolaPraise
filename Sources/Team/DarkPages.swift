@@ -20,15 +20,14 @@
 //  words below them and the chords above stand out. A page with no staff,
 //  a lyric sheet, has nothing to shade.
 //
-//  The shade reaches well past the staff, for notes hung below it and
-//  the line a faint scan loses (the finder takes four lines for a staff),
-//  and the words caught in it — a lyric close under the staff, a chord
-//  just over it — are cut back out, found as text by Vision.
+//  The shade covers each staff and the ink joined to it, pixel by pixel,
+//  and never the words or chords beside it (StaffShade). Still a beta, so
+//  it has its own switch beside its knob: a chart it reads badly can be
+//  shown plain.
 //
 
 import SwiftUI
 import CoreImage
-import Vision
 
 enum DarkPages {
     static let key = "score.darkPages"
@@ -36,6 +35,8 @@ enum DarkPages {
     /// faint grey.
     static let staffKey = "score.darkStaffLevel"
     static let staffRange: ClosedRange<Double> = 0.2...1
+    /// Whether the staves are shaded at all.
+    static let staffOnKey = "score.darkStaffShade"
 }
 
 /// The dark page and its staves, made once per page image.
@@ -44,18 +45,19 @@ final class DarkPageRenderer: @unchecked Sendable {
 
     struct Result {
         let image: UIImage
-        /// The staves to shade, normalised to the page (top-left origin),
-        /// each reaching past its outer lines for the notes just off them.
-        let staves: [CGRect]
-        /// The words in or near them, kept bright.
-        let words: [CGRect]
+        /// Black where the staves and the notes joined to them are, clear
+        /// elsewhere, the page's size: laid over the page at the knob's
+        /// strength. Nil on a page with no staff.
+        let shade: UIImage?
     }
 
     private let cache = NSCache<UIImage, Box>()
     private let context = CIContext(options: [.cacheIntermediates: false])
     private final class Box { let result: Result; init(_ r: Result) { result = r } }
 
-    private init() { cache.countLimit = 40 }
+    /// A dark page is the page's size in colour, its shade a quarter of
+    /// that: kept within a few charts' worth.
+    private init() { cache.totalCostLimit = 300 * 1024 * 1024 }
 
     func cached(_ page: UIImage) -> Result? { cache.object(forKey: page)?.result }
 
@@ -72,57 +74,28 @@ final class DarkPageRenderer: @unchecked Sendable {
             guard let output = hue.outputImage,
                   let dark = context.createCGImage(output, from: input.extent) else { return nil }
             let found = ScoreRecognition.staves(in: cg).map(\.staff)
-            let staves = found.map { staff -> CGRect in
-                let space = staff.height / 4
-                return CGRect(x: 0, y: staff.minY - space * 1.5,
-                              width: 1, height: staff.height + space * 4.5)
+            let shade = found.isEmpty ? nil : ScoreRecognition.grayscale(cg).flatMap {
+                Self.shadeImage(StaffShade.mask(gray: $0, width: cg.width, height: cg.height, staves: found),
+                                width: cg.width, height: cg.height)
             }
-            // Words near a staff, never between its lines: no lyric or
-            // chord sits there, and Vision takes a run of beamed notes —
-            // or a chord with the notes under it — for a word. What of a
-            // box lies above or below the lines is kept.
-            let words = staves.isEmpty ? [] : Self.words(in: cg)
-                .filter { word in staves.contains { $0.intersects(word) } }
-                .flatMap { word in found.reduce([word]) { pieces, staff in
-                    // A space below too: the line the finder may have
-                    // missed, and the notes hung on it.
-                    let space = staff.height / 4
-                    let lines = CGRect(x: 0, y: staff.minY - space * 0.25,
-                                       width: 1, height: staff.height + space * 1.5)
-                    return pieces.flatMap { Self.outside(lines, $0) }
-                } }
             return Result(image: UIImage(cgImage: dark, scale: page.scale, orientation: page.imageOrientation),
-                          staves: staves, words: words)
+                          shade: shade.map { UIImage(cgImage: $0, scale: page.scale, orientation: page.imageOrientation) })
         }.value
-        if let result { cache.setObject(Box(result), forKey: page) }
+        if let result, let cg = result.image.cgImage {
+            cache.setObject(Box(result), forKey: page, cost: cg.width * cg.height * 6)
+        }
         return result
     }
 
-    /// The parts of `word` above and below a staff's lines.
-    private static func outside(_ staff: CGRect, _ word: CGRect) -> [CGRect] {
-        guard word.intersects(staff) else { return [word] }
-        var parts: [CGRect] = []
-        if word.minY < staff.minY {
-            parts.append(CGRect(x: word.minX, y: word.minY, width: word.width, height: staff.minY - word.minY))
-        }
-        if word.maxY > staff.maxY {
-            parts.append(CGRect(x: word.minX, y: staff.maxY, width: word.width, height: word.maxY - staff.maxY))
-        }
-        return parts
-    }
-
-    /// Where the page has words — any script, nothing read — normalised,
-    /// top-left origin, a little padded.
-    private static func words(in image: CGImage) -> [CGRect] {
-        let request = VNDetectTextRectanglesRequest()
-        request.reportCharacterBoxes = false
-        try? VNImageRequestHandler(cgImage: image).perform([request])
-        return (request.results ?? []).map { found in
-            let box = found.boundingBox
-            let pad = box.height * 0.15
-            return CGRect(x: box.minX - pad, y: 1 - box.maxY - pad,
-                          width: box.width + pad * 2, height: box.height + pad * 2)
-        }
+    /// Black, its alpha the mask: grey and alpha, two bytes a pixel.
+    private static func shadeImage(_ mask: [UInt8], width: Int, height: Int) -> CGImage? {
+        var bytes = [UInt8](repeating: 0, count: width * height * 2)
+        for i in 0..<(width * height) { bytes[i * 2 + 1] = mask[i] }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 16, bytesPerRow: width * 2,
+                       space: CGColorSpaceCreateDeviceGray(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 }
 
@@ -134,6 +107,7 @@ struct DarkPageImage: View {
     let dark: Bool
 
     @AppStorage(DarkPages.staffKey) private var staffLevel = 0.45
+    @AppStorage(DarkPages.staffOnKey) private var shading = true
     @State private var made: DarkPageRenderer.Result?
 
     var body: some View {
@@ -143,21 +117,11 @@ struct DarkPageImage: View {
             } else if let made = made ?? DarkPageRenderer.shared.cached(image) {
                 Image(uiImage: made.image).resizable().aspectRatio(contentMode: .fit)
                     .overlay {
-                        if staffLevel < 0.99, !made.staves.isEmpty {
-                            Canvas { context, size in
-                                func scaled(_ r: CGRect) -> CGRect {
-                                    CGRect(x: r.minX * size.width, y: r.minY * size.height,
-                                           width: r.width * size.width, height: r.height * size.height)
-                                }
-                                // Everything but the words, then the staves in it.
-                                var keep = Path(CGRect(origin: .zero, size: size))
-                                for word in made.words { keep.addRect(scaled(word)) }
-                                context.clip(to: keep, style: FillStyle(eoFill: true))
-                                var shade = Path()
-                                for staff in made.staves { shade.addRect(scaled(staff)) }
-                                context.fill(shade, with: .color(.black.opacity(1 - staffLevel)))
-                            }
-                            .allowsHitTesting(false)
+                        if shading, staffLevel < 0.99, let shade = made.shade {
+                            // As dark as the knob says.
+                            Image(uiImage: shade).resizable().aspectRatio(contentMode: .fit)
+                                .opacity(1 - staffLevel)
+                                .allowsHitTesting(false)
                         }
                     }
             } else {
@@ -186,37 +150,47 @@ struct DarkPagesButton: View {
         } label: {
             Image(systemName: on ? "moon.fill" : "moon")
                 .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
                 .frame(width: 34, height: 30)
                 .background(on ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.12),
                             in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
         .accessibilityLabel(on ? "오선·음표 밝기, 악보 밝게 보기" : "악보 어둡게 보기 (베타)")
+        // White on the button only: set on the button, it reached the
+        // popover's text, which then vanished on a light popover.
         .popover(isPresented: $adjusting) {
             DarkPagesPanel(onLight: { on = false; adjusting = false })
                 .padding(16)
                 .frame(width: 300)
+                .preferredColorScheme(.dark)
                 .presentationCompactAdaptation(.popover)
         }
     }
 }
 
-/// The knob: how bright the staves stay, so the chords and words stand
-/// out. Seen on the page behind it as it moves.
+/// The knob: whether the staves are shaded, and how far, so the chords
+/// and words stand out. Seen on the page behind it as it moves.
 struct DarkPagesPanel: View {
     var onLight: (() -> Void)?
     @AppStorage(DarkPages.staffKey) private var staffLevel = 0.45
+    @AppStorage(DarkPages.staffOnKey) private var shading = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("오선·음표 밝기").font(.headline)
+            Toggle(isOn: $shading) {
+                Text("오선·음표 흐리게 (베타)").font(.headline)
+            }
             HStack(spacing: 10) {
                 Image(systemName: "music.note").foregroundStyle(.secondary)
                 Slider(value: $staffLevel, in: DarkPages.staffRange)
                 Image(systemName: "music.note").font(.title3)
             }
-            Text("오선과 음표를 흐리게 하면 코드와 가사가 더 잘 보입니다.")
+            .disabled(!shading)
+            .opacity(shading ? 1 : 0.4)
+            Text(shading
+                 ? "오선과 음표를 흐리게 하면 코드와 가사가 더 잘 보입니다. 이상하게 보이는 악보면 끄세요."
+                 : "악보를 그대로 어둡게 보여 줍니다.")
                 .font(.caption).foregroundStyle(.secondary)
             if let onLight {
                 Button(action: onLight) {
