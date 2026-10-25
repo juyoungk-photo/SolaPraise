@@ -40,6 +40,16 @@ enum ContiPages {
         UserDefaults.standard.set(counts, forKey: key + ".count")
     }
 
+    /// A file gone: what was worked out for it goes too.
+    static func forget(_ fileId: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: [String: String]]) ?? [:]
+        all[fileId] = nil
+        UserDefaults.standard.set(all, forKey: key)
+        var counts = (UserDefaults.standard.dictionary(forKey: key + ".count") as? [String: Int]) ?? [:]
+        counts[fileId] = nil
+        UserDefaults.standard.set(counts, forKey: key + ".count")
+    }
+
     /// What the app puts in a PDF it makes, as its creator — how any
     /// device knows the file is the app's output, not a chart.
     static let creator = "SolaPraise"

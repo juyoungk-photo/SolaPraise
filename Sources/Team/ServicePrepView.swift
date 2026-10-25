@@ -159,6 +159,8 @@ struct ServicePrepView: View {
     @AppStorage("team.seenAssignments") private var seenAssignmentsRaw = ""
     /// A song being made the 헌금송, or its prayer changed.
     @State private var offeringEdit: OfferingEdit?
+    /// A 콘티 version asked to be taken off, waiting for 「지우기」.
+    @State private var removingConti: (file: Attachment, service: TeamService)?
     struct OfferingEdit: Identifiable {
         let service: TeamService
         let item: PlanItem
@@ -272,6 +274,23 @@ struct ServicePrepView: View {
             .sheet(item: $exportingTo) { service in
                 ExportToPlaylistSheet(service: service)
                     .environmentObject(team)
+            }
+            .confirmationDialog("이 콘티를 지울까요?",
+                                isPresented: Binding(get: { removingConti != nil }, set: { if !$0 { removingConti = nil } }),
+                                titleVisibility: .visible, presenting: removingConti) { target in
+                Button("「\((target.file.name as NSString).deletingPathExtension)」 지우기", role: .destructive) {
+                    Task {
+                        guard let sheetId else { return }
+                        if let failure = await team.removeConti(target.file, sheetId: sheetId) {
+                            pushNote = failure
+                        } else {
+                            Toast.shared.show("콘티를 지웠습니다")
+                        }
+                    }
+                }
+                Button("취소", role: .cancel) {}
+            } message: { _ in
+                Text("파일 하나가 지워집니다 — 곡마다 나뉜 페이지도 함께 없어집니다. 팀 시트의 첨부에서 빠지고, 이 계정이 올린 파일이면 드라이브에서도 지워집니다. 되돌릴 수 없습니다.")
             }
             .sheet(item: $offeringEdit) { edit in
                 OfferingSheet(song: edit.item.title, prayer: edit.item.offering.prayer,
@@ -1494,7 +1513,16 @@ struct ServicePrepView: View {
             if !contis.isEmpty {
                 Section("콘티 — 최신부터") {
                     ForEach(Array(contis.enumerated()), id: \.element.id) { index, conti in
-                        Button { openURL(conti.url) } label: {
+                        // Each version: open it, or take it off — whole, the
+                        // file; its pages on the songs go with it.
+                        Menu {
+                            Button { openURL(conti.url) } label: { Label("열기", systemImage: "doc.richtext") }
+                            if !team.isReadOnly {
+                                Button(role: .destructive) { removingConti = (conti, service) } label: {
+                                    Label("지우기", systemImage: "trash")
+                                }
+                            }
+                        } label: {
                             Label((conti.name as NSString).deletingPathExtension + (index == 0 ? " · 최신" : ""),
                                   systemImage: index == 0 ? "doc.richtext.fill" : "doc.richtext")
                         }

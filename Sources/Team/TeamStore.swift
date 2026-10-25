@@ -2176,6 +2176,35 @@ final class TeamStore: ObservableObject {
     }
 
     /// Removes an attachment from the sheet and from Drive.
+    /// A 콘티 taken off, whole: its Attachments row (and its file, when this
+    /// account may delete it), or — one only in the 콘티 folder — the file
+    /// itself. Its pages, split onto the songs on this device, go with it:
+    /// there is nothing to take off song by song.
+    func removeConti(_ conti: Attachment, sheetId: String) async -> String? {
+        #if DEBUG
+        if isSample {
+            attachments[Calendar.current.startOfDay(for: conti.date)]?.removeAll { $0.fileId == conti.fileId }
+            contiFiles.removeAll { $0.id == conti.fileId }
+            ContiPages.forget(conti.fileId)
+            return nil
+        }
+        #endif
+        if conti.row != nil {
+            if let failure = await removeAttachment(conti, sheetId: sheetId) { return failure }
+        } else {
+            guard let drive else { return "구글 계정에 연결되어 있지 않습니다." }
+            do {
+                try await drive.delete(fileId: conti.fileId)
+            } catch {
+                let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                return "콘티 폴더에서 지우지 못했습니다: \(reason) — 다른 사람이 올린 파일은 드라이브에서 직접 지워야 합니다."
+            }
+        }
+        ContiPages.forget(conti.fileId)
+        await loadContiFolder()
+        return nil
+    }
+
     func removeAttachment(_ item: Attachment, sheetId: String) async -> String? {
         #if DEBUG
         // The sample team has no sheet: taken off here only, so the flow
