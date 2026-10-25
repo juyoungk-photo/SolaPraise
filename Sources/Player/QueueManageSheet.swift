@@ -15,6 +15,11 @@
 //  change is a write (PlaylistExport makes it the fewest). Videos the
 //  queue never showed — deleted, private — stay in the playlist, after.
 //
+//  A song can be moved to another of the account's playlists first: put
+//  there at once, then out of this list. A team keeps 「CCC 찬양콘티」 to
+//  next Sunday's songs alone, and the ones worth keeping go elsewhere
+//  rather than being lost.
+//
 
 import SwiftUI
 
@@ -34,6 +39,9 @@ struct QueueManageSheet: View {
     @State private var saveToYouTube = false
     /// The playlist is among the signed-in account's own; nil until known.
     @State private var ownsPlaylist: Bool?
+    /// The account's playlists: where a song can be moved to.
+    @State private var mine: [YTPlaylist] = []
+    @State private var moving: UUID?
     @State private var saving = false
     @State private var message: String?
 
@@ -56,6 +64,8 @@ struct QueueManageSheet: View {
                                     Text(channel).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
+                            Spacer(minLength: 0)
+                            moveMenu(line)
                         }
                     }
                     .onMove { lines.move(fromOffsets: $0, toOffset: $1) }
@@ -72,11 +82,10 @@ struct QueueManageSheet: View {
                              ? "다른 계정이 만든 재생목록이라 이번 재생에만 적용합니다. 이 재생목록의 공동 작업자라면 켜서 YouTube에도 저장할 수 있습니다."
                              : "재생목록 자체의 순서를 바꾸고, 뺀 곡은 재생목록에서도 지웁니다. YouTube에서는 되돌릴 수 없습니다.")
                     }
-                    .task {
+                    .task(id: mine.count) {
                         // Its own playlist: saved by default.
-                        guard ownsPlaylist == nil else { return }
-                        let mine = try? await AppServices.client(auth: auth, quota: quota).myPlaylists()
-                        let owns = mine?.contains { $0.id == source.playlistId } ?? false
+                        guard ownsPlaylist == nil, !mine.isEmpty else { return }
+                        let owns = mine.contains { $0.id == source.playlistId }
                         ownsPlaylist = owns
                         if owns { saveToYouTube = true }
                     }
@@ -109,6 +118,56 @@ struct QueueManageSheet: View {
         .onAppear {
             lines = host.queue.map { Line(video: $0) }
             original = host.queue.map(\.id)
+        }
+        .task {
+            guard auth.isSignedIn else { return }
+            mine = (try? await AppServices.client(auth: auth, quota: quota).myPlaylists()) ?? []
+        }
+    }
+
+    /// 다른 재생목록으로 옮기기: the account's playlists but this one.
+    @ViewBuilder
+    private func moveMenu(_ line: Line) -> some View {
+        let targets = mine.filter { $0.id != host.source?.playlistId }
+        if !targets.isEmpty {
+            if moving == line.id {
+                ProgressView().frame(width: 36, height: 32)
+            } else {
+                Menu {
+                    Section("다른 재생목록으로 옮기기") {
+                        ForEach(targets) { playlist in
+                            Button(playlist.snippet?.title ?? playlist.id) {
+                                Task { await move(line, to: playlist) }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrowshape.turn.up.right")
+                        .foregroundStyle(.tint)
+                        .frame(width: 36, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .menuOrder(.fixed)
+                .buttonStyle(.borderless)
+                .accessibilityLabel("다른 재생목록으로 옮기기")
+            }
+        }
+    }
+
+    /// Into the other playlist at once — YouTube's, written now — then out
+    /// of this list, which 완료 applies (to this playlist too, when saving).
+    private func move(_ line: Line, to playlist: YTPlaylist) async {
+        moving = line.id
+        defer { moving = nil }
+        let name = playlist.snippet?.title ?? "재생목록"
+        do {
+            _ = try await AppServices.client(auth: auth, quota: quota).addVideo(line.video.id, to: playlist.id)
+            lines.removeAll { $0.id == line.id }
+            message = nil
+            Toast.shared.show("「\(name)」에 넣었습니다 — 「완료」를 누르면 여기서 빠집니다", symbol: "arrowshape.turn.up.right.circle.fill", tint: .blue)
+        } catch {
+            let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            message = "「\(name)」에 넣지 못했습니다: \(reason)"
         }
     }
 
