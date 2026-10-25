@@ -151,7 +151,13 @@ enum ScoreTransposer {
     ///   added above the page rather than over it: a chart's own corner
     ///   holds its title, its key or a chord, and a line over them hid both.
     /// - notice: more for the strip, under the caption — a 헌금송's prayer
-    ///   and call. Its first line set apart, the rest wrapped to the page.
+    ///   and call. Its first line set apart, the rest wrapped to the page;
+    ///   large enough to be read out from a stand (it was a tenth of an
+    ///   inch high, and could not be).
+    ///
+    /// Every page has a margin all round, white: a chart printed to its
+    /// edges ran into the printer's own edge, and on a screen sat against
+    /// the frame.
     static func transposed(pages: [Page], by semitones: Int, useFlats: Bool? = nil,
                            scale: CGFloat = 1, caption: String? = nil, notice: String? = nil) -> Data? {
         guard !pages.isEmpty else { return nil }
@@ -163,21 +169,23 @@ enum ScoreTransposer {
                 let fontSize = max(9, size.width * 0.017)
                 // Close to the corner: the chart's own margin is below it.
                 let margin = max(6, size.width * 0.012)
+                // Round the whole page.
+                let pad = max(8, size.width * 0.022)
                 // The notice on the song's first page only: read once, before it.
-                let block = index == 0 ? notice.map { noticeText($0, fontSize: fontSize) } : nil
+                let block = index == 0 ? notice.map { noticeText($0, fontSize: max(13, size.width * 0.028)) } : nil
                 let blockHeight = block.map {
                     ceil($0.boundingRect(with: CGSize(width: size.width - margin * 2, height: .greatestFiniteMagnitude),
                                          options: [.usesLineFragmentOrigin], context: nil).height) + fontSize * 0.8
                 } ?? 0
                 let captionHeight = caption == nil ? 0 : (fontSize * 2).rounded()
                 let strip = captionHeight + blockHeight
-                context.beginPage(withBounds: CGRect(x: 0, y: 0, width: size.width, height: size.height + strip),
-                                  pageInfo: [:])
+                let full = CGSize(width: size.width + pad * 2, height: size.height + strip + pad * 2)
+                context.beginPage(withBounds: CGRect(origin: .zero, size: full), pageInfo: [:])
                 let cg = context.cgContext
-                if strip > 0 {
-                    cg.setFillColor(UIColor.white.cgColor)
-                    cg.fill(CGRect(x: 0, y: 0, width: size.width, height: strip))
-                }
+                cg.setFillColor(UIColor.white.cgColor)
+                cg.fill(CGRect(origin: .zero, size: full))
+                cg.saveGState()
+                cg.translateBy(x: pad, y: pad)
                 if let caption {
                     (caption as NSString).draw(
                         at: CGPoint(x: margin, y: (captionHeight - fontSize * 1.2) / 2),
@@ -199,6 +207,7 @@ enum ScoreTransposer {
                 ScoreLayout.draw(labels, in: cg)
                 page.ink?.draw(in: bounds)
                 cg.restoreGState()
+                cg.restoreGState()
             }
         }
     }
@@ -211,10 +220,11 @@ enum ScoreTransposer {
                                                          .foregroundColor: UIColor.black])
         if lines.count > 1 {
             let style = NSMutableParagraphStyle()
-            style.lineSpacing = fontSize * 0.2
+            style.lineSpacing = fontSize * 0.25
+            style.paragraphSpacingBefore = fontSize * 0.3
             out.append(NSAttributedString(string: lines.dropFirst().joined(separator: "\n"),
                                           attributes: [.font: UIFont.systemFont(ofSize: fontSize * 0.95),
-                                                       .foregroundColor: UIColor.darkGray,
+                                                       .foregroundColor: UIColor.black,
                                                        .paragraphStyle: style]))
         }
         return out

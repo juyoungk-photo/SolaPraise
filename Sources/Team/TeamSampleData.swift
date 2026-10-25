@@ -126,7 +126,7 @@ enum TeamSampleData {
                      url: watch("EwY1Z6_6H3I"), notes: nil, row: 3),
             PlanItem(order: 3, kind: .song, title: "나의 믿음 주께 있네",
                      minutes: 5, person: "주영", key: "D",
-                     url: watch("Xsnhus5FkKw"), notes: "1절만", row: 4),
+                     url: watch("Xsnhus5FkKw"), notes: "1절만 · 헌금찬양 · 헌금기도: 홍길동 형제님", row: 4),
             PlanItem(order: 4, kind: .prayer, title: "대표기도", minutes: 4,
                      person: "민수", key: nil, url: nil, notes: nil, row: 5),
             PlanItem(order: 5, kind: .sermon, title: "설교", minutes: 35,

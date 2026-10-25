@@ -1693,7 +1693,7 @@ struct ServicePrepView: View {
         for item in team.plan(for: service) where item.kind == .song {
             var lines: [String] = []
             if item.offering.isOffering {
-                lines += ["헌금송" + (item.offering.prayer.map { " · 헌금기도 \($0)" } ?? ""), OfferingNote.call]
+                lines += ["헌금 찬양" + (item.offering.prayer.map { " · 헌금기도: \($0)" } ?? ""), OfferingNote.call]
             }
             if let memo = team.memo(for: item.title) {
                 lines += lines.isEmpty ? ["팀 메모", memo.text] : ["메모: " + memo.text]
