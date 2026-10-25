@@ -3231,6 +3231,16 @@ enum ScoreFileCache {
         guard let url = ScoreEditStore.file(id, in: folder) else { return }
         try? data.write(to: url, options: .atomic)
     }
+
+    static func has(_ id: String) -> Bool {
+        ScoreEditStore.file(id, in: folder).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+    }
+
+    /// A chart, not what Drive sends in its place for a file not shared by
+    /// link — a sign-in page: a PDF, or a picture.
+    static func isChart(_ data: Data) -> Bool {
+        data.prefix(4) == Data("%PDF".utf8) || UIImage(data: data) != nil
+    }
 }
 
 /// The key each chart was last shown in, by Drive file id, for the 예배표.

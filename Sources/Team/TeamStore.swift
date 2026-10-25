@@ -797,41 +797,108 @@ final class TeamStore: ObservableObject {
             }
 
             // All at once: one redraw, never half a sheet.
-            let planData = planRead ?? []
-            plans = Self.parsePlan(planData)
-            roles = Self.parseRoles(roleData)
-            services = Self.parseSchedule(schedule, roles: roles)
-            roleColumns = Self.scheduleRoleColumns(schedule)
-            playlistColumn = Self.schedulePlaylistColumn(schedule)
-            adoptSongRows(songData)
-            rawSchedule = schedule
-            rawSignups = signupData
-            rawPlan = planData
-            signups = Self.parseSignups(signupData)
-            signupLayout = SignupLayout(header: signupData.first ?? [])
-            memberEmails = applyMembers(memberRead)
-            // After the roster: a grid column is a member by name.
-            applyGrid(gridRead ?? [])
-            rawSongMemos = memoRead ?? []
-            songMemos = SongMemos.parse(rawSongMemos)
-            hasWeekTab = titleRead?.contains(WeekTab.tab) ?? false
-            hasCorrectionsTab = titleRead?.contains(CorrectionsTab.tab) ?? false
+            let tables = TeamSnapshot(schedule: schedule, roles: roleData, songs: songData, signups: signupData,
+                                      plan: planRead ?? [], members: memberRead, grid: gridRead, memos: memoRead,
+                                      titles: titleRead, attachments: attachmentRead,
+                                      sheetId: sheetId, savedAt: Date())
+            apply(tables)
             churchNotes = churchRead.notes
             churchSheetProblem = churchRead.problem
-            applyAttachments(attachmentRead)
             lastLoaded = Date()
             needsAuthorization = false
+            offlineSince = nil
+            snapshotPending = tables
         } catch SheetsClient.SheetsError.http(403, let message) {
             needsAuthorization = true
             errorMessage = message ?? "시트를 읽을 권한이 없습니다."
             return
         } catch {
+            // No connection, most likely: the sheet as last read, said so,
+            // rather than no services and no way to the charts.
+            if services.isEmpty || offlineSince != nil, let kept = TeamSnapshot.load(sheetId: sheetId) {
+                if services.isEmpty {
+                    apply(kept)
+                    contiFiles = kept.contiFiles.map { ContiFolder.File(id: $0.id, name: $0.name, modified: $0.modified) }
+                }
+                offlineSince = kept.savedAt
+                errorMessage = nil
+                return
+            }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             return
         }
         // Drive, not the sheet: after, so the sheet is on screen first.
         await loadContiFolder()
+        // Kept for a read that fails later, with the 콘티 folder as listed.
+        if var tables = snapshotPending {
+            tables.contiFiles = contiFiles.map { TeamSnapshot.ContiFile(id: $0.id, name: $0.name, modified: $0.modified) }
+            snapshotPending = nil
+            let save = tables
+            Task.detached(priority: .utility) { save.save() }
+        }
+        prefetchUpcomingCharts()
     }
+
+    /// The charts of the services in the coming week, downloaded to the
+    /// device in the background when not there yet — so the stand opens
+    /// them in a sanctuary without a connection, and at once with one. A
+    /// chart was on the device only once it had been opened there.
+    private func prefetchUpcomingCharts() {
+        let today = Calendar.current.startOfDay(for: Date())
+        let soon = services.filter { $0.date >= today && $0.date < today.addingTimeInterval(8 * 86_400) }
+        var files: [(id: String, url: URL)] = []
+        for service in soon {
+            for file in attachments(for: service) + chartContis(for: service)
+            where !files.contains(where: { $0.id == file.fileId }) && !file.fileId.hasPrefix("local-") {
+                files.append((file.fileId, file.url.directDownload))
+            }
+        }
+        guard !files.isEmpty else { return }
+        Task.detached(priority: .background) {
+            for file in files where !ScoreFileCache.has(file.id) {
+                guard let (data, _) = try? await URLSession.shared.data(from: file.url),
+                      ScoreFileCache.isChart(data) else { continue }
+                ScoreFileCache.save(data, for: file.id)
+            }
+        }
+    }
+
+    /// The sheet as last read, kept on the device, while nothing else is
+    /// on screen. Said to be so (offlineSince) until a read replaces it.
+    func showKept(sheetId: String) {
+        guard services.isEmpty, !isSample, let kept = TeamSnapshot.load(sheetId: sheetId) else { return }
+        apply(kept)
+        contiFiles = kept.contiFiles.map { ContiFolder.File(id: $0.id, name: $0.name, modified: $0.modified) }
+        offlineSince = kept.savedAt
+    }
+
+    /// The tables, read just now or kept from before, put on screen.
+    private func apply(_ t: TeamSnapshot) {
+        plans = Self.parsePlan(t.plan)
+        roles = Self.parseRoles(t.roles)
+        services = Self.parseSchedule(t.schedule, roles: roles)
+        roleColumns = Self.scheduleRoleColumns(t.schedule)
+        playlistColumn = Self.schedulePlaylistColumn(t.schedule)
+        adoptSongRows(t.songs)
+        rawSchedule = t.schedule
+        rawSignups = t.signups
+        rawPlan = t.plan
+        signups = Self.parseSignups(t.signups)
+        signupLayout = SignupLayout(header: t.signups.first ?? [])
+        memberEmails = applyMembers(t.members)
+        // After the roster: a grid column is a member by name.
+        applyGrid(t.grid ?? [])
+        rawSongMemos = t.memos ?? []
+        songMemos = SongMemos.parse(rawSongMemos)
+        hasWeekTab = t.titles?.contains(WeekTab.tab) ?? false
+        hasCorrectionsTab = t.titles?.contains(CorrectionsTab.tab) ?? false
+        applyAttachments(t.attachments)
+    }
+
+    /// Shown from the copy kept on the device, as read at this time: the
+    /// sheet could not be read (no connection).
+    @Published private(set) var offlineSince: Date?
+    private var snapshotPending: TeamSnapshot?
 
     // MARK: - Writes under way
 

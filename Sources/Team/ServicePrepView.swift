@@ -265,8 +265,12 @@ struct ServicePrepView: View {
                 if DebugHarness.seedTeam { return }
                 #endif
                 team.configure(auth: auth, planning: planning)
+                // The sheet as last read, at once — kept on the device, so a
+                // sanctuary without a connection still has the services and
+                // the way to their charts. A read that succeeds replaces it.
+                if team.services.isEmpty, let sheetId { team.showKept(sheetId: sheetId) }
                 guard auth.canUseSheets else { return }
-                if team.services.isEmpty, let sheetId {
+                if let sheetId, team.services.isEmpty || team.offlineSince != nil {
                     await team.load(sheetId: sheetId)
                 }
             }
@@ -862,6 +866,16 @@ struct ServicePrepView: View {
                 damagedRowsWarning
                 duplicateSongsWarning
                 assignmentBanner
+
+                // Read from the copy kept on the device: said, with when.
+                if let since = team.offlineSince {
+                    Section {
+                        Label("\(since.formatted(.dateTime.month().day().hour().minute()))에 받아 둔 시트를 보여 줍니다 — 새로 받는 중이거나 인터넷에 연결되지 않았습니다. 악보는 이 기기에 받아 둔 것이 열립니다.",
+                              systemImage: "wifi.slash")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
 
                 scheduleSection
 
@@ -1493,7 +1507,7 @@ struct ServicePrepView: View {
         Button {
             Task {
                 preparingStand = true
-                await placeContiPages(service)
+                await placeContiPages(service, waitingAtMost: 4)
                 preparingStand = false
                 makingConti = false
                 standOpen = StandOpen(service: service)
@@ -1542,7 +1556,7 @@ struct ServicePrepView: View {
             Button {
                 Task {
                     preparingStand = true
-                    await placeContiPages(service)
+                    await placeContiPages(service, waitingAtMost: 4)
                     preparingStand = false
                     makingConti = true
                     standOpen = StandOpen(service: service)
@@ -1810,6 +1824,21 @@ struct ServicePrepView: View {
         let songs = team.plan(for: service).filter { $0.kind == .song }.map(\.title)
         for conti in team.chartContis(for: service).prefix(3) {
             await ContiPages.compute(for: conti, songs: songs)
+        }
+    }
+
+    /// The same, waited for no longer than `seconds` before the stand opens:
+    /// the first time, it downloads and reads each 콘티 — on a slow
+    /// connection that held the stand behind a spinner for as long as the
+    /// network took. It goes on after; a 콘티 split late is there the next
+    /// time the stand opens.
+    private func placeContiPages(_ service: TeamService, waitingAtMost seconds: Double) async {
+        let work = Task { await placeContiPages(service) }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await work.value }
+            group.addTask { try? await Task.sleep(for: .seconds(seconds)) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
