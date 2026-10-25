@@ -101,10 +101,7 @@ struct AttachmentMenu<Content: View>: View {
                 .environmentObject(team)
         }
         .fullScreenCover(item: $stand) { item in
-            ScoreStandView(items: [item],
-                           uploadTransposed: canUpload ? { item, data, name in
-                               await sendTransposed(item, data: data, name: name)
-                           } : nil)
+            ScoreStandView(items: [item])
         }
         .alert("첨부", isPresented: .constant(note != nil)) {
             Button("확인") { note = nil }
@@ -271,15 +268,6 @@ struct AttachmentMenu<Content: View>: View {
     /// A transposed chart becomes another attachment on the same song, so
     /// the team sees the version in their key without each person making
     /// it again.
-    private func sendTransposed(_ item: ScoreStandItem, data: Data, name: String) async -> String? {
-        guard let sheetId else { return "시트가 연결되어 있지 않습니다." }
-        let who = team.actingEmail(auth: auth, planning: planning) ?? ""
-        // The same song in the same key, sent again, replaces the last one.
-        return await team.attach(data: data, name: name, mimeType: "application/pdf",
-                                 song: song, to: service, sheetId: sheetId, by: who,
-                                 replacingSameName: true)
-    }
-
     // MARK: - Uploading
 
     private func upload(from item: PhotosPickerItem) async {

@@ -87,10 +87,6 @@ struct ScoreStandView: View {
     /// What a song's chart carries besides — the 헌금송's prayer and call —
     /// by song as written: shown above its page, and printed with it.
     var notices: [String: String] = [:]
-    /// Uploads a transposed PDF as a new attachment on the song, when the
-    /// caller can (Drive granted, a sheet configured). Returns an error
-    /// message, or nil on success.
-    var uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)?
     /// Names the whole-set PDF: 「10월 12일 주일예배」.
     var setTitle: String?
 
@@ -168,8 +164,7 @@ struct ScoreStandView: View {
          contiScope: String? = nil,
          removeVersion: ((ScoreStandItem) async -> String?)? = nil,
          shareChoice: ((ScoreStandItem) async -> String?)? = nil,
-         uploadSet: ((Data, String) async -> String)? = nil,
-         uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)? = nil) {
+         uploadSet: ((Data, String) async -> String)? = nil) {
         _items = State(initialValue: items)
         _versions = State(initialValue: versions)
         self.contiScope = contiScope
@@ -181,7 +176,6 @@ struct ScoreStandView: View {
         self.setCaptions = setCaptions
         self.notices = notices
         self.setTitle = setTitle
-        self.uploadTransposed = uploadTransposed
         _index = State(initialValue: max(0, min(startAt, items.count - 1)))
     }
 
@@ -1381,7 +1375,7 @@ struct ScoreStandView: View {
         }
     }
 
-    /// 저장·공유, and the transposed chart up to Drive.
+    /// 저장·공유.
     ///
     /// A view of its own, not built here: the stand's body, its bar and
     /// this menu were built as one value nested many calls deep, and on a
@@ -1389,17 +1383,15 @@ struct ScoreStandView: View {
     /// Its own body is built apart, at the top of the stack.
     private func shareButton(_ item: ScoreStandItem) -> some View {
         let state = model.states[item.id]
-        let ready = state?.isReady == true && (state?.chordCount ?? 0) > 0
-        return StandShareMenu(model: model, item: item, isReady: state?.isReady == true, ready: ready,
-                              shift: state?.shift ?? 0, notice: notices[item.song],
+        return StandShareMenu(model: model, item: item, isReady: state?.isReady == true,
+                              notice: notices[item.song],
                               setLabel: items.count > 1
                                   ? (setFileName.map { "새 콘티 \($0) — 지금 악보·키로" } ?? "콘티 전체 \(items.count)곡 — 한 파일로")
                                   : nil,
                               exportSet: {
                                   await model.exportSet(contiItems, title: setTitle, fileName: setFileName,
                                                         captions: setCaptions, notices: notices, upload: uploadSet)
-                              },
-                              uploadTransposed: uploadTransposed)
+                              })
     }
 
     /// Previous and next song, side by side at the right edge.
@@ -1689,7 +1681,6 @@ final class ScoreStandModel: ObservableObject {
     /// A set file waiting for its "some songs were left out" alert to close.
     var pendingExport: ExportFile?
     @Published var isExporting = false
-    @Published var isUploading = false
     /// The chords' size on a chart, 1 = as printed — each chart its own:
     /// one is printed small and wants them large, the next is printed large.
     /// Remembered on this device, by chart (and by song, for a 콘티 file).
@@ -3006,21 +2997,6 @@ final class ScoreStandModel: ObservableObject {
         }
     }
 
-    func upload(_ item: ScoreStandItem,
-                using send: (ScoreStandItem, Data, String) async -> String?) async {
-        isUploading = true
-        defer { isUploading = false }
-        guard let data = await pdf(item) else {
-            note = "PDF를 만들지 못했습니다."
-            return
-        }
-        if let failure = await send(item, data, fileName(item)) {
-            note = failure
-        } else {
-            note = "「\(fileName(item))」을 이 곡의 첨부로 올렸습니다. 팀원도 같은 파일을 봅니다."
-        }
-    }
-
     // MARK: Remembered shift
 
     private static func savedShift(for id: String) -> Int? {
@@ -3394,19 +3370,20 @@ private func standPill<V: View>(_ content: V, active: Bool = false, wide: Bool =
                     in: RoundedRectangle(cornerRadius: 10))
 }
 
-/// 저장·공유, and the transposed chart up to Drive: the end of the stand's bar.
+/// 저장·공유: the end of the stand's bar.
+
+/// No 「조옮김한 악보를 드라이브에 첨부」: a chart the app has drawn on is
+/// its output, and attached to the song it became a version of it — read
+/// and drawn over again. A transposed chart goes out as a PDF (공유 · 파일에
+/// 저장) or in a new 콘티.
 private struct StandShareMenu: View {
     @ObservedObject var model: ScoreStandModel
     let item: ScoreStandItem
     let isReady: Bool
-    /// Read, with chords on it.
-    let ready: Bool
-    let shift: Int
     let notice: String?
     /// The whole 콘티 as one file, when there is more than one song.
     let setLabel: String?
     let exportSet: () async -> Void
-    let uploadTransposed: ((ScoreStandItem, Data, String) async -> String?)?
 
     var body: some View {
         // One song, or the whole 콘티 as one file — to share, or keep in
@@ -3451,15 +3428,5 @@ private struct StandShareMenu: View {
         .disabled(model.isExporting)
         .accessibilityLabel("저장·공유")
 
-        if let uploadTransposed {
-            Button {
-                Task { await model.upload(item, using: uploadTransposed) }
-            } label: {
-                standPill(model.isUploading ? AnyView(ProgressView().tint(.white))
-                                            : AnyView(Image(systemName: "icloud.and.arrow.up")))
-            }
-            .disabled(!ready || model.isUploading || shift == 0)
-            .accessibilityLabel("조옮김한 악보를 드라이브에 첨부")
-        }
     }
 }
