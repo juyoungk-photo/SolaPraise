@@ -46,8 +46,8 @@ struct ReorderPlanSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var adding = false
-    /// The 헌신 찬양 shortcut: 순서 추가 opened as it.
-    @State private var addingDedication = false
+    /// The shortcuts: 순서 추가 opened as the 헌금 찬양 or the 헌신 찬양.
+    @State private var addingSong: AddPlanItemSheet.Mode?
     /// The song whose 헌금송 mark is being set.
     @State private var offeringFor: Line?
 
@@ -104,13 +104,16 @@ struct ReorderPlanSheet: View {
                     Button { adding = true } label: {
                         Label("순서 추가", systemImage: "plus.circle.fill")
                     }
-                    // Most weeks, the same song for months: one tap to the
-                    // last ones sung, and who prays.
-                    Button { addingDedication = true } label: {
-                        Label("헌신 찬양", systemImage: "gift")
+                    // Most weeks, often the same song for months: one tap to
+                    // the last ones sung.
+                    Button { addingSong = .offering } label: {
+                        Label("헌금 찬양", systemImage: "gift")
+                    }
+                    Button { addingSong = .dedication } label: {
+                        Label("헌신 찬양", systemImage: "hands.and.sparkles")
                     }
                 } footer: {
-                    Text("헌신 찬양: 지난번 곡을 고르고 헌금기도자만 적으면 됩니다.")
+                    Text("헌금 찬양·헌신 찬양: 최근 곡을 고르면 영상과 키가 함께 들어갑니다.")
                 }
 
                 if let errorMessage {
@@ -143,8 +146,8 @@ struct ReorderPlanSheet: View {
         .sheet(isPresented: $adding, onDismiss: merge) {
             AddPlanItemSheet(service: service).environmentObject(team)
         }
-        .sheet(isPresented: $addingDedication, onDismiss: merge) {
-            AddPlanItemSheet(service: service, dedication: true).environmentObject(team)
+        .sheet(isPresented: Binding(get: { addingSong != nil }, set: { if !$0 { addingSong = nil } }), onDismiss: merge) {
+            AddPlanItemSheet(service: service, mode: addingSong ?? .plain).environmentObject(team)
         }
         .sheet(item: $offeringFor) { line in
             OfferingSheet(song: line.item.title, prayer: line.item.offering.prayer,

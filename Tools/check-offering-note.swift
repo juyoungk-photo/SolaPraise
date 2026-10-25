@@ -34,11 +34,15 @@ struct CheckOfferingNote {
         expect(OfferingNote.parse(notes: "헌금기도 홍길동 집사님, 2절 반복"),
                P(isOffering: true, prayer: "홍길동 집사님", rest: "2절 반복"), "typed by hand, no colon")
         expect(OfferingNote.parse(notes: "헌금찬양"), P(isOffering: true, prayer: nil, rest: nil), "the team's word")
-        expect(OfferingNote.parse(notes: "헌신찬양"), P(isOffering: true, prayer: nil, rest: nil), "헌신찬양, as some churches call it")
-        expect(OfferingNote.parse(notes: "1절만", orderLabel: "헌신 찬양"),
-               P(isOffering: true, prayer: nil, rest: "1절만"), "헌신 찬양 in the Order column, spaced")
-        expect(OfferingNote.parse(notes: "헌신찬양 · 헌금기도: 홍길동 형제님"),
-               P(isOffering: true, prayer: "홍길동 형제님", rest: nil), "헌신찬양 with who prays")
+        expect(OfferingNote.parse(notes: "헌금 찬양"), P(isOffering: true, prayer: nil, rest: nil), "헌금 찬양, spaced")
+        expect(OfferingNote.parse(notes: "헌금찬양 · 헌금기도: 홍길동 형제님"),
+               P(isOffering: true, prayer: "홍길동 형제님", rest: nil), "헌금찬양 with who prays")
+        // 헌신찬양 is the response after the sermon: not the offering song.
+        expect(OfferingNote.parse(notes: "헌신찬양").isOffering, false, "헌신찬양 is not the offering song")
+        expect(OfferingNote.parse(notes: "1절만", orderLabel: "헌신 찬양").isOffering, false, "nor 헌신 찬양 in the Order column")
+        expect(DedicationNote.isDedication(notes: "헌신찬양"), true, "헌신찬양, as written")
+        expect(DedicationNote.isDedication(notes: nil, orderLabel: "헌신 찬양"), true, "헌신 찬양 in the Order column, spaced")
+        expect(DedicationNote.isDedication(notes: "헌금찬양 · 헌금기도: 홍길동 형제님"), false, "the offering song is not it")
         expect(OfferingNote.parse(notes: "1절만", orderLabel: "헌금찬양"),
                P(isOffering: true, prayer: nil, rest: "1절만"), "marked in the Order column")
         expect(OfferingNote.parse(notes: "1절만", orderLabel: "3"), P(isOffering: false, prayer: nil, rest: "1절만"), "a plain song")

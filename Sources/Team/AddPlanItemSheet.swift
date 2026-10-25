@@ -4,13 +4,22 @@
 //
 //  One more line in the order of service.
 //
-//  헌신 찬양 has its own shortcut in 순서 추가 및 조정: it goes in most
-//  weeks, and the same song for months — the last ones sung are there to
-//  pick, with their video and key, and only who prays is asked. On a sheet
-//  that keeps its 순서 as the Songs tab's 찬양 alone (no Plan tab), it is
-//  written there, as 콘티에 추가 writes a song. Its 악보 follow by
-//  themselves: a song with no chart this week shows the one it was last
-//  played from. The call said before it is the church's, set in 설정.
+//  Two songs go in most weeks and have shortcuts of their own in 순서 추가
+//  및 조정, each with the last ones sung to pick — their video and key come
+//  with them:
+//
+//  - 헌금 찬양, sung as the offering is taken: who prays is asked, and the
+//    call said before it is the church's, set in 설정.
+//  - 헌신 찬양, the response after the sermon — often the 콘티's last song;
+//    the church sheet may already name it.
+//
+//  They are different songs; one was taken for the other once, and the
+//  헌신 찬양 came out with an offering prayer.
+//
+//  On a sheet that keeps its 순서 as the Songs tab's 찬양 alone (no Plan
+//  tab), a song is written there, as 콘티에 추가 writes one. Its 악보 follow
+//  by themselves: a song with no chart this week shows the one it was last
+//  played from.
 //
 //  Not every week is the template. A 특별순서, a baptism, a longer 광고 —
 //  the screen's answer to all of them used to be "add it on the sheet's Plan
@@ -21,9 +30,10 @@
 import SwiftUI
 
 struct AddPlanItemSheet: View {
+    enum Mode { case plain, offering, dedication }
+
     let service: TeamService
-    /// Adding the 헌신 찬양: a song, with who prays.
-    var dedication = false
+    var mode: Mode = .plain
     @EnvironmentObject private var team: TeamStore
     @Environment(\.dismiss) private var dismiss
 
@@ -33,27 +43,29 @@ struct AddPlanItemSheet: View {
     @State private var isSaving = false
     @State private var prayer = ""
     @State private var failure: String?
-    /// The earlier 헌신찬양 picked: its video and key come with it.
+    /// The earlier song picked: its video and key come with it.
     @State private var picked: PlanItem?
 
     private let kinds: [PlanItem.Kind] = [
         .other, .song, .prayer, .reading, .sermon, .announcement, .offering, .transition
     ]
 
+    private var isSong: Bool { mode != .plain }
+
     var body: some View {
         NavigationStack {
             Form {
-                if dedication {
-                    dedicationSections
-                } else {
-                    plainSection
+                switch mode {
+                case .plain: plainSection
+                case .offering: songSections(recent: team.recentOfferingSongs(before: service.date), heading: "최근 헌금 찬양")
+                case .dedication: songSections(recent: team.recentDedicationSongs(before: service.date), heading: "최근 헌신 찬양")
                 }
 
                 if let message = failure ?? team.errorMessage {
                     Section { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
             }
-            .navigationTitle(dedication ? "헌신 찬양" : "순서 추가")
+            .navigationTitle(mode == .offering ? "헌금 찬양" : mode == .dedication ? "헌신 찬양" : "순서 추가")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -69,14 +81,13 @@ struct AddPlanItemSheet: View {
                 }
             }
         }
-        .presentationDetents(dedication ? [.large] : [.medium, .large])
+        .presentationDetents(isSong ? [.large] : [.medium, .large])
     }
 
     @ViewBuilder
-    private var dedicationSections: some View {
-        let recent = team.recentOfferingSongs(before: service.date)
+    private func songSections(recent: [(item: PlanItem, date: Date)], heading: String) -> some View {
         if !recent.isEmpty {
-            Section("최근 헌신찬양") {
+            Section(heading) {
                 ForEach(recent, id: \.item.id) { entry in
                     Button {
                         picked = entry.item
@@ -103,9 +114,15 @@ struct AddPlanItemSheet: View {
                 .onChange(of: title) { _, now in
                     if let picked, now != picked.title { self.picked = nil }
                 }
-            TextField("헌금기도자 (예: 홍길동 형제님)", text: $prayer)
+            if mode == .offering {
+                TextField("헌금기도자 (예: 홍길동 형제님)", text: $prayer)
+            }
         } footer: {
-            Text("헌금 안내: \(OfferingNote.call)\n— 설정에서 바꿀 수 있습니다. 악보와 콘티 PDF에 헌금기도자와 함께 나옵니다.")
+            if mode == .offering {
+                Text("헌금 안내: \(OfferingNote.call)\n— 설정에서 바꿀 수 있습니다. 악보와 콘티 PDF에 헌금기도자와 함께 나옵니다.")
+            } else {
+                Text("설교 뒤 응답으로 부르는 찬양입니다. 맨 뒤에 추가되니, 끌어서 자리를 옮기세요.")
+            }
         }
     }
 
@@ -130,6 +147,15 @@ struct AddPlanItemSheet: View {
                 }
     }
 
+    /// The song line's notes: the mark that says which song it is.
+    private var songNotes: String? {
+        switch mode {
+        case .offering: return OfferingNote.notes(isOffering: true, prayer: prayer, rest: nil, word: "헌금찬양")
+        case .dedication: return DedicationNote.marker
+        case .plain: return nil
+        }
+    }
+
     private func save() async {
         guard let sheetId = TeamSheetSource.current else { return }
         isSaving = true
@@ -137,12 +163,10 @@ struct AddPlanItemSheet: View {
         let name = title.trimmingCharacters(in: .whitespaces)
         failure = nil
         // No Plan tab: the 순서 is the Songs tab's 찬양, and a song goes there.
-        if (dedication || kind == .song), !team.hasPlanTab {
+        if (isSong || kind == .song), !team.hasPlanTab {
             let result = await team.appendSong(
-                title: name, videoId: dedication ? picked?.videoId : nil, key: dedication ? picked?.key : nil,
-                channel: nil,
-                notes: dedication ? OfferingNote.notes(isOffering: true, prayer: prayer, rest: nil, word: "헌신찬양") : nil,
-                to: service, sheetId: sheetId)
+                title: name, videoId: picked?.videoId, key: picked?.key, channel: nil,
+                notes: songNotes, to: service, sheetId: sheetId)
             switch result {
             case .added: dismiss()
             case .alreadyThere: failure = "이 곡은 이미 이 예배에 있습니다."
@@ -151,11 +175,10 @@ struct AddPlanItemSheet: View {
             }
             return
         }
-        let ok = dedication
+        let ok = isSong
             ? await team.appendPlanItem(
                 title: name, kind: .song, minutes: picked?.minutes,
-                key: picked?.key, url: picked?.url,
-                notes: OfferingNote.notes(isOffering: true, prayer: prayer, rest: nil, word: "헌신찬양"),
+                key: picked?.key, url: picked?.url, notes: songNotes,
                 to: service, sheetId: sheetId)
             : await team.appendPlanItem(
                 title: name,

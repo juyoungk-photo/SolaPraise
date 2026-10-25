@@ -2556,23 +2556,35 @@ final class TeamStore: ObservableObject {
         }
     }
 
-    /// The offering songs (헌금송, 헌신찬양) to bring back as this week's,
-    /// newest first, one per song: those marked so in the team's 순서
-    /// before `day`, and those the church sheet names as 헌신찬양 — up to
-    /// and including `day`, which the church office may have filled in
-    /// already. A name from the church sheet takes the video and key the
-    /// team last sang it with. A church that sings the same one for months
-    /// finds it at the top.
+    /// The offering songs (헌금송·헌금찬양) sung before `day`, newest first,
+    /// one per song — to bring back as this week's, with its video and key.
+    /// A church that sings the same one for months finds it at the top.
     func recentOfferingSongs(before day: Date, limit: Int = 6) -> [(item: PlanItem, date: Date)] {
         let start = Calendar.current.startOfDay(for: day)
-        let past = services.filter { $0.date < start }.sorted { $0.date > $1.date }
         var found: [(item: PlanItem, date: Date)] = []
-        for service in past {
+        for service in services.filter({ $0.date < start }) {
             for item in plan(for: service) where item.kind == .song && item.offering.isOffering {
                 found.append((item, service.date))
             }
         }
-        // The church sheet's 헌신찬양, with what the team sang it with.
+        return Self.newestPerSong(found, limit: limit)
+    }
+
+    /// The 헌신찬양 — the response after the sermon — to bring back, newest
+    /// first, one per song: those marked so in the team's 순서 before `day`,
+    /// and those the church sheet names, up to and including `day`, which
+    /// the office may have filled in already. A name from the church sheet
+    /// takes the video and key the team last sang it with.
+    func recentDedicationSongs(before day: Date, limit: Int = 6) -> [(item: PlanItem, date: Date)] {
+        let start = Calendar.current.startOfDay(for: day)
+        let past = services.filter { $0.date < start }
+        var found: [(item: PlanItem, date: Date)] = []
+        for service in past {
+            for item in plan(for: service)
+            where item.kind == .song && DedicationNote.isDedication(notes: item.notes, orderLabel: item.orderLabel) {
+                found.append((item, service.date))
+            }
+        }
         let sung = past.flatMap { service in plan(for: service).filter { $0.kind == .song } }
         for note in churchNotes.values where note.date <= start.addingTimeInterval(86_399) {
             guard let name = note.dedicationSong?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
@@ -2581,6 +2593,10 @@ final class TeamStore: ObservableObject {
                                             key: nil, url: nil, notes: nil, row: nil),
                           note.date))
         }
+        return Self.newestPerSong(found, limit: limit)
+    }
+
+    private static func newestPerSong(_ found: [(item: PlanItem, date: Date)], limit: Int) -> [(item: PlanItem, date: Date)] {
         var out: [(item: PlanItem, date: Date)] = []
         for entry in found.sorted(by: { $0.date > $1.date }) {
             guard !out.contains(where: { PlanSongTitle.sameSong($0.item.title, entry.item.title) }) else { continue }

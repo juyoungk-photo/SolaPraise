@@ -27,10 +27,9 @@ enum OfferingNote {
         var rest: String?
     }
 
-    /// The words a team marks it with. 「헌신찬양」 too: the song a church
-    /// sings as the offering is taken, under that name in its 순서 — and,
-    /// spaced 「헌신 찬양」, as people type it.
-    static let markers = ["헌금송", "헌금찬양", "봉헌찬양", "봉헌송", "헌신찬양", "헌신 찬양"]
+    /// The words a team marks it with. Not 「헌신찬양」: that is the response
+    /// after the sermon, another song (DedicationNote).
+    static let markers = ["헌금송", "헌금찬양", "헌금 찬양", "봉헌찬양", "봉헌송"]
 
     /// The call before the offering, until a team writes its own (설정).
     static let defaultCall = "헌금을 드림은 모든 것이 주님께로부터 왔음을 감사하는 믿음의 행위입니다. 자원함과 기쁨으로 드리는 성도님의 헌금은 주님께 영광이 될 뿐만 아니라, 우리 교회가 예수님의 대사명을 감당할 수 있도록 돕는 우리의 아름다운 동역입니다."
@@ -82,5 +81,18 @@ enum OfferingNote {
                      rest?.trimmingCharacters(in: .whitespaces)]
             .compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// 헌신찬양: the response sung after the sermon — often the 콘티's last song
+/// — marked so in the song's notes or Order cell, as the church sheet
+/// names it in its own column. Not the offering song.
+enum DedicationNote {
+    static let marker = "헌신찬양"
+
+    static func isDedication(notes: String?, orderLabel: String? = nil) -> Bool {
+        [notes, orderLabel].compactMap { $0 }.contains { text in
+            text.replacingOccurrences(of: " ", with: "").contains(marker)
+        }
     }
 }
