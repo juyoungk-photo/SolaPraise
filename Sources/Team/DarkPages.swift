@@ -65,7 +65,15 @@ final class DarkPageRenderer: @unchecked Sendable {
         if let done = cached(page) { return done }
         let result = await Task.detached(priority: .userInitiated) { [context] () -> Result? in
             guard let cg = page.cgImage else { return nil }
-            let input = CIImage(cgImage: cg)
+            // A publisher's grey logo across the page goes first: inverted
+            // it would be a slab over the words (WatermarkClean).
+            let gray = ScoreRecognition.grayscale(cg)
+            let source = gray.flatMap { g in
+                WatermarkClean.mask(gray: g, width: cg.width, height: cg.height).flatMap { WatermarkClean.cleaned(cg, mask: $0, gray: g) }
+            } ?? cg
+            #if DEBUG
+            #endif
+            let input = CIImage(cgImage: source)
             guard let invert = CIFilter(name: "CIColorInvert"),
                   let hue = CIFilter(name: "CIHueAdjust") else { return nil }
             invert.setValue(input, forKey: kCIInputImageKey)
@@ -74,7 +82,7 @@ final class DarkPageRenderer: @unchecked Sendable {
             guard let output = hue.outputImage,
                   let dark = context.createCGImage(output, from: input.extent) else { return nil }
             let found = ScoreRecognition.staves(in: cg).map(\.staff)
-            let shade = found.isEmpty ? nil : ScoreRecognition.grayscale(cg).flatMap {
+            let shade = found.isEmpty ? nil : gray.flatMap {
                 Self.shadeImage(StaffShade.mask(gray: $0, width: cg.width, height: cg.height, staves: found),
                                 width: cg.width, height: cg.height)
             }
